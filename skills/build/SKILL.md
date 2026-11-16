@@ -21,7 +21,7 @@ Take one change from request to a vetted, committed result. One slice, one issue
 | Fits | a small, reversible change inside one module | a slice or a feature | auth, money, user data, migrations, public interfaces, concurrency, anything hard to undo |
 | Shape | name the interface in the restate | `architect` when a boundary or public interface changes | `architect`, with my approval before any logic |
 | Tests | `tdd` for any behaviour change | `tdd` at the agreed seams | `tdd`, plus a property test or a failure-path test |
-| Proof | `prove`, exercised by you | `prove` with the `verifier` agent | `prove` with the verifier on a different model |
+| Proof | `prove`, exercised by you | `prove` with the `verifier` agent | `prove` with the verifier on Opus, fresh context |
 | Review | `vet`, light | `vet`, standard | `vet`, high stakes |
 
 ## 2. Shape

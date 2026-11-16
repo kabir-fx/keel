@@ -29,7 +29,7 @@ Spawn `reviewer` agents in one message, one lens each. The briefs are in [lenses
 |---|---|
 | Light | break-it |
 | Standard | spec, tests, break-it |
-| High stakes | spec, tests, security, and break-it on a different top-tier model |
+| High stakes | spec, tests, security, and break-it, each on Opus with a fresh context |
 
 Add the security lens at any rigor when the diff touches a trust boundary: see [security.md](security.md). Add the standards lens when `QUALITY.md` has review standards. The rigor comes from `/build`. When called directly, choose it from the diff and say which you chose.
 

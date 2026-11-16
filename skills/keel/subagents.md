@@ -27,7 +27,7 @@ Send parallel agents in one message so they run together.
 ## Which model
 
 - Default: omit `model`, and the agent runs on the session's model.
-- Independence at high stakes: pick a different top-tier Claude model from the one that wrote the code (`opus` when the author was Fable, `fable` when the author was Opus). A different model has different blind spots. On a plan with one top-tier model, the same model with a fresh context is still worth it.
+- Independence at high stakes: run the agent on Opus (`opus`), with a fresh context. Never use Fable. Independence comes from the fresh context: the agent sees only the artifact and the contract, never the author's reasoning.
 - Mechanical bulk (searching, listing, summarising files, running a checklist): `sonnet` or `haiku`.
 
 ## Own the result

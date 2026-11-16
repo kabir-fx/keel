@@ -22,7 +22,7 @@ A claim that can only be checked by reading code is labelled `inferred`. Say wha
 
 Spawn the `verifier` agent. Its brief holds the claims, how to launch, the diff range, and a scratch directory. It does not hold how you built the change or why you believe it works. Briefing format: `${CLAUDE_SKILL_DIR}/../keel/subagents.md`.
 
-- At high stakes, run the verifier on a different top-tier model from the one that wrote the code.
+- At high stakes, run the verifier on Opus (`model: opus`) with a fresh context. Never use Fable.
 - At light rigor, exercise the claims yourself. Show the commands and the output, and say that the proof is not independent.
 
 ## 4. Check the proof has teeth
