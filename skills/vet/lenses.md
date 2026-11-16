@@ -49,3 +49,20 @@ Every brief starts with these lines:
     Lens: standards. Read the Review standards section of `QUALITY.md` and check the diff against each one.
     - Report each violation with `file:line` and the standard it breaks.
     - Report where the diff copies a pattern the standards say to move away from.
+
+## Claims
+
+Add this section to the brief that has break-it when `prove` hands its claims to the review.
+
+    Claims: exercise each one the way a caller would, from a fresh script that imports the code, never by reading it. Return a table: claim, PASS, FAIL or INCONCLUSIVE, what you ran, what you saw. For the most important claim, break the change in the smallest way on your copy, show the check fails, then show it passes again.
+    <the claims, one per line>
+
+## Re-check
+
+The brief for the one scoped re-check after a design-changing fix (`vet` step 6). It replaces the lens sections.
+
+    Diff: `git diff <reviewed commit>..HEAD` in <repo path>. Read the changed files in full.
+    Contract: <as before>
+    Scratch directory: <path>. Write nowhere else.
+    Findings this diff fixes: <each finding, with its reproduction>
+    Job: for each finding, rerun its reproduction and say fixed or not fixed, with the output. Then report only Critical or Required problems that this diff introduces. Do not review code outside this diff.

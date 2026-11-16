@@ -1,6 +1,6 @@
 ---
 name: prove
-description: Prove a change works by exercising the real artifact, with a verifier that did not write the code. Use after finishing a change, before claiming something works or is fixed, or when the user asks for proof, evidence, or a check that it actually works.
+description: Prove a change works by exercising the real artifact, with an agent that did not write the code. Use after finishing a change, before claiming something works or is fixed, or when the user asks for proof, evidence, or a check that it actually works.
 argument-hint: "[what to prove]"
 ---
 
@@ -18,18 +18,24 @@ Use the surface a user or caller touches. Launch with the repo's run recipe: the
 
 A claim that can only be checked by reading code is labelled `inferred`. Say what would make it checkable.
 
-## 3. Hand it to a verifier
+## 3. Choose who exercises them
 
-Spawn the `verifier` agent. Its brief holds the claims, how to launch, the diff range, and a scratch directory. It does not hold how you built the change or why you believe it works. Briefing format: `${CLAUDE_SKILL_DIR}/../keel/subagents.md`.
+Never the author, from Standard rigor up. Pick the one agent that can:
 
-- At high stakes, run the verifier on Opus (`model: opus`) with a fresh context. Never use Fable.
-- At light rigor, exercise the claims yourself. Show the commands and the output, and say that the proof is not independent.
+| The change | Who exercises the claims |
+|---|---|
+| Light rigor | You. Show the commands and the output, and say that the proof is not independent. |
+| Standard, with nothing to launch: a library, a module, a script the tests import | The `vet` reviewer that has the break-it lens. Its brief gets your claims (`${CLAUDE_SKILL_DIR}/../vet/lenses.md`, Claims). A separate verifier would re-read the same diff and re-run the same code. |
+| Standard, with something to launch: an app, a CLI, a server, a run recipe | The `verifier` agent. |
+| High stakes | The `verifier` agent, on Opus (`model: opus`) with a fresh context. Never Fable. |
+
+The verifier's brief holds the claims, how to launch, the diff range, and a scratch directory. It does not hold how you built the change or why you believe it works. Briefing format: `${CLAUDE_SKILL_DIR}/../keel/subagents.md`. Spawn it in the same message as the `vet` reviewers.
 
 ## 4. Check the proof has teeth
 
 Take the most important claim. Break the change in the smallest way (revert the key line, or stash the diff) and re-run that claim's check. It must fail. Restore the change and confirm it passes again. A check that passes either way proves nothing: replace it.
 
-Whoever exercised the claims does this once. With a verifier, it works on a copy in its scratch directory, and you read its result instead of repeating it.
+Whoever exercised the claims does this once. An agent works on a copy in its scratch directory, and you read its result instead of repeating it.
 
 ## 5. Verdict
 
