@@ -49,10 +49,16 @@ Keep the lenses apart. A change can pass the tests lens and fail the spec lens, 
 - Bar guard: clean, or each hit with your ruling.
 - Findings per lens, most severe first: `file:line`, what is wrong, the evidence, the classification.
 - **Read these yourself**: the two or three places a human should read line by line, with what to look for.
-- The verdict: **READY** (no open Critical or Required finding) or **NOT READY**. It covers that commit and nothing after it.
+- The verdict: **READY** (no open Critical or Required finding) or **NOT READY**, at the reviewed commit. Which later commits it covers: `${CLAUDE_SKILL_DIR}/../keel/verdicts.md`.
 
 For someone else's pull request, stop here. Draft the real findings as review comments, show them to me, and post them only when I say so.
 
-## 6. Fix and review again
+## 6. Fix, then check the fixes
 
-For my own change, fix real findings as new increments, with tests. Re-run the lens that found each one. Stop after two rounds: when findings keep coming, the design is the problem. Say so, and suggest the `architect` skill.
+For my own change there is one review round. Then:
+
+1. Fix each real finding as a new increment through the `tdd` skill. The evidence: the finding's reproduction fails before the fix and passes after it, or, for a test with no teeth, the edit the reviewer named now makes a test fail. Run the full check. That output is the re-check: do not send the agent back.
+2. A fix that changes the design gets one scoped re-check. Spawn a new `reviewer` with the re-check brief in [lenses.md](lenses.md), and never resume the first one.
+3. If the re-check finds a Critical or Required problem, stop. Findings that keep coming mean the design is the problem: say so, suggest the `architect` skill, and say how many agent runs the change has used. Another agent pass needs my yes.
+
+When every Critical and Required finding is fixed this way, the verdict is READY. It covers the reviewed commit and the fix commits, listed as `verdicts.md` says.

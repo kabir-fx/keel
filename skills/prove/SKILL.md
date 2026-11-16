@@ -48,8 +48,8 @@ One row per claim, with the command and the relevant output, or a screenshot pat
 - **NOT VERIFIED**: at least one failed. Say which, with the output.
 - **INCONCLUSIVE**: something could not be exercised. Say what blocked it and what would unblock it.
 
-Name the commit the verdict covers (`git rev-parse --short HEAD`). A later change to code, tests, or check configuration is not covered by it.
+Name the commit the verdict covers (`git rev-parse --short HEAD`). Which later commits it still covers: `${CLAUDE_SKILL_DIR}/../keel/verdicts.md`.
 
-List what was not covered. Never round INCONCLUSIVE up to VERIFIED. A failed claim goes back to the build loop, and the proof runs again afterwards.
+List what was not covered. Never round INCONCLUSIVE up to VERIFIED. A failed claim is a finding: fix it as `vet` step 6 says, with the claim's check as its reproduction.
 
 When launching the app took real effort to work out, tell me to run `/run-skill-generator`, so the recipe is saved for next time.

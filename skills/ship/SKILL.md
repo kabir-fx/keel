@@ -13,8 +13,8 @@ Everything here is visible to other people or hard to undo. Ask me before each p
 
 - The tree is clean, and the branch is not the default branch.
 - The full check passes now, on this commit. Show the output.
-- The change has been through `prove` and `vet`. The verdicts and their commit are in the `/build` report in this conversation, or in the spec as `Status: done (<commit>)`. Finding neither means it has not: say so and offer to run them. Do not ship past a NOT VERIFIED or NOT READY verdict without my explicit say.
-- The verdicts still describe the code. Run `git diff --stat <verdict commit>..HEAD`. A change to code, tests, or check configuration after the verdict was never proven or reviewed: run the `vet` skill with the verdict commit as its base, and the `prove` skill for the claims those commits touch.
+- The change has been through `prove` and `vet`. The verdicts and their commit are in the verdict record `/build` wrote (`${CLAUDE_SKILL_DIR}/../keel/verdicts.md` says where), or in the `/build` report in this conversation. Finding neither means it has not: say so and offer to run them. Do not ship past a NOT VERIFIED or NOT READY verdict without my explicit say.
+- The verdicts still describe the code. Run `git log --oneline <verdict commit>..HEAD`. Every commit there must be one the record lists as covered. For any other commit, run the `vet` skill with the verdict commit as its base, and the `prove` skill for the claims it touches: one round, as in `/build`.
 - The branch is up to date with its base. If it is behind, bring the base in and re-run the full check.
 - The diff holds only this change: no debug lines, no scratch files, no secrets, no unrelated edits. Read `git diff <base>...HEAD --stat`.
 
@@ -24,7 +24,7 @@ The commits should read as the story of the change: small, single-purpose, conve
 
 ## 3. Open the pull request
 
-Write the body from [pr-body.md](pr-body.md). It carries the evidence, so the reviewer does not have to trust either of us. After I say yes, push the branch and run `gh pr create`. Give me the URL.
+Write the body from [pr-body.md](pr-body.md), filled from the verdict record. It carries the evidence, so the reviewer does not have to trust either of us. After I say yes, push the branch and run `gh pr create`. Give me the URL.
 
 One pull request per slice. Past roughly 400 changed lines, say so and propose a split.
 
@@ -38,7 +38,7 @@ Watch the run with `gh pr checks --watch`. For each failure, read the log before
 
 Answer every review comment: fix it, or say why not. Do not resolve a thread you did not address.
 
-A commit pushed after the verdicts is not covered by them. Before asking to merge, run the preflight check "the verdicts still describe the code" again, and update the verdict line in the pull request body.
+A commit pushed after the verdicts must be covered too. Before asking to merge, run the preflight check "the verdicts still describe the code" again, and update the verdict record and the verdict line in the pull request body.
 
 ## 5. Merge
 

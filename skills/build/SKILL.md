@@ -48,16 +48,16 @@ For each increment, use the `tdd` skill: a failing test, the least code that pas
 1. Walk the contract. List every acceptance criterion, or every part of the request, with the code and the test that meet it. One that lacks either goes back to step 3 now. It does not go into the report.
 2. Run the full check. It is green, and you show the output.
 3. Clean up, in line. Read your own diff once as its next maintainer: reuse what the repo already has, delete what the change does not need, rename what misleads. Behaviour stays the same. Re-run the fast check, and commit the cleanup on its own.
-4. Use the `prove` skill: the change demonstrated on the real artifact.
-5. Use the `vet` skill at the chosen rigor.
-6. Findings from proof and review go back through step 3 as new increments. Then prove and vet again what the fix touched: a verdict covers one commit and nothing after it.
-7. Only with VERIFIED and READY in hand, update the record: tick the slice's criteria, set `Status: done (<verdict commit>)` in the spec, and update the glossary or a decision record if this change settled something.
+4. Write the decision record and the glossary entries this change settles, now, so the review reads them.
+5. Use the `prove` and `vet` skills at the chosen rigor, on the same commit. Spawn every agent they need in one message. This is the one review round.
+6. Fix the findings from proof and review as `vet` step 6 says. A verdict covers the fix commits only as `${CLAUDE_SKILL_DIR}/../keel/verdicts.md` allows.
+7. Only with VERIFIED and READY in hand, record the result: tick the slice's criteria, set `Status: done (<verdict commit>)` in the spec, and write the verdict record that `verdicts.md` describes.
 
 Do not push, open a pull request, or merge. That is `/ship`.
 
 ## 5. Report
 
-The first line is the state. **DONE** means every acceptance criterion is met and shown, the proof says VERIFIED, and the review says READY: name the commit those verdicts cover. Anything less is **NOT DONE**: say what remains and why you stopped.
+The first line is the state. **DONE** means every acceptance criterion is met and shown, the proof says VERIFIED, and the review says READY: name the commit those verdicts cover, and how many agent runs the change used. Anything less is **NOT DONE**: say what remains and why you stopped.
 
 Then what changed for the user of the software, then for its maintainer. Then:
 
@@ -66,7 +66,7 @@ Then what changed for the user of the software, then for its maintainer. Then:
 - **Outside the contract**: what you noticed and left alone, or found broken elsewhere. Unfinished work inside the contract never goes here. It makes the report NOT DONE.
 - **Read these yourself**: the two or three places where a mistake would cost the most, as `file:line`, with what to look for. My review time goes here.
 - **Teach-back**: three questions that test whether I understand the change: one on the design, one on a failure mode, one on how it was proven. Give the answers only after I try.
-- **Next**: the next unblocked slice, or `/ship`.
+- **Next**: the next unblocked slice, or `/ship`. `/clear` first is fine: `/ship` reads the verdict record.
 
 ## Unattended runs
 

@@ -73,8 +73,8 @@ Decide at a phase boundary (after grilling, after a slice, after a review), neve
 3. Can the next task run without me? Hand it to a subagent (`/subtask`) and keep this window.
 4. Otherwise `/compact <what the next phase needs>`.
 
-Mid-phase, keep going or split the remainder into subagents. What must survive a session lives in files (the spec, decision records, the glossary, commits), not in the conversation.
+Mid-phase, keep going or split the remainder into subagents. What must survive a session lives in files (the spec, decision records, the glossary, commits, the verdict record), not in the conversation. Between `/build` and `/ship`, `/clear` is the cheap default: `/ship` reads the verdict record.
 
 ## Shared references
 
-Other keel skills point here: [adr.md](adr.md), [glossary.md](glossary.md), [subagents.md](subagents.md).
+Other keel skills point here: [adr.md](adr.md), [glossary.md](glossary.md), [subagents.md](subagents.md), [verdicts.md](verdicts.md).

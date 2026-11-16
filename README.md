@@ -103,8 +103,11 @@ That is why `/repo-setup` audits the pipeline, and why `/ship` ties each verdict
 |---|---|---|---|
 | Fits | small, reversible, one module | a slice or a feature | auth, money, user data, migrations, public interfaces, concurrency |
 | Design | interface named in the restate | `architect` when a boundary changes | `architect`, your approval before logic |
-| Proof | exercised by the author, labelled as not independent | `verifier` agent | `verifier` on a different model |
-| Review | 1 reviewer | 3 reviewers | 4 reviewers, one on a different model |
+| Proof | exercised by the author, labelled as not independent | the reviewer, or the `verifier` agent when there is something to launch | `verifier` agent on Opus, fresh context |
+| Review | 1 reviewer | 1 reviewer, every lens | 2 reviewers |
+| Agents | 1 | 1, or 2 with something to launch | 3 |
+
+There is one review round. Fixes are checked with each finding's own reproduction, and a commit that only fixes a finding or records the result stays covered by the verdict ([verdicts.md](skills/keel/verdicts.md)). A second agent pass runs only when a fix changes the design, and it checks only that diff.
 
 ## What keel uses from Claude Code, and what it does not
 

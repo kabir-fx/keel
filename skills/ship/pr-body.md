@@ -23,7 +23,7 @@ Title: `<type>(<scope>): <what changes for the user>`, under 70 characters, in t
 |---|---|---|
 | <observable behaviour> | `<command>`, or what was exercised | <output, number, or screenshot> |
 
-Proof: <VERIFIED | NOT VERIFIED | INCONCLUSIVE> · Review: <READY | NOT READY> · both at `<commit>`, by agents that did not write the change.
+Proof: <VERIFIED | NOT VERIFIED | INCONCLUSIVE> at `<commit>`, by <the verifier | the reviewer | the author, not independent> · Review: <READY | NOT READY> at `<commit>`, by <n> reviewer agent(s) that did not write the change · Covered since: <each later commit and the finding it fixes, or none>
 
 <For a bug: the failing output before and the passing output after. For UI: before and after screenshots. For performance: the numbers, with run count and range.>
 
