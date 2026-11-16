@@ -114,7 +114,7 @@ All three sources reach for independence somewhere: a second opinion that does n
 
 1. **A fresh context.** The reviewer and the verifier start cold.
 2. **A withheld brief.** They get the artifact and the contract, never the author's reasoning.
-3. **A different Claude model**, at high stakes only: the reviewer runs on a different top-tier model from the author.
+3. **No second model.** An earlier version put high-stakes agents on a different top-tier model. Every agent now runs on Opus: the fresh context and the withheld brief give the independence.
 
 Fan-out is kept to what the rigor needs: one subagent for a light change, four for a standard one, five at high stakes. Mechanical bulk work goes to a smaller model.
 

@@ -119,7 +119,7 @@ Each built-in was judged on one question: for this job, does it give a better re
 | `/goal` | used | Only the harness can keep a session running until a condition holds. `/build` adds the discipline. |
 | `/clear`, `/compact`, `/subtask` | used | Harness mechanisms for context. |
 | `/doctor`, `/skill-doctor`, `/insights` | used | Diagnostics that feed `/retro`. |
-| `/code-review`, `/security-review` | not in the flow | They review a diff without the contract. `vet` checks the change against the spec, checks that the tests have teeth, demands a reproduction for every bug claim, and can put the reviewer on a different model. Two review tools would mean two reports to reconcile. |
+| `/code-review`, `/security-review` | not in the flow | They review a diff without the contract. `vet` checks the change against the spec, checks that the tests have teeth, demands a reproduction for every bug claim, and gives the reviewer a fresh context with none of the author's reasoning. Two review tools would mean two reports to reconcile. |
 | `/simplify` | not in the flow | It starts 4 review agents on every run. Measured on a 10-line function in Claude Code 2.1.325: about 66,000 input tokens and no findings, on top of the 4 subagent runs a standard change already costs. `/build` cleans up in line instead. Type `/simplify` yourself on a diff too large to reread. |
 | `/verify` | not in the flow | `prove` is the one proof procedure. |
 | `/plan` | not in the flow | Its plan lives in the conversation. `/grill`, `/spec`, and `/architect` leave files that outlive the session. |
