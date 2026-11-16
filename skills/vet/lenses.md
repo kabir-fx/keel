@@ -1,13 +1,14 @@
-# Reviewer lenses
+# Reviewer briefs
 
-One lens per `reviewer` agent. Fill the brackets and send the brief as written. Add nothing about how the change was built or what you think of it.
+A brief is the common lines, then one section per lens the agent covers, in the order below. Fill the brackets and send it as written. Add nothing about how the change was built or what you think of it.
 
-Every brief starts with these four lines:
+Every brief starts with these lines:
 
     Diff: `git diff <base>...HEAD` in <repo path>. Read the changed files in full, not only the hunks.
     Contract: <spec path and slice number, or the intended behaviour in three to five lines>
     Checks: fast `<command>`, full `<command>`
     Scratch directory: <path>. Write nowhere else.
+    Lenses: <the lens names below that this brief carries>. Group your findings by lens.
 
 ## Spec lens
 
@@ -32,6 +33,7 @@ Every brief starts with these four lines:
     Lens: break-it. Find the input, state, or sequence that makes this change do the wrong thing.
     - Try empty, huge, malformed, and duplicate input. The operation run twice. A crash halfway. Two callers at once. A dependency that is slow, down, or returns garbage. Old data from before the change.
     - Trace the callers of everything the diff changed. Which of them relied on the old behaviour?
+    - For each finding, say whether a caller can reach it through the public entry points today, and how.
     - A finding counts only with a reproduction: the command or the test that shows the failure, and its output. Build reproductions in the scratch directory.
 
 ## Security lens

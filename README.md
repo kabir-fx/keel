@@ -79,7 +79,7 @@ A small change skips straight to `/build`. Use the whole line when the work is b
 | `observability` | logs, metrics, traces, or alerts are being added |
 | `explain` | you want to understand code |
 
-**Agents.** `verifier` exercises the real artifact and returns PASS, FAIL, or INCONCLUSIVE per claim. `reviewer` reviews a diff through one lens (spec, tests, break-it, security, standards). Neither can edit files, and neither is told how the change was built.
+**Agents.** `verifier` exercises the real artifact and returns PASS, FAIL, or INCONCLUSIVE per claim. `reviewer` reviews a diff through the lenses its brief names (spec, tests, break-it, security, standards), and runs the proof's claims when there is nothing to launch. Neither can edit files, and neither is told how the change was built.
 
 **Hook** ([hooks/guard.sh](hooks/guard.sh)). Denies a force push to the default branch and `rm -rf` of home or root. Asks before other force pushes, direct pushes to the default branch, `git reset --hard`, `git clean -f`, discarding the whole tree, `--no-verify`, `gh pr merge`, a `gh api` call that changes branch protection, releases, and package publishes. Silent otherwise. It is a seatbelt that reads command text, not a sandbox. Start Claude Code with `KEEL_GUARD=off` to switch it off for a session.
 

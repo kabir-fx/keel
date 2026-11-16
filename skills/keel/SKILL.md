@@ -49,7 +49,7 @@ Keel uses a built-in only where it is a harness mechanism a skill cannot copy, o
 | Manage context | `/clear`, `/compact`, `/subtask` | Harness mechanisms. |
 | Audit instruction and skill cost | `/doctor`, `/skill-doctor`, `/insights` | Diagnostics that feed `/retro`. |
 
-Left out of the flow on purpose: `/code-review` and `/security-review` (`vet` reviews against the contract with independent reviewers), `/verify` (`prove`), `/plan` (`/grill`, `/spec`, and `/architect` leave files that outlive the session), `/batch` (`refactor` writes a codemod), `/init` (`/repo-setup`), `/simplify` (it starts four review agents on every run, as many as a whole standard review: `/build` cleans up in line, and you can still type it on a diff too large to reread).
+Left out of the flow on purpose: `/code-review` and `/security-review` (`vet` reviews against the contract with independent reviewers), `/verify` (`prove`), `/plan` (`/grill`, `/spec`, and `/architect` leave files that outlive the session), `/batch` (`refactor` writes a codemod), `/init` (`/repo-setup`), `/simplify` (it starts four review agents on every run, where a standard `vet` starts one: `/build` cleans up in line, and you can still type it on a diff too large to reread).
 
 ## Situations
 

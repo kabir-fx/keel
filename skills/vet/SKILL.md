@@ -23,15 +23,15 @@ Judge each hit. An intended one needs a reason in the diff, or an entry under Ex
 
 ## 3. Review with fresh eyes
 
-Spawn `reviewer` agents in one message, one lens each. The briefs are in [lenses.md](lenses.md). A brief carries the diff command, the contract, and the lens. It never carries how the change was built or what you think of it.
+Spawn the `reviewer` agents in one message, with the `verifier` if `prove` needs one. Build each brief from [lenses.md](lenses.md): the common lines, then the sections for the lenses that agent covers. A brief never carries how the change was built or what you think of it.
 
-| Rigor | Lenses |
-|---|---|
-| Light | break-it |
-| Standard | spec, tests, break-it |
-| High stakes | spec, tests, security, and break-it, each on Opus with a fresh context |
+| Rigor | Reviewer agents | Lenses in each brief |
+|---|---|---|
+| Light | 1 | break-it |
+| Standard | 1 | spec, tests, break-it, standards |
+| High stakes | 2, on Opus with a fresh context | first: spec, tests, standards. Second: break-it, security |
 
-Add the security lens at any rigor when the diff touches a trust boundary: see [security.md](security.md). Add the standards lens when `QUALITY.md` has review standards. The rigor comes from `/build`. When called directly, choose it from the diff and say which you chose.
+One agent covers several lenses because every extra agent re-reads the same diff and re-runs the same tests. Add the standards lens only when `QUALITY.md` has review standards. Add the security lens to the break-it brief at any rigor when the diff touches a trust boundary: see [security.md](security.md). When `prove` hands its claims to the review, they go into the brief that has break-it. The rigor comes from `/build`. When called directly, choose it from the diff and say which you chose.
 
 ## 4. Reconcile
 

@@ -8,7 +8,7 @@ One subscription pays for every agent. Spawn one when it buys independence, prot
 - **Bulk.** Reading many files, a long log, or a large artifact. The subagent returns the finding and the pointers, not the payload.
 - **Parallel disjoint work.** Slices that touch different files. Each writer gets its own worktree (`isolation: "worktree"`), because two writers in one tree corrupt each other.
 
-Two or three agents is the normal fan-out. Say why before spawning more.
+The rigor table in `/build` sets how many agents a change gets: one to three. Say why before spawning more.
 
 ## The brief
 
