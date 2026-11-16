@@ -114,6 +114,27 @@ lint() {
     grep -q '—' "$file" && fail "$file: contains an em dash" || ok
   done < <(find skills agents rules -name '*.md' | sort; ls README.md 2>/dev/null)
 
+  # Agents per change, from the rigor table in /build. A cap rises only by editing it here.
+  local row cell cap max i=2
+  row="$(grep '^| Agents |' skills/build/SKILL.md)"
+  if [ -z "$row" ]; then
+    fail "skills/build/SKILL.md: the rigor table has no Agents row"
+  else
+    for cap in 1 2 3; do
+      i=$((i + 1))
+      cell="$(printf '%s\n' "$row" | awk -F'|' -v n="$i" '{ print $n }')"
+      max="$(printf '%s\n' "$cell" | grep -o '[0-9][0-9]*' | sort -n | tail -n 1)"
+      [ -n "$max" ] && [ "$max" -le "$cap" ] && ok || fail "skills/build/SKILL.md: '${cell# }' agents, over the cap of $cap"
+    done
+    expect "README rigor dial Agents row" "$(grep '^| Agents |' README.md)" "$row"
+  fi
+
+  # What a verdict covers is defined once.
+  for file in skills/build/SKILL.md skills/prove/SKILL.md skills/vet/SKILL.md skills/ship/SKILL.md; do
+    grep -q 'keel/verdicts.md' "$file" && ok || fail "$file: does not point at keel/verdicts.md for what a verdict covers"
+  done
+  grep -rq 'nothing after it' skills agents && fail "a skill voids a verdict on any later commit: point at keel/verdicts.md instead" || ok
+
   for file in install.sh scripts/check.sh hooks/guard.sh skills/vet/scripts/bar-guard.sh; do
     [ -x "$file" ] && ok || fail "$file is not executable"
     bash -n "$file" 2>/dev/null && ok || fail "$file has a syntax error"
