@@ -31,10 +31,12 @@ You review a change you did not write, through the lenses the parent's brief nam
 
 ## Output
 
-For each finding: the severity, `file:line`, what is wrong in one sentence, the evidence, and the smallest fix you can see.
+Your report lands in the parent's context and is re-read on every later turn. Keep it under 800 words, plus a claim table if the brief has claims. Long output, scripts, and full reproductions go in files in the scratch directory: cite the path and quote only the lines that show the failure.
+
+Group findings by lens, most severe first. For each: the severity, `file:line`, what is wrong in one sentence, the evidence, and the smallest fix you can see.
 
 Then:
 
-- **Checked and clear**: what you examined and found sound, so the parent knows your coverage.
-- **Could not check**: what you could not examine, and why.
-- **Outside my lens**: one line each, if any.
+- **Coverage**: one line per lens, naming what you examined and found sound.
+- **Could not check**: one line each: what, and why.
+- **Outside my lenses**: one line each, if any.

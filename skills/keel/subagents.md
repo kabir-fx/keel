@@ -24,6 +24,12 @@ For a reviewer or verifier, leave out your conclusions and how you built the cha
 
 Send parallel agents in one message so they run together.
 
+## What an agent costs
+
+- An agent re-reads its whole context on every turn, and its report is re-read on every later turn of yours. Ask for findings and pointers. Long output stays in its scratch files.
+- An agent idle for more than five minutes has lost its prompt cache. A message to it re-sends its whole context at the cache-write price. Spawn a fresh agent with a brief that covers only what changed. Message a running agent only to answer its question.
+- Never send a reviewer back over work it already reviewed. Check the fixes yourself with each finding's reproduction (`vet` step 6).
+
 ## Which model
 
 - Default: omit `model`, and the agent runs on the session's model.

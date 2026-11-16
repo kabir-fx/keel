@@ -25,6 +25,8 @@ You verify claims about a change you did not write. The parent gives you a list 
 
 ## Output
 
+Your report lands in the parent's context and is re-read on every later turn. Put scripts and long output in files in the scratch directory, and quote only the lines that decide each verdict.
+
 | Claim | Verdict | What I ran | What I saw |
 |---|---|---|---|
 
