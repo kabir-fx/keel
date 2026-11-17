@@ -7,7 +7,7 @@
 #
 # Everything is a symlink back to this folder, so edits here are live and
 # `git pull` is the update. The only file it edits is settings.json, to register
-# one hook. The first edit leaves a copy at settings.json.keel-backup.
+# two hooks. The first edit leaves a copy at settings.json.keel-backup.
 #
 # The config directory is $CLAUDE_CONFIG_DIR, or ~/.claude when that is unset.
 
@@ -16,7 +16,8 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd -P)"
 config="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 settings="$config/settings.json"
-hook_link="$config/hooks/keel-guard.sh"
+guard_link="$config/hooks/keel-guard.sh"
+brief_link="$config/hooks/keel-brief-check.sh"
 
 mode=install
 dry=0
@@ -62,38 +63,44 @@ unlink_ours() { # unlink_ours <target>
   fi
 }
 
-# The hook command as it is stored in settings.json.
-hook_cmd="\"$hook_link\""
-
-settings_without_hook() {
-  jq --arg cmd "$hook_cmd" '
-    if (.hooks.PreToolUse | type) == "array" then
-      .hooks.PreToolUse |= map(select((.hooks // []) | any(.command == $cmd) | not))
-      | if (.hooks.PreToolUse | length) == 0 then del(.hooks.PreToolUse) else . end
-      | if (.hooks | length) == 0 then del(.hooks) else . end
-    else . end' "$1"
+# The hooks keel registers, with each command as it is stored in settings.json.
+keel_hooks() {
+  jq -cn --arg guard "\"$guard_link\"" --arg brief "\"$brief_link\" --hook" '[
+    {event: "PreToolUse", matcher: "Bash", command: $guard},
+    {event: "PostToolUse", matcher: "Edit|Write", command: $brief}]'
 }
 
-settings_with_hook() {
-  jq --arg cmd "$hook_cmd" '
-    if ((.hooks.PreToolUse // []) | any((.hooks // []) | any(.command == $cmd))) then .
-    else
-      .hooks = (.hooks // {})
-      | .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: "Bash", hooks: [{type: "command", command: $cmd}]}])
-    end' "$1"
+settings_without_hooks() {
+  jq --argjson keel "$(keel_hooks)" '
+    reduce $keel[] as $h (.;
+      if (.hooks[$h.event] | type) == "array" then
+        .hooks[$h.event] |= map(select((.hooks // []) | any(.command == $h.command) | not))
+        | if (.hooks[$h.event] | length) == 0 then del(.hooks[$h.event]) else . end
+        | if (.hooks | length) == 0 then del(.hooks) else . end
+      else . end)' "$1"
+}
+
+settings_with_hooks() {
+  jq --argjson keel "$(keel_hooks)" '
+    reduce $keel[] as $h (.;
+      if ((.hooks[$h.event] // []) | any((.hooks // []) | any(.command == $h.command))) then .
+      else
+        .hooks = (.hooks // {})
+        | .hooks[$h.event] = ((.hooks[$h.event] // []) + [{matcher: $h.matcher, hooks: [{type: "command", command: $h.command}]}])
+      end)' "$1"
 }
 
 write_settings() { # write_settings <function that prints the new settings>
   local tmp
   if ! command -v jq >/dev/null 2>&1; then
-    say "  SKIPPED   settings.json: jq is not installed. Install jq and run again to get the guard hook."
+    say "  SKIPPED   settings.json: jq is not installed. Install jq and run again to get keel's hooks."
     skipped=$((skipped + 1))
     return 0
   fi
   if [ ! -f "$settings" ]; then
-    [ "$1" = settings_without_hook ] && return 0
+    [ "$1" = settings_without_hooks ] && return 0
     if [ "$dry" = 1 ]; then
-      say "  would create $settings with the guard hook"
+      say "  would create $settings with keel's hooks"
       return 0
     fi
     mkdir -p "$config"
@@ -136,8 +143,9 @@ if [ "$mode" = install ]; then
     link "$f" "$config/agents/$(basename "$f")"
   done
   link "$here/rules/keel.md" "$config/rules/keel.md"
-  link "$here/hooks/guard.sh" "$hook_link"
-  write_settings settings_with_hook
+  link "$here/hooks/guard.sh" "$guard_link"
+  link "$here/skills/keel/scripts/brief-check.sh" "$brief_link"
+  write_settings settings_with_hooks
   say ""
   if [ "$skipped" -gt 0 ]; then
     say "Done, with $skipped item(s) skipped. See above."
@@ -152,7 +160,7 @@ else
       unlink_ours "$p"
     done
   done
-  write_settings settings_without_hook
+  write_settings settings_without_hooks
   say ""
   say "Done. Files keel wrote inside your repos (QUALITY.md, specs, the Keel block in CLAUDE.md) are yours and stay."
 fi

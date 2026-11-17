@@ -477,12 +477,19 @@ install_check() {
   got="$(jq -cn '{tool_input: {command: "rm -rf /"}}' | sh -c "$cmd" | jq -r .hookSpecificOutput.permissionDecision)"
   expect "the registered hook command runs" "$got" deny
 
+  expect "install registers one brief hook" "$(jq '[.hooks.PostToolUse[] | select(.matcher == "Edit|Write")] | length' "$config/settings.json")" 1
+  mkdir -p "$tmp/install/briefs"
+  printf 'The agent will ensure it.\n' >"$tmp/install/briefs/x.md"
+  cmd="$(jq -r '.hooks.PostToolUse[] | select(.matcher == "Edit|Write") | .hooks[0].command' "$config/settings.json")"
+  got="$(jq -cn --arg f "$tmp/install/briefs/x.md" '{tool_input: {file_path: $f}}' | sh -c "$cmd" 2>&1; echo "exit=$?")"
+  case "$got" in *'"ensure": write "make sure"'*"exit=2") ok ;; *) fail "the registered brief hook command does not report: $got" ;; esac
+
   got="$(jq -S . "$config/settings.json")"
   CLAUDE_CONFIG_DIR="$config" "$root/install.sh" >/dev/null 2>&1
   expect "install twice changes nothing" "$(jq -S . "$config/settings.json")" "$got"
 
   CLAUDE_CONFIG_DIR="$config" "$root/install.sh" --uninstall >/dev/null 2>&1
-  [ ! -e "$config/skills/keel" ] && [ ! -e "$config/agents/verifier.md" ] && [ ! -e "$config/rules/keel.md" ] && [ ! -e "$config/hooks/keel-guard.sh" ] && ok || fail "uninstall left links behind"
+  [ ! -e "$config/skills/keel" ] && [ ! -e "$config/agents/verifier.md" ] && [ ! -e "$config/rules/keel.md" ] && [ ! -e "$config/hooks/keel-guard.sh" ] && [ ! -e "$config/hooks/keel-brief-check.sh" ] && ok || fail "uninstall left links behind"
   expect "uninstall leaves a foreign skill alone" "$(cat "$config/skills/tdd/SKILL.md")" mine
   expect "uninstall restores settings" "$(jq -S . "$config/settings.json")" "$before"
 }

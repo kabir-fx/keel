@@ -1,6 +1,6 @@
 # Keel
 
-A small suite for building software with Claude Code: 12 always-on rules, 17 skills, 2 review agents, and 1 safety hook. It covers the whole life of a change, from a fuzzy idea to a release you watched work, and it runs on one Claude subscription.
+A small suite for building software with Claude Code: 12 always-on rules, 17 skills, 2 review agents, and 2 hooks. It covers the whole life of a change, from a fuzzy idea to a release you watched work, and it runs on one Claude subscription.
 
 It was designed from three public skill collections. [docs/analysis.md](docs/analysis.md) says what was taken from each, what was left out, and why.
 
@@ -20,7 +20,7 @@ A naive loop: write a prompt, let the agent build, look at the result or trust t
 ./install.sh --uninstall # remove everything it added
 ```
 
-It symlinks the skills, agents, and rules into your Claude Code config directory (`$CLAUDE_CONFIG_DIR`, or `~/.claude`), so edits in this folder are live. It adds one hook entry to `settings.json` and leaves a one-time copy at `settings.json.keel-backup`. It needs `jq` for the hook. Start a new session afterwards and type `/keel`.
+It symlinks the skills, agents, and rules into your Claude Code config directory (`$CLAUDE_CONFIG_DIR`, or `~/.claude`), so edits in this folder are live. It adds two hook entries to `settings.json` and leaves a one-time copy at `settings.json.keel-backup`. It needs `jq` for the hooks. Start a new session afterwards and type `/keel`.
 
 ## A day with keel
 
@@ -81,7 +81,9 @@ A small change skips straight to `/build`. Use the whole line when the work is b
 
 **Agents.** `verifier` exercises the real artifact and returns PASS, FAIL, or INCONCLUSIVE per claim. `reviewer` reviews a diff through the lenses its brief names (spec, tests, break-it, security, standards), and runs the proof's claims when there is nothing to launch. Neither can edit files, and neither is told how the change was built.
 
-**Hook** ([hooks/guard.sh](hooks/guard.sh)). Denies a force push to the default branch and `rm -rf` of home or root. Asks before other force pushes, direct pushes to the default branch, `git reset --hard`, `git clean -f`, discarding the whole tree, `--no-verify`, `gh pr merge`, a `gh api` call that changes branch protection, releases, and package publishes. Silent otherwise. It is a seatbelt that reads command text, not a sandbox. Start Claude Code with `KEEL_GUARD=off` to switch it off for a session.
+**Hooks.** The guard ([hooks/guard.sh](hooks/guard.sh)) denies a force push to the default branch and `rm -rf` of home or root. Asks before other force pushes, direct pushes to the default branch, `git reset --hard`, `git clean -f`, discarding the whole tree, `--no-verify`, `gh pr merge`, a `gh api` call that changes branch protection, releases, and package publishes. Silent otherwise. It is a seatbelt that reads command text, not a sandbox. Start Claude Code with `KEEL_GUARD=off` to switch it off for a session.
+
+The brief check ([skills/keel/scripts/brief-check.sh](skills/keel/scripts/brief-check.sh)) runs after every Write and Edit of a Markdown file in a `briefs` directory. It reports each sentence over 20 words, each paragraph over 6 sentences, each semicolon, and each word on its short list of words ASD-STE100 does not approve. Claude sees the report and rewrites those lines.
 
 **Scripts.** `skills/vet/scripts/bar-guard.sh` lists where a diff may have lowered the bar (suppressions, skipped or deleted tests, removed assertions, stubs, empty handlers, bypasses). `/repo-setup` offers to copy it into a repo as a CI job. `scripts/check.sh` tests keel itself.
 
@@ -90,6 +92,7 @@ A small change skips straight to `/build`. Use the whole line when the work is b
 | Gate | Run by | Holds when the agent skips a step? |
 |---|---|---|
 | The Bash hook | the harness, on every command | yes |
+| The brief check | the harness, on every Write and Edit of a brief | yes, for those tools. A brief written through Bash is checked only when the agent runs the script, as `architect` and `/build` say. |
 | The contract walk, `prove`, `vet`, the bar guard inside `vet` | the agent, when it follows `/build` | no |
 | CI, branch protection, the bar guard as a CI job | the pipeline, on every pull request | yes |
 
@@ -150,6 +153,6 @@ A repo's own conventions win. Keel points at what exists and does not create a s
 
 ## Changing keel
 
-Edit the files here. They are live through the symlinks. Run `scripts/check.sh` after any edit: it checks every skill and reference, runs the guard hook against a table of commands, runs `bar-guard.sh` against a throwaway repo, and round-trips the installer. When a keel skill misfires, `/retro` proposes the edit as a diff.
+Edit the files here. They are live through the symlinks. Run `scripts/check.sh` after any edit: it checks every skill and reference, runs the guard hook against a table of commands, runs `bar-guard.sh` against a throwaway repo, runs `brief-check.sh` against a clean and a bad brief, and round-trips the installer. When a keel skill misfires, `/retro` proposes the edit as a diff.
 
 Keep it small. Before adding a skill, ask whether a rule, a line in an existing skill, or a check in the repo would do the job.
