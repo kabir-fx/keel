@@ -120,7 +120,7 @@ Each built-in was judged on one question: for this job, does it give a better re
 | `/clear`, `/compact`, `/subtask` | used | Harness mechanisms for context. |
 | `/doctor`, `/skill-doctor`, `/insights` | used | Diagnostics that feed `/retro`. |
 | `/code-review`, `/security-review` | not in the flow | They review a diff without the contract. `vet` checks the change against the spec, checks that the tests have teeth, demands a reproduction for every bug claim, and gives the reviewer a fresh context with none of the author's reasoning. Two review tools would mean two reports to reconcile. |
-| `/simplify` | not in the flow | It starts 4 review agents on every run. Measured on a 10-line function in Claude Code 2.1.325: about 66,000 input tokens and no findings, on top of the 4 subagent runs a standard change already costs. `/build` cleans up in line instead. Type `/simplify` yourself on a diff too large to reread. |
+| `/simplify` | not in the flow | It starts 4 review agents on every run. Measured on a 10-line function in Claude Code 2.1.325: about 66,000 input tokens and no findings, on top of the subagent run a standard change already costs. `/build` cleans up in line instead. Type `/simplify` yourself on a diff too large to reread. |
 | `/verify` | not in the flow | `prove` is the one proof procedure. |
 | `/plan` | not in the flow | Its plan lives in the conversation. `/grill`, `/spec`, and `/architect` leave files that outlive the session. |
 | `/batch` | not in the flow | Many parallel agents for one mechanical change. A codemod makes the same edit every time and costs far less. |
@@ -144,8 +144,8 @@ A repo's own conventions win. Keel points at what exists and does not create a s
 ## What it costs
 
 - **Every session**: the rules (about 510 words) and the descriptions of the 11 model-invoked skills (about 2,900 characters). `scripts/check.sh lint` prints the current numbers.
-- **Per change**: light is 1 subagent run. Standard is 4 (a verifier and 3 reviewers). High stakes is 5.
-- **Measured once** (Claude Code 2.1.325, Fable 5.2, a throwaway repo): `/build` forced to standard rigor on a 10-line `median` function made 6 subagent runs, because a real tests-lens finding meant a second review. It used about 1.85M input tokens, almost all cache reads, and 72k output tokens: about $6.40 at API list prices, and a large share of a 5-hour usage window. A change that small fits light rigor.
+- **Per change**: light is 1 subagent run. Standard is 1, or 2 when there is something to launch. High stakes is 3. A fix that changes the design adds one scoped re-check.
+- **Measured on a real slice** (uLLM M1-T2, Opus 5.5, medium effort): with one agent per lens and repeated review rounds it cost $25.15 at API list prices, about 70% of a 5-hour window. The current Standard gate, replayed on the same commit, cost $1.74 to $1.93. Re-priced, the whole slice comes to about $11.73, about a third of a window. [docs/analysis.md](docs/analysis.md) section 8 has the breakdown, and what one reviewer misses.
 - **Context**: start each slice in a fresh session. The spec is the memory. `/keel` has the rules for when to continue, clear, hand off, or compact.
 
 ## Changing keel

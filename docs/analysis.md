@@ -116,7 +116,7 @@ All three sources reach for independence somewhere: a second opinion that does n
 2. **A withheld brief.** They get the artifact and the contract, never the author's reasoning.
 3. **No second model.** An earlier version put high-stakes agents on a different top-tier model. Every agent now runs on Opus: the fresh context and the withheld brief give the independence.
 
-Fan-out is kept to what the rigor needs: one subagent for a light change, four for a standard one, five at high stakes. Mechanical bulk work goes to a smaller model.
+Fan-out is kept to what the rigor needs: one subagent for a light change, one or two for a standard one, three at high stakes, in one review round. Mechanical bulk work goes to a smaller model. Section 8 has the measurements behind these numbers.
 
 ## 6. Claude Code's own commands
 
@@ -142,5 +142,48 @@ Keel's skill names avoid the built-in names (`architect` not `design`, `prove` n
 ## 7. What is not known yet
 
 - The choice of `vet` over `/code-review` rests on design, not on a measured comparison. The README gives a cheap way to test it on real work.
-- The skills have been checked for structure, and the hook, the bar guard, and the installer have been tested against real inputs. One `/build` ran end to end, headless, on a throwaway repo: it reached DONE with a contract table, a verdict commit, and a real tests-lens finding fixed and re-reviewed. It also showed mutation testing repeated by the verifier, the parent, and the spec lens, which is now assigned to one owner each. The skills have not yet been used on a real project. Expect the first few slices to show where wording needs to change, and use `/retro` for that.
+- The skills have been checked for structure, and the hook, the bar guard, and the installer have been tested against real inputs. One `/build` ran end to end, headless, on a throwaway repo: it reached DONE with a contract table, a verdict commit, and a real tests-lens finding fixed and re-reviewed. It also showed mutation testing repeated by the verifier, the parent, and the spec lens, which is now assigned to one owner each. Since then the skills have built two slices of a real project, uLLM. Section 8 has what they cost. Expect more slices to show where wording needs to change, and use `/retro` for that.
 - The built-in list is from one Claude Code version. When a built-in changes, re-judge its row.
+
+## 8. What a slice costs, measured
+
+Every figure here is priced from Claude Code's transcripts at API list prices, with each call counted once by message id. The method agrees with Claude Code's own cost record to within 2%.
+
+**Before one review round.** On uLLM, slice M1-T2 (a sampler, a stop check and a streaming detokenizer) cost $25.15, about 70% of a 5-hour window on Opus at medium effort.
+
+| Phase | Cost |
+|---|---|
+| Orient and build | $3.46 |
+| Review round 1: 4 lens agents and a verifier, plus the fixes | $7.40 |
+| Round 2: the same 5 agents resumed | $5.35 |
+| Round 3: resumed again | $7.20 |
+| Record the result | $0.56 |
+| `/ship`, in the same chat, at 337,000 tokens of context | $1.16 |
+
+Across the 8 sessions that used keel, proof and review were 76% of the spend ($67.53 of $88.37). The build was 11%. The causes:
+
+- one agent per lens;
+- any later commit voided both verdicts, so each fix sent review round again;
+- re-reviews hunted for new findings instead of checking the fixes;
+- agents resumed after 5 idle minutes rewrote their whole cache;
+- `/ship` re-read the build's context on every turn.
+
+**After.** The gate was replayed on M1-T2 at the commit the review first saw. Each replay ran in a clone holding no later history, and was scored against the 7 bugs the original review rounds found.
+
+| Gate | Runs | Cost per run | Bugs caught, of 7 |
+|---|---|---|---|
+| 1 reviewer, every lens (Standard today) | 2 | $1.74, $1.93 | 3, 3 |
+| 2 reviewers, break-it sharing an agent with the claims | 2 | $2.45, $2.74 | 4, 4 |
+| 2 reviewers, break-it alone | 1 | $2.84 | 6 |
+| The original round 1, 5 agents | 1 | $4.28 in agents | 6 |
+
+The scoped re-check after the design-changing fix cost $0.72 and confirmed all four fixes. The rest of the slice was re-priced from the transcript for one review round and for `/ship` after `/clear`. That gives about $11.73 for the slice with one reviewer, about a third of a 5-hour window (an estimate, not a measured run).
+
+**The trade-off kept.** Standard keeps one reviewer. In the replays it missed two bugs that a dedicated break-it agent found:
+
+- a tiny `top_p` that turned the filter off;
+- a detokenizer that stalled on a real U+FFFD.
+
+When a change carries that risk, run it at high stakes.
+
+**For the next replay.** A worktree shares its repository's refs, and two reviewers used them to read the later fix record. Replay in a clone that holds only the reviewed history. A headless run's main thread ends its turn while background agents still work, so wait until every agent's transcript has ended.
