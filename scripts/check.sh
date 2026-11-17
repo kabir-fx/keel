@@ -5,6 +5,7 @@
 #   scripts/check.sh lint       skill, agent, and reference checks
 #   scripts/check.sh hook       the guard hook, against a table of commands
 #   scripts/check.sh bar        bar-guard.sh, against a throwaway repository
+#   scripts/check.sh brief      brief-check.sh, against a clean and a bad brief
 #   scripts/check.sh install    the installer, against a throwaway config directory
 #
 # Exit status: 0 when every check passes, 1 otherwise.
@@ -135,7 +136,7 @@ lint() {
   done
   grep -rq 'nothing after it' skills agents && fail "a skill voids a verdict on any later commit: point at keel/verdicts.md instead" || ok
 
-  for file in install.sh scripts/check.sh hooks/guard.sh skills/vet/scripts/bar-guard.sh; do
+  for file in install.sh scripts/check.sh hooks/guard.sh skills/vet/scripts/bar-guard.sh skills/keel/scripts/brief-check.sh; do
     [ -x "$file" ] && ok || fail "$file is not executable"
     bash -n "$file" 2>/dev/null && ok || fail "$file has a syntax error"
   done
@@ -373,6 +374,79 @@ bar() {
   expect "bar-guard exit status outside a repository" "$status" 2
 }
 
+brief() {
+  local checker="$root/skills/keel/scripts/brief-check.sh" dir="$tmp/docs/briefs" out status want
+  mkdir -p "$dir" "$tmp/notes"
+  cat >"$dir/good.md" <<'EOF'
+# A heading is never checked, so this one can be far longer than twenty words and still pass the brief check
+
+**State:** waiting for your approval. Read this page first.
+
+One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty.
+
+One. Two. Three. Four. Five. Six.
+
+| Word | Meaning |
+|---|---|
+| Ticket | A message from one thread to the other. |
+
+```
+a code block can hold a long line; it can say ensure, and the checker reads none of it, so it passes
+```
+
+- A list item with `code; spans` counts each span as one word, so `a b c d e f g h i j k l m n o p q r s t u` is one.
+- Trivia and viable plans are fine words.
+EOF
+  cat >"$dir/bad.md" <<'EOF'
+# Bad
+
+One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone.
+
+One. Two. Three. Four. Five. Six. Seven.
+
+The agent ensures it works; it does.
+
+| Word | One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone. |
+
+- A list item can also go via a word the checker refuses.
+EOF
+  cp "$dir/bad.md" "$tmp/notes/bad.md"
+
+  out="$("$checker" "$dir/good.md" 2>&1)"; status=$?
+  expect "brief-check exit status on a clean brief" "$status" 0
+  expect "brief-check output on a clean brief" "$out" ""
+
+  out="$("$checker" "$dir/good.md" "$dir/bad.md" 2>&1)"; status=$?
+  expect "brief-check exit status with findings" "$status" 1
+  for want in \
+    "bad.md:3: sentence of 21 words, max 20: \"One two three four five six seven eight ...\"" \
+    "bad.md:5: paragraph of 7 sentences, max 6" \
+    "bad.md:7: semicolon: write two sentences" \
+    "bad.md:7: \"ensure\": write \"make sure\"" \
+    "bad.md:9: sentence of 21 words, max 20" \
+    "bad.md:11: \"via\": write \"through\""; do
+    case "$out" in *"$want"*) ok ;; *) fail "brief-check output lacks: $want" ;; esac
+  done
+  expect "brief-check finding count" "$(printf '%s\n' "$out" | grep -c 'bad.md:')" 6
+  case "$out" in *good.md*) fail "brief-check flagged the clean brief: $out" ;; *) ok ;; esac
+
+  "$checker" "$dir/missing.md" >/dev/null 2>&1; status=$?
+  expect "brief-check exit status on a missing file" "$status" 2
+  "$checker" >/dev/null 2>&1; status=$?
+  expect "brief-check exit status with no file" "$status" 2
+
+  command -v jq >/dev/null 2>&1 || { fail "brief hook tests need jq"; return; }
+  hook_run() { # hook_run <file>: prints stderr, then exit=<status>
+    jq -cn --arg f "$1" '{tool_name: "Write", tool_input: {file_path: $f}}' | "$checker" --hook 2>&1 >/dev/null
+    echo "exit=$?"
+  }
+  out="$(hook_run "$dir/bad.md")"
+  case "$out" in *"bad.md:3: sentence of 21 words"*"Rewrite these lines"*"exit=2") ok ;; *) fail "brief hook on a bad brief: $out" ;; esac
+  expect "brief hook on a clean brief" "$(hook_run "$dir/good.md")" "exit=0"
+  expect "brief hook outside a briefs directory" "$(hook_run "$tmp/notes/bad.md")" "exit=0"
+  expect "brief hook on malformed input" "$(printf 'not json' | "$checker" --hook 2>&1; echo "exit=$?")" "exit=0"
+}
+
 install_check() {
   local config="$tmp/config" before name cmd got
   mkdir -p "$config/skills/tdd"
@@ -417,9 +491,10 @@ case "$what" in
   lint) lint ;;
   hook) hook ;;
   bar) bar ;;
+  brief) brief ;;
   install) install_check ;;
-  all) lint; hook; bar; install_check ;;
-  *) echo "usage: scripts/check.sh [lint|hook|bar|install]" >&2; exit 2 ;;
+  all) lint; hook; bar; brief; install_check ;;
+  *) echo "usage: scripts/check.sh [lint|hook|bar|brief|install]" >&2; exit 2 ;;
 esac
 
 if [ "$fails" -gt 0 ]; then
