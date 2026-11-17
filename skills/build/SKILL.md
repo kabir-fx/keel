@@ -32,6 +32,7 @@ Take one change from request to a vetted, committed result. One slice, one issue
 - An empirical fork goes to the `prototype` skill.
 - Agree the seams the tests go through: the spec's, or name them now.
 - List the increments. Each adds one behaviour and leaves the checks green.
+- At Standard and High stakes, when no design step wrote a brief, write it now from `${CLAUDE_SKILL_DIR}/../keel/brief.md`, and run `${CLAUDE_SKILL_DIR}/../keel/scripts/brief-check.sh <brief>` until it passes.
 
 ## 3. Build in increments
 
@@ -56,6 +57,8 @@ For each increment, use the `tdd` skill: a failing test, the least code that pas
 Do not push, open a pull request, or merge. That is `/ship`.
 
 ## 5. Report
+
+At Standard and High stakes, first fill in the brief's **Result** from the facts below, and commit it. Run the brief check on it until it passes.
 
 The first line is the state. **DONE** means every acceptance criterion is met and shown, the proof says VERIFIED, and the review says READY: name the commit those verdicts cover, and how many agent runs the change used. Anything less is **NOT DONE**: say what remains and why you stopped.
 

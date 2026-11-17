@@ -15,8 +15,8 @@ Answer "what do I use now?" from this map. If I described a situation, name the 
 |---|---|---|
 | Align | `/grill` | One shared understanding. New terms in `GLOSSARY.md`, hard decisions as decision records. |
 | Specify | `/spec` | A spec with checkable success criteria, then vertical slices with a proof each. |
-| Design | `/architect` | The caller's usage, a type sketch, competing designs compared, a rationale. |
-| Build | `/build` | One slice: test-first, proven on the real artifact, vetted, committed. |
+| Design | `/architect` | The caller's usage, a type sketch, competing designs compared, a rationale, and a brief for you. |
+| Build | `/build` | One slice: test-first, proven on the real artifact, vetted, committed, and its result in the brief. |
 | Ship | `/ship` | A PR that carries its evidence, green CI, and for a release a rollback plan. |
 | Learn | `/retro` | A better environment: the mistake becomes a check, not a longer prompt. |
 
@@ -77,4 +77,4 @@ Mid-phase, keep going or split the remainder into subagents. What must survive a
 
 ## Shared references
 
-Other keel skills point here: [adr.md](adr.md), [glossary.md](glossary.md), [subagents.md](subagents.md), [verdicts.md](verdicts.md).
+Other keel skills point here: [adr.md](adr.md), [brief.md](brief.md), [glossary.md](glossary.md), [subagents.md](subagents.md), [verdicts.md](verdicts.md).

@@ -7,7 +7,7 @@
 The commit it names, plus each later commit that does only one of these:
 
 - **Fixes a finding of that verdict without changing the design**, and shows the fix: the finding's reproduction or mutant fails before the fix and passes after it, and the full check is green. For a wording finding, the corrected line is the evidence.
-- **Records the result**: ticks and status in the spec, a progress note, a figure in the quality bar.
+- **Records the result**: ticks and status in the spec, a progress note, a figure in the quality bar, the brief's Result.
 
 Changing the design means a new or changed interface, module, data structure, or algorithm. A design-changing fix gets one scoped re-check (`vet` step 6). Any other later change to code, tests, or check configuration is not covered: prove and vet what it touched.
 

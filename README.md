@@ -43,8 +43,10 @@ It symlinks the skills, agents, and rules into your Claude Code config directory
 ```
 /grill ──▶ /spec ──▶ /architect ──▶ /build ──────────────────────▶ /ship ──▶ /retro
  align     specify    design         tdd ▶ clean up ▶ prove ▶ vet    PR, CI,    fix the
-           + slice                   one slice per fresh session     release    environment
+           + slice    + brief        one slice per fresh session     release    environment
 ```
+
+You approve a design from its brief, a short page in plain words. The decision record stays the contract for agents. `/build` writes the brief's result when it ends.
 
 A small change skips straight to `/build`. Use the whole line when the work is bigger than one sitting, hard to reverse, or still vague.
 
@@ -141,6 +143,7 @@ Apart from `/simplify`, these verdicts come from how each tool is designed, not 
 | `docs/specs/<slug>.md` | `/spec` | the spec, and its slices with status |
 | `GLOSSARY.md` | `grill`, when a term is pinned | one meaning per word |
 | decision records | `grill`, `architect` | hard-to-reverse decisions, one to three sentences each |
+| `docs/briefs/<slice>.md` | `architect`, or `/build` at Standard and above | your page for one slice in short ASD-STE100 sentences: the goal, how it works, what you get, the progress board, what you approve, and the result |
 
 A repo's own conventions win. Keel points at what exists and does not create a second copy.
 

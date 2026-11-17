@@ -59,11 +59,11 @@ Add this block to `CLAUDE.md`, or refresh it if it exists. Create `CLAUDE.md` if
 - Fast check: `<command>` (after every increment)
 - Full check: `<command>` (before proof and before shipping)
 - Quality bar: `QUALITY.md`. Never weaken it to make a change pass.
-- Specs: `<dir>` · Decisions: `<dir>` · Glossary: `<path>`
+- Specs: `<dir>` · Decisions: `<dir>` · Glossary: `<path>` · Briefs: `<dir named briefs, docs/briefs/ by default>`
 - Run recipe: `<path, or "standard launch: <command>">`
 ```
 
-Do not create an empty glossary or an empty decisions folder. They appear when the first term or decision does.
+Do not create an empty glossary, decisions folder, or briefs folder. They appear when the first term, decision, or brief does.
 
 ## 6. Prove the setup
 

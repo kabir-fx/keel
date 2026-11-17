@@ -31,8 +31,8 @@ Use these words exactly. They are how designs get compared.
 4. **Screen** every candidate against [red-flags.md](red-flags.md). Compare the survivors on depth, on where a future change would land, and on seam placement.
 5. **Pick a base and graft.** Choose the design a maintainer can extend most easily without breaking an invariant. When two tie, take the smaller interface. Port the one or two best ideas from the losers by hand, so the result stays one coherent design. If the candidates converged, that agreement is evidence. If they diverged wildly, the framing was too loose: return to step 1.
 6. **Stress it.** Answer each in a line: What if it runs twice? What if it crashes halfway? What if two actors write at once? What does hostile input do at each trust boundary? How will we see it working, or failing, in production?
-7. **Write the rationale** from [rationale.md](rationale.md), next to the spec. Record a decision record when one is warranted: `${CLAUDE_SKILL_DIR}/../keel/adr.md`.
-8. **Checkpoint.** Show me the usage, the sketch, the alternatives you rejected, and the open questions. Wait for my approval before any logic is written. Skip the wait only when I asked for an unattended run.
+7. **Write the rationale** from [rationale.md](rationale.md), next to the spec. Record a decision record when one is warranted: `${CLAUDE_SKILL_DIR}/../keel/adr.md`. Then write my brief from `${CLAUDE_SKILL_DIR}/../keel/brief.md`, and run `${CLAUDE_SKILL_DIR}/../keel/scripts/brief-check.sh <brief>` until it passes.
+8. **Checkpoint.** Give me the path to the brief, and ask the open questions from its *What you approve*, each with your recommended answer. The rationale and the decision record stay the contract for agents: point at them, do not repeat them. Wait for my approval before any logic is written. Skip the wait only when I asked for an unattended run.
 
 ## While implementing
 
