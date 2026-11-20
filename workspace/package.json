@@ -1,0 +1,39 @@
+{
+  "name": "keel-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Keel Workspace: a board where the owner ideates with an agent, solidifies an idea, and watches it get built.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "protocol",
+    "pictures",
+    "server",
+    "app",
+    "plugin",
+    "e2e"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "e2e": "npm run build && npm run test -w @keel/board-e2e",
+    "check": "npm run typecheck && npm run test && npm run e2e",
+    "fixture": "tsx protocol/fixtures/engine-loop/build.ts"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/ws": "^8.18.2",
+    "esbuild": "^0.28.2",
+    "happy-dom": "^21.0.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}
