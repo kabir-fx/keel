@@ -1,2 +1,18 @@
 .scratch/
 .DS_Store
+
+# Private design notes. The remote is public: keep this folder out of every commit.
+docs/private/
+
+# Workspace build output and dependencies
+node_modules/
+dist/
+*.tsbuildinfo
+workspace/e2e/test-results/
+workspace/e2e/playwright-report/
+workspace/e2e/shots/
+workspace/pictures/gallery/shots/
+workspace/plugin/scenarios/runs/
+
+# A board's running-server file holds a local token. The log itself is committed.
+.keel/board/server.json

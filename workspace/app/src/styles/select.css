@@ -1,0 +1,18 @@
+/* ------------------------------------------------------------- the selection */
+
+/*
+ * What is selected is drawn in the overlay, in screen space, so it keeps one size at any zoom:
+ * a line one pixel wide round each thing, four pixels out from it (`SELECT_LINE`, `SELECT_PAD`),
+ * a faint dashed box round several, the handles of a box or a note, the guides a move snaps to,
+ * and the box drawn to select with. Each is placed by a transform written from code.
+ */
+.selection-layer { position: absolute; inset: 0; }
+.select-ring,
+.select-handle,
+.select-marquee { position: absolute; left: 0; top: 0; }
+.select-ring { border: 1px solid var(--agent); }
+.select-ring--all { border: 1px dashed rgba(29, 78, 216, 0.45); }
+.select-handle { background: #fff; border: 1px solid var(--agent); border-radius: 2px; }
+.select-marquee { border: 1px solid var(--agent); background: rgba(29, 78, 216, 0.06); }
+.snap-guides { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.snap-guides path { fill: none; stroke: var(--agent); stroke-width: 1; }

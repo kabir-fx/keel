@@ -1,0 +1,15 @@
+{
+  "name": "@keel/board-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "End-to-end: fixture replay and screenshots.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "bench": "KEEL_BENCH=1 playwright test bench.spec.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1"
+  }
+}

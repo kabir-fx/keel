@@ -1,0 +1,86 @@
+/* ------------------------------------------------------------- the watch panel */
+
+.watch {
+  top: 88px;
+  right: 24px;
+  width: 384px;
+  max-height: calc(100vh - 88px - 180px);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-float);
+  font-size: 13.5px;
+  line-height: 19px;
+}
+.watch--folded { max-height: none; }
+.watch__head { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 10px 10px 14px; border-bottom: 1px solid var(--line); }
+.watch--folded .watch__head { border-bottom: 0; }
+.watch__title { margin: 0; font: 600 14px/20px var(--font-ui); color: var(--agent); }
+.watch__where { color: var(--text-2); font-size: 13px; white-space: nowrap; }
+.watch__grow { flex: 1; }
+.watch__btn {
+  height: 30px;
+  padding: 0 12px;
+  border: 1.5px solid var(--ink);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font: 600 13px/18px var(--font-ui);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.watch__btn:hover:not(:disabled) { background: var(--light); }
+.watch__btn:disabled { opacity: 0.55; cursor: progress; }
+.watch__btn--dark, .watch__btn--go { background: var(--ink); color: #fff; }
+.watch__btn--dark:hover:not(:disabled), .watch__btn--go:hover:not(:disabled) { background: var(--fill); }
+/* "See it" is a link that looks like the buttons beside it: same height, no underline. */
+a.watch__btn { display: inline-flex; align-items: center; text-decoration: none; }
+.watch__fold { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }
+.watch__fold:hover { background: var(--light); }
+.watch__fold svg { fill: none; stroke: var(--ink); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.watch__btn:focus-visible, .watch__fold:focus-visible, .watch__link:focus-visible, .watch__part:focus-visible { outline: 2px solid var(--agent); outline-offset: 2px; }
+.watch__body { min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 14px; }
+.watch__status { margin: 0; color: var(--ink); }
+.watch__status--paused, .watch__status--queued { color: var(--text-2); }
+.watch__status--waiting, .watch__status--stopped { color: var(--owner-text); font-weight: 600; }
+.watch__status--built { color: var(--ink); font-weight: 600; }
+.watch__link { padding: 0; border: 0; background: none; color: var(--agent); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
+.watch__agree { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border: 1.5px dashed var(--owner); border-radius: 10px; background: var(--owner-bg); }
+.watch__agree p { margin: 0; color: var(--owner-text); }
+.watch__check { flex: 1 1 auto; min-width: 0; padding: 4px 8px; border-radius: 6px; background: #fff; border: 1px solid var(--owner-soft); color: var(--ink); font: 600 12.5px/18px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.watch__remarks { flex: 1 1 100%; color: var(--ink); }
+.watch__remarks p { margin: 0 0 4px; color: var(--owner-text); font-weight: 600; }
+.watch__remarks ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere; }
+.watch__remarks .watch__more { margin: 4px 0 0; font-weight: 400; color: var(--text-2); }
+.watch__status--unagreed { color: var(--owner-text); font-weight: 600; }
+.watch__reopened { padding: 10px 12px; border: 1.5px dashed var(--owner); border-radius: 10px; background: var(--owner-bg); color: var(--owner-text); }
+.watch__reopened p { margin: 0 0 8px; }
+.watch__reopened ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.watch__reopened li { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink); font-weight: 600; }
+.watch__track { flex: none; margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.watch__part { padding: 0; border: 0; background: none; cursor: pointer; border-radius: 999px; }
+.watch__part .k-state { padding: 3px 10px; font-size: 12px; line-height: 16px; }
+.watch__track [data-state='building'] .k-state { box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.14); }
+.watch__feed { flex: 1 1 auto; min-height: 60px; overflow-y: auto; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.feed__line { display: grid; grid-template-columns: 44px 1fr; gap: 8px; padding: 9px 2px; border-bottom: 1px solid var(--light-2); }
+.feed__line:last-child { border-bottom: 0; }
+.feed__time { color: var(--text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.feed__said { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.feed__text { overflow-wrap: anywhere; }
+.feed__proof { display: flex; flex-wrap: wrap; gap: 6px; }
+.feed__commit { padding: 0 6px; border-radius: 999px; background: var(--teal-light); color: var(--teal-text); font: 600 11.5px/17px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.feed__check { padding: 0 6px; border-radius: 999px; font: 600 11.5px/17px var(--font-ui); }
+.feed__check--passed { background: var(--light-2); color: var(--ink); }
+.feed__check--failed { background: var(--owner-bg); color: var(--owner-text); }
+/* A state change is quiet: the track already shows it. */
+.feed__line--state { padding-top: 5px; padding-bottom: 5px; color: var(--grey); font-size: 12.5px; }
+.feed__line--state .feed__time { color: var(--grey); }
+.feed__line--state .feed__commit, .feed__line--state .feed__check { opacity: 0.75; }
+/* A problem stands out. */
+.feed__line--problem { margin: 4px 0; padding: 9px 8px; border: 1.5px solid var(--owner); border-radius: 8px; background: var(--owner-bg); color: var(--owner-text); font-weight: 600; }
+.feed__line--problem .feed__time { color: var(--owner-text); }
+.feed__line--lit { box-shadow: 0 0 0 3px rgba(194, 65, 12, 0.35); }
+.feed__empty { padding: 10px 2px; color: var(--text-2); }
+.watch__leave { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--fill); color: #fff; }

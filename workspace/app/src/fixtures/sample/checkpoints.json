@@ -1,0 +1,52 @@
+[
+  {
+    "screen": 1,
+    "name": "main",
+    "title": "A blank canvas",
+    "after": "e5",
+    "view": {
+      "mode": "board",
+      "presence": {
+        "state": "listening",
+        "note": "listening",
+        "cursor": {
+          "at": [
+            1262,
+            600
+          ]
+        }
+      }
+    }
+  },
+  {
+    "screen": 2,
+    "name": "pictures",
+    "title": "The agent answers in pictures",
+    "after": "e7",
+    "view": {
+      "mode": "board",
+      "presence": {
+        "state": "drawing",
+        "note": "drawing two pictures",
+        "cursor": {
+          "item": "a2"
+        }
+      }
+    }
+  },
+  {
+    "screen": 3,
+    "name": "more",
+    "title": "A small picture and a wide one",
+    "after": "e9",
+    "view": {
+      "mode": "board",
+      "presence": {
+        "state": "waiting",
+        "cursor": {
+          "item": "a4"
+        }
+      }
+    }
+  }
+]

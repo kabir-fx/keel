@@ -1,0 +1,18 @@
+[
+  {
+    "screen": 1,
+    "name": "bench",
+    "title": "The bench: 300 items",
+    "after": "e425",
+    "view": {
+      "mode": "board",
+      "presence": {
+        "state": "listening",
+        "note": "listening",
+        "cursor": {
+          "item": "te-3"
+        }
+      }
+    }
+  }
+]

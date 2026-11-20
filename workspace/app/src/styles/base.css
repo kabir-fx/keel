@@ -1,0 +1,13 @@
+/* The canvas and its chrome. Colours come from the tokens in @keel/pictures/styles.css. */
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root { margin: 0; height: 100%; overflow: hidden; }
+/* A sideways two-finger swipe moves the board. It never goes back a page. */
+html, body { overscroll-behavior-x: none; }
+body {
+  font-family: var(--font-ui);
+  color: var(--ink);
+  background: var(--ground);
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; }

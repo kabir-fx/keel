@@ -1,0 +1,74 @@
+[
+  {
+    "screen": 1,
+    "name": "read",
+    "title": "You write a note, and the agent answers with a card",
+    "view": {
+      "mode": "board",
+      "presence": {
+        "state": "listening"
+      }
+    },
+    "after": "e5"
+  },
+  {
+    "screen": 2,
+    "name": "mini",
+    "title": "A second note, and the agent answers with a small drawing",
+    "view": {
+      "mode": "board",
+      "presence": {
+        "state": "listening"
+      }
+    },
+    "after": "e8"
+  },
+  {
+    "screen": 3,
+    "name": "answer",
+    "title": "A remark pinned on the drawing, answered in words",
+    "view": {
+      "mode": "board",
+      "presence": {
+        "state": "listening"
+      }
+    },
+    "after": "e10"
+  },
+  {
+    "screen": 4,
+    "name": "spread",
+    "title": "You ask for options, and the agent lays out three",
+    "view": {
+      "mode": "board",
+      "presence": {
+        "state": "listening"
+      }
+    },
+    "after": "e13"
+  },
+  {
+    "screen": 5,
+    "name": "placeholder",
+    "title": "The agent puts down a placeholder, then finishes it",
+    "view": {
+      "mode": "board",
+      "presence": {
+        "state": "listening"
+      }
+    },
+    "after": "e16"
+  },
+  {
+    "screen": 6,
+    "name": "redraw",
+    "title": "The agent redraws its first card",
+    "view": {
+      "mode": "board",
+      "presence": {
+        "state": "listening"
+      }
+    },
+    "after": "e17"
+  }
+]

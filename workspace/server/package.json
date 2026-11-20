@@ -1,0 +1,22 @@
+{
+  "name": "@keel/board-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Owns the board log. Checks every event. Feeds the browser and the agent.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "keel-board": "./bin/keel-board.mjs"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@keel/protocol": "*",
+    "ws": "^8.23.0"
+  }
+}

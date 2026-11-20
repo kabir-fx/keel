@@ -6,8 +6,11 @@
 #   scripts/check.sh hook       the guard hook, against a table of commands
 #   scripts/check.sh bar        bar-guard.sh, against a throwaway repository
 #   scripts/check.sh brief      brief-check.sh, against a clean and a bad brief
-#   scripts/check.sh install    the installer, against a throwaway config directory
+#   scripts/check.sh install    the installer, against a throwaway config directory and bin folder
+#   scripts/check.sh board      the workspace: typecheck, unit tests, the plugin's files.
+#                               KEEL_E2E=1 adds the browser tests.
 #
+# `all` runs `board` only when Node 22 or newer and npm are there.
 # Exit status: 0 when every check passes, 1 otherwise.
 
 set -u
@@ -447,19 +450,58 @@ EOF
   expect "brief hook on malformed input" "$(printf 'not json' | "$checker" --hook 2>&1; echo "exit=$?")" "exit=0"
 }
 
+has_node() { # Node 22 or newer, and npm
+  command -v npm >/dev/null 2>&1 || return 1
+  [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -ge 22 ] 2>/dev/null
+}
+
+# A PATH with no node on it. A folder that holds node is left out, so a folder of
+# links keeps the other commands the installer needs, in case they lived beside it.
+path_without_node() {
+  local d keep="" shim="$tmp/no-node" t
+  mkdir -p "$shim"
+  while IFS= read -r d; do
+    [ -n "$d" ] && [ ! -x "$d/node" ] && keep="$keep:$d"
+  done < <(printf '%s\n' "$PATH" | tr ':' '\n')
+  for t in bash jq ln mkdir rm readlink cat cp cmp diff sed mktemp dirname basename tail head tr; do
+    PATH="${keep#:}" command -v "$t" >/dev/null 2>&1 || ln -sf "$(command -v "$t")" "$shim/$t"
+  done
+  printf '%s%s' "$shim" "$keep"
+}
+
 install_check() {
-  local config="$tmp/config" before name cmd got
-  mkdir -p "$config/skills/tdd"
+  local config="$tmp/config" bin="$tmp/bin" fake="$tmp/fake-npm" calls="$tmp/npm-calls" before name cmd got first
+  local board_guard board_matcher mine weird proj legacy
+  command -v jq >/dev/null 2>&1 || { fail "install tests need jq"; return; }
+  board_guard="node $(jq -rn --arg p "$root/workspace/plugin/hooks/guard-board.mjs" '$p | @sh')"
+  board_matcher="$(jq -r '.hooks.PreToolUse[0].matcher' "$root/workspace/plugin/hooks/hooks.json")"
+
+  # A stand-in npm notes where it ran and what it was asked, so no check here builds the
+  # board for real. Every run gets its own config directory and bin folder.
+  mkdir -p "$fake"
+  printf '#!/bin/sh\nprintf "%%s %%s\\n" "$PWD" "$*" >>"%s"\n' "$calls" >"$fake/npm"
+  chmod +x "$fake/npm"
+  : >"$calls"
+  inst() { CLAUDE_CONFIG_DIR="$config" KEEL_BIN_DIR="$bin" PATH="$fake:$PATH" "$root/install.sh" "$@"; }
+
+  mkdir -p "$config/skills/tdd" "$bin"
   printf 'mine\n' >"$config/skills/tdd/SKILL.md"
+  printf 'mine\n' >"$bin/other"
+  ln -s "$root/skills/build" "$config/skills/my-build"
   printf '{"model":"x","hooks":{"PreToolUse":[{"matcher":"Write","hooks":[{"type":"command","command":"echo hi"}]}]}}\n' >"$config/settings.json"
   before="$(jq -S . "$config/settings.json")"
 
-  CLAUDE_CONFIG_DIR="$config" "$root/install.sh" --dry-run >/dev/null 2>&1
+  got="$(inst --dry-run 2>&1)"
   [ ! -e "$config/skills/keel" ] && ok || fail "install --dry-run created files"
   expect "install --dry-run leaves settings alone" "$(jq -S . "$config/settings.json")" "$before"
+  if has_node; then
+    expect "install --dry-run links no keel-board" "$(ls "$bin")" other
+    expect "install --dry-run runs no npm" "$(cat "$calls")" ""
+    case "$got" in *"would build the board"*) ok ;; *) fail "install --dry-run does not say it would build the board" ;; esac
+  fi
 
-  got="$(CLAUDE_CONFIG_DIR="$config" "$root/install.sh" 2>&1)"
-  case "$got" in *"SKIPPED   $config/skills/tdd"*) ok ;; *) fail "install did not report the conflicting skills/tdd" ;; esac
+  first="$(inst 2>&1)"
+  case "$first" in *"SKIPPED   $config/skills/tdd"*) ok ;; *) fail "install did not report the conflicting skills/tdd" ;; esac
   expect "install leaves a foreign skill alone" "$(cat "$config/skills/tdd/SKILL.md")" mine
   for name in keel build vet; do
     [ "$(readlink "$config/skills/$name")" = "$root/skills/$name" ] && ok || fail "skills/$name is not linked"
@@ -484,14 +526,205 @@ install_check() {
   got="$(jq -cn --arg f "$tmp/install/briefs/x.md" '{tool_input: {file_path: $f}}' | sh -c "$cmd" 2>&1; echo "exit=$?")"
   case "$got" in *'"ensure": write "make sure"'*"exit=2") ok ;; *) fail "the registered brief hook command does not report: $got" ;; esac
 
-  got="$(jq -S . "$config/settings.json")"
-  CLAUDE_CONFIG_DIR="$config" "$root/install.sh" >/dev/null 2>&1
-  expect "install twice changes nothing" "$(jq -S . "$config/settings.json")" "$got"
+  if has_node; then
+    expect "install builds the board with npm in workspace/" "$(cat "$calls")" \
+      "$root/workspace install --no-audit --no-fund
+$root/workspace run build"
+    expect "install links keel-board" "$(readlink "$bin/keel-board")" "$root/workspace/server/bin/keel-board.mjs"
+    case "$first" in *"$bin is not on your PATH"*) ok ;; *) fail "install does not say that the bin folder is off PATH" ;; esac
+    expect "install registers one board guard" "$(jq --arg c "$board_guard" '[.hooks.PreToolUse[] | select(any(.hooks[]; .command == $c))] | length' "$config/settings.json")" 1
+    expect "the board guard watches the tools hooks.json names" \
+      "$(jq -r --arg c "$board_guard" '.hooks.PreToolUse[] | select(any(.hooks[]; .command == $c)) | .matcher' "$config/settings.json")" "$board_matcher"
 
-  CLAUDE_CONFIG_DIR="$config" "$root/install.sh" --uninstall >/dev/null 2>&1
+    mkdir -p "$tmp/install/repo/.keel/board"
+    cmd="$(jq -r --arg c "$board_guard" '.hooks.PreToolUse[] | .hooks[] | select(.command == $c) | .command' "$config/settings.json")"
+    got="$(jq -cn --arg f "$tmp/install/repo/.keel/board/log.jsonl" --arg d "$tmp/install/repo" '{tool_name: "Write", tool_input: {file_path: $f}, cwd: $d}' |
+      sh -c "$cmd" | jq -r .hookSpecificOutput.permissionDecision)"
+    expect "the registered board guard denies a write into .keel/board" "$got" deny
+    got="$(jq -cn --arg f "$tmp/install/repo/notes.md" --arg d "$tmp/install/repo" '{tool_name: "Write", tool_input: {file_path: $f}, cwd: $d}' | sh -c "$cmd"; echo "exit=$?")"
+    expect "the registered board guard lets another write go" "$got" "exit=0"
+
+    if [ -d "$root/workspace/node_modules" ]; then
+      got="$(node "$bin/keel-board" --help 2>&1)"
+      case "$got" in *"keel-board open"*) ok ;; *) fail "keel-board --help through the link: $got" ;; esac
+    fi
+  else
+    printf 'info  no Node 22 here: the installed board is not checked\n'
+  fi
+
+  got="$(jq -S . "$config/settings.json")"
+  : >"$calls"
+  first="$(inst 2>&1)"
+  expect "install twice changes nothing" "$(jq -S . "$config/settings.json")" "$got"
+  case "$first" in *"  linked "*|*"  relinked "*|*"  updated "*) fail "install twice changed something: $first" ;; *) ok ;; esac
+
+  : >"$calls"
+  inst --uninstall >/dev/null 2>&1
   [ ! -e "$config/skills/keel" ] && [ ! -e "$config/agents/verifier.md" ] && [ ! -e "$config/rules/keel.md" ] && [ ! -e "$config/hooks/keel-guard.sh" ] && [ ! -e "$config/hooks/keel-brief-check.sh" ] && ok || fail "uninstall left links behind"
   expect "uninstall leaves a foreign skill alone" "$(cat "$config/skills/tdd/SKILL.md")" mine
   expect "uninstall restores settings" "$(jq -S . "$config/settings.json")" "$before"
+  expect "uninstall leaves only the foreign file in the bin folder" "$(ls -A "$bin")" other
+  expect "uninstall runs no npm" "$(cat "$calls")" ""
+  expect "uninstall keeps the user's own link into keel" "$(readlink "$config/skills/my-build")" "$root/skills/build"
+
+  # A hook of the user's own, put into keel's matcher group, survives install, refresh and uninstall.
+  config="$tmp/config-mine" bin="$tmp/bin-mine"
+  mine='{"type":"command","command":"echo mine"}'
+  inst >/dev/null 2>&1
+  cmd="$(jq -r '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[0].command' "$config/settings.json")"
+  jq --argjson m "$mine" --arg c "$cmd" '(.hooks.PreToolUse[] | select(any(.hooks[]; .command == $c)) | .hooks) += [$m]' \
+    "$config/settings.json" >"$tmp/mine.json" && cat "$tmp/mine.json" >"$config/settings.json"
+  inst >/dev/null 2>&1
+  expect "refresh keeps the user's hook in keel's group" "$(jq --arg c "$cmd" '[.hooks.PreToolUse[] | select(any(.hooks[]; .command == $c)) | .hooks[] | select(.command == "echo mine")] | length' "$config/settings.json")" 1
+  expect "refresh keeps one guard hook" "$(jq --arg c "$cmd" '[.. | .command? | select(. == $c)] | length' "$config/settings.json")" 1
+  inst --uninstall >/dev/null 2>&1
+  expect "uninstall keeps the user's hook from keel's group" "$(jq -c . "$config/settings.json")" \
+    '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo mine"}]}]}}'
+
+  # An install by an earlier installer, which wrote each path in double quotes, is
+  # recognised: a refresh replaces it, and uninstall removes it.
+  config="$tmp/config-legacy" bin="$tmp/bin-legacy"
+  mkdir -p "$config"
+  legacy="$(jq -n --arg c "$config" --arg b "$root/workspace/plugin/hooks/guard-board.mjs" --arg m "$board_matcher" --argjson node "$(has_node && echo true || echo false)" '
+    {hooks: ({PreToolUse: [{matcher: "Bash", hooks: [{type: "command", command: "\"\($c)/hooks/keel-guard.sh\""}, {type: "command", command: "echo mine"}]}],
+             PostToolUse: [{matcher: "Edit|Write", hooks: [{type: "command", command: "\"\($c)/hooks/keel-brief-check.sh\" --hook"}]}]}
+      | if $node then .PreToolUse += [{matcher: $m, hooks: [{type: "command", command: "node \"\($b)\"", timeout: 10}]}] else . end)}')"
+  printf '%s\n' "$legacy" >"$config/settings.json"
+  inst >/dev/null 2>&1
+  expect "refresh leaves no double-quoted keel command" "$(jq '[.. | .command? | strings | select(startswith("\"") or contains(" \""))] | length' "$config/settings.json")" 0
+  expect "refresh writes each keel hook once" "$(jq '[.. | .command? | strings | select(contains("keel-guard.sh") or contains("keel-brief-check.sh") or contains("guard-board.mjs"))] | length' "$config/settings.json")" "$(has_node && echo 3 || echo 2)"
+  expect "refresh keeps the user's hook beside an old keel hook" "$(jq '[.. | .command? | select(. == "echo mine")] | length' "$config/settings.json")" 1
+  inst --uninstall >/dev/null 2>&1
+  expect "uninstall after an old install keeps only the user's hook" "$(jq -c . "$config/settings.json")" \
+    '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo mine"}]}]}}'
+
+  # A config path with a space, quotes, `$(...)` and a backtick installs, runs its
+  # hooks' commands as plain words, and uninstalls clean.
+  weird="$tmp/cfg \"q\" it's \$(touch pwned) \`touch pwned\`"
+  config="$weird" bin="$tmp/bin-weird" proj="$tmp/proj"
+  mkdir -p "$proj/.keel/board" "$proj/briefs"
+  printf 'The agent will ensure it.\n' >"$proj/briefs/x.md"
+  got="$(cd "$proj" && inst 2>&1; echo "exit=$?")"
+  case "$got" in *"exit=0") ok ;; *) fail "install into an odd config path: $got" ;; esac
+  cmd="$(jq -r '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[0].command' "$config/settings.json")"
+  got="$(cd "$proj" && jq -cn '{tool_input: {command: "rm -rf /"}}' | sh -c "$cmd" 2>&1 | jq -r .hookSpecificOutput.permissionDecision 2>&1)"
+  expect "the guard hook runs from an odd config path" "$got" deny
+  cmd="$(jq -r '.hooks.PostToolUse[] | select(.matcher == "Edit|Write") | .hooks[0].command' "$config/settings.json")"
+  got="$(cd "$proj" && jq -cn --arg f "$proj/briefs/x.md" '{tool_input: {file_path: $f}}' | sh -c "$cmd" 2>&1; echo "exit=$?")"
+  case "$got" in *'"ensure": write "make sure"'*"exit=2") ok ;; *) fail "the brief hook from an odd config path: $got" ;; esac
+  if has_node; then
+    got="$(cd "$proj" && jq -cn --arg f "$proj/.keel/board/log.jsonl" --arg d "$proj" '{tool_name: "Write", tool_input: {file_path: $f}, cwd: $d}' |
+      sh -c "$board_guard" | jq -r .hookSpecificOutput.permissionDecision)"
+    expect "the board guard runs as registered" "$got" deny
+  fi
+  inst --uninstall >/dev/null 2>&1
+  expect "uninstall from an odd config path leaves no hooks" "$(jq -c . "$config/settings.json")" '{}'
+  expect "uninstall from an odd config path leaves no links" "$(find "$config" "$bin" -type l | wc -l | tr -d ' ')" 0
+  expect "no command in a path ran" "$(find "$tmp" -name pwned | wc -l | tr -d ' ')" 0
+
+  # Without Node: the board is skipped and said so, and the rest is installed.
+  config="$tmp/config-no-node" bin="$tmp/bin-no-node"
+  : >"$calls"
+  got="$(CLAUDE_CONFIG_DIR="$config" KEEL_BIN_DIR="$bin" PATH="$fake:$(path_without_node)" "$root/install.sh" 2>&1; echo "exit=$?")"
+  case "$got" in *"SKIPPED   the board: Node is not installed. Install Node 22"*"exit=0") ok ;; *) fail "install without Node: $got" ;; esac
+  [ "$(readlink "$config/skills/keel")" = "$root/skills/keel" ] && ok || fail "install without Node did not link the skills"
+  [ ! -e "$bin/keel-board" ] && ok || fail "install without Node linked keel-board"
+  expect "install without Node registers no board guard" "$(jq '[.. | .command? | strings | select(contains("guard-board"))] | length' "$config/settings.json")" 0
+  expect "install without Node registers the guard hook" "$(jq '[.hooks.PreToolUse[] | select(.matcher == "Bash")] | length' "$config/settings.json")" 1
+  expect "install without Node runs no npm" "$(cat "$calls")" ""
+
+  # With a Node older than 22: the same.
+  mkdir -p "$tmp/old-node"
+  printf '#!/bin/sh\ncase "$1" in -p) echo 20 ;; *) echo v20.11.0 ;; esac\n' >"$tmp/old-node/node"
+  chmod +x "$tmp/old-node/node"
+  config="$tmp/config-old-node" bin="$tmp/bin-old-node"
+  got="$(CLAUDE_CONFIG_DIR="$config" KEEL_BIN_DIR="$bin" PATH="$tmp/old-node:$fake:$PATH" "$root/install.sh" 2>&1)"
+  case "$got" in *"SKIPPED   the board: Node v20.11.0 is older than 22"*) ok ;; *) fail "install with Node 20: $got" ;; esac
+  [ ! -e "$bin/keel-board" ] && ok || fail "install with Node 20 linked keel-board"
+
+  # A keel folder that was moved leaves dead links, and a board guard hook that names a
+  # script that is gone. Uninstall from the new place removes them, and nothing else.
+  moved() { # what an install from /gone/keel left behind, in $config and $bin
+    local d gone=/gone/keel
+    mkdir -p "$config/skills" "$config/agents" "$config/rules" "$config/hooks" "$bin"
+    for d in "$root"/skills/*/; do d="${d%/}"; ln -s "$gone/skills/$(basename "$d")" "$config/skills/$(basename "$d")"; done
+    for d in "$root"/agents/*.md; do ln -s "$gone/agents/$(basename "$d")" "$config/agents/$(basename "$d")"; done
+    ln -s "$gone/rules/keel.md" "$config/rules/keel.md"
+    ln -s "$gone/workspace/server/bin/keel-board.mjs" "$bin/keel-board"
+    # The user's own: a dead link to something else, a live link, and a hook.
+    ln -s /gone/elsewhere/notes "$config/skills/my-notes"
+    ln -s "$root/skills/build" "$config/skills/my-build"
+    jq -n --arg dead "node '$gone/workspace/plugin/hooks/guard-board.mjs'" \
+      '{hooks: {PreToolUse: [{matcher: "Write", hooks: [{type: "command", command: "echo mine"}]}, {matcher: "Write|Edit", hooks: [{type: "command", command: $dead, timeout: 10}]}]}}' >"$config/settings.json"
+  }
+  config="$tmp/config-moved" bin="$tmp/bin-moved"
+  moved
+  inst --uninstall >/dev/null 2>&1
+  expect "uninstall after a move leaves no dead keel link" "$(find "$config" "$bin" -type l | sort | sed "s|^$tmp/||" | tr '\n' ' ')" "config-moved/skills/my-build config-moved/skills/my-notes "
+  expect "uninstall after a move removes the dead board guard, and keeps the user's hook" "$(jq -c . "$config/settings.json")" \
+    '{"hooks":{"PreToolUse":[{"matcher":"Write","hooks":[{"type":"command","command":"echo mine"}]}]}}'
+
+  # Install from the new place takes the dead links over, and replaces the dead hook.
+  config="$tmp/config-moved-in" bin="$tmp/bin-moved-in"
+  moved
+  got="$(inst 2>&1)"
+  case "$got" in *SKIPPED*) fail "install after a move skipped something: $got" ;; *) ok ;; esac
+  expect "install after a move relinks a skill" "$(readlink "$config/skills/build")" "$root/skills/build"
+  expect "install after a move relinks the rules" "$(readlink "$config/rules/keel.md")" "$root/rules/keel.md"
+  expect "install after a move leaves no dead keel link" "$(find "$config" "$bin" -type l ! -exec test -e {} \; -print | sed "s|^$tmp/||" | tr '\n' ' ')" "config-moved-in/skills/my-notes "
+  expect "install after a move leaves no hook that names a script that is gone" "$(jq '[.. | .command? | strings | select(contains("/gone/"))] | length' "$config/settings.json")" 0
+  expect "install after a move keeps the user's hook" "$(jq '[.. | .command? | select(. == "echo mine")] | length' "$config/settings.json")" 1
+  if has_node; then
+    expect "install after a move relinks keel-board" "$(readlink "$bin/keel-board")" "$root/workspace/server/bin/keel-board.mjs"
+    expect "install after a move registers one board guard" "$(jq '[.. | .command? | strings | select(contains("guard-board.mjs"))] | length' "$config/settings.json")" 1
+  fi
+  # A board guard whose script is still there belongs to another keel folder: it stays.
+  config="$tmp/config-other" bin="$tmp/bin-other"
+  mkdir -p "$config" "$tmp/other-keel/workspace/plugin/hooks"
+  : >"$tmp/other-keel/workspace/plugin/hooks/guard-board.mjs"
+  jq -n --arg live "node '$tmp/other-keel/workspace/plugin/hooks/guard-board.mjs'" '{hooks: {PreToolUse: [{matcher: "Write", hooks: [{type: "command", command: $live}]}]}}' >"$config/settings.json"
+  inst --uninstall >/dev/null 2>&1
+  expect "uninstall leaves another keel folder's board guard" "$(jq '[.. | .command? | strings | select(contains("other-keel"))] | length' "$config/settings.json")" 1
+
+  # --no-board: no build, no link, no board guard.
+  config="$tmp/config-no-board" bin="$tmp/bin-no-board"
+  : >"$calls"
+  got="$(inst --no-board 2>&1)"
+  expect "install --no-board runs no npm" "$(cat "$calls")" ""
+  [ ! -e "$bin/keel-board" ] && ok || fail "install --no-board linked keel-board"
+  expect "install --no-board registers no board guard" "$(jq '[.. | .command? | strings | select(contains("guard-board"))] | length' "$config/settings.json")" 0
+  case "$got" in *"Done. Start a new Claude Code session"*) ok ;; *) fail "install --no-board counted the board as skipped: $got" ;; esac
+}
+
+board() {
+  local file out
+  has_node || { fail "the board checks need Node 22 or newer and npm"; return; }
+  [ -d workspace/node_modules ] || { fail "workspace/node_modules is missing: run ./install.sh, or npm install in workspace/"; return; }
+
+  check_frontmatter workspace/plugin/skills/board/SKILL.md board "$skill_keys"
+  for file in workspace/plugin/.claude-plugin/plugin.json workspace/plugin/hooks/hooks.json workspace/plugin/.mcp.json; do
+    node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$file" 2>/dev/null && ok || fail "$file is not valid JSON"
+  done
+
+  in_workspace() { # in_workspace <description> <command...>: shows the end of the output when it fails
+    local what="$1"
+    shift
+    if out="$(cd "$root/workspace" && "$@" 2>&1)"; then
+      ok
+    else
+      fail "$what"
+      printf '%s\n' "$out" | tail -n 30 | sed 's/^/      /'
+    fi
+  }
+  in_workspace "workspace typecheck (npm run typecheck)" npm run typecheck
+  in_workspace "workspace unit tests (npm test)" npm test
+  printf 'info  unit tests: %s\n' "$(printf '%s\n' "$out" | grep -E '^ +Tests ' | sed 's/^ *//')"
+  if [ "${KEEL_E2E:-}" = 1 ]; then
+    in_workspace "workspace browser tests (npm run e2e)" npm run e2e
+    printf 'info  browser tests: %s\n' "$(printf '%s\n' "$out" | grep -E '^ +[0-9]+ (passed|failed|skipped)' | sed 's/^ *//' | tr '\n' ' ')"
+  else
+    printf 'info  browser tests not run: set KEEL_E2E=1 to run them\n'
+  fi
 }
 
 case "$what" in
@@ -500,8 +733,12 @@ case "$what" in
   bar) bar ;;
   brief) brief ;;
   install) install_check ;;
-  all) lint; hook; bar; brief; install_check ;;
-  *) echo "usage: scripts/check.sh [lint|hook|bar|brief|install]" >&2; exit 2 ;;
+  board) board ;;
+  all)
+    lint; hook; bar; brief; install_check
+    if has_node; then board; else printf 'skipped board: it needs Node 22 or newer and npm\n'; fi
+    ;;
+  *) echo "usage: scripts/check.sh [lint|hook|bar|brief|install|board]" >&2; exit 2 ;;
 esac
 
 if [ "$fails" -gt 0 ]; then

@@ -1,0 +1,6 @@
+{"by":"system","type":"board.open","name":"Tools","id":"e1","at":"2026-11-17T13:00:00.000Z"}
+{"by":"owner","chapter":"marks","type":"chapter.open","title":"Marking the board","id":"e2","at":"2026-11-17T13:00:05.000Z"}
+{"by":"owner","chapter":"marks","type":"item.add","item":{"id":"m1","kind":"note","box":[0,0,320,110],"text":"One engine that takes many requests at once"},"id":"e3","at":"2026-11-17T13:00:10.000Z"}
+{"by":"owner","chapter":"marks","type":"item.add","item":{"id":"m2","kind":"note","box":[0,380,320,70],"text":"what if it fills up?"},"id":"e4","at":"2026-11-17T13:00:15.000Z"}
+{"by":"agent","chapter":"marks","type":"item.add","item":{"id":"a1","kind":"picture","picture":{"kind":"text","title":"My read, and three questions","body":"One engine thread, a queue in front of it, and text back a bit at a time.","questions":["Is 64 open requests a fair cap?","Shall I draw it in full, so you can follow one request?","One engine thread to start?"]},"answers":["m1"]},"id":"e5","at":"2026-11-17T13:00:20.000Z"}
+{"by":"agent","chapter":"marks","type":"item.add","item":{"id":"a2","kind":"picture","picture":{"kind":"mini","title":"One thread means one line","boxes":[{"text":"http"},{"text":"sched","tone":"blue"},{"text":"http"}],"caption":"Everything on one thread stands in one line."},"answers":["m2"]},"id":"e6","at":"2026-11-17T13:00:25.000Z"}

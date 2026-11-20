@@ -1,0 +1,63 @@
+/* ------------------------------------------------------------------ camera */
+
+/* The minimap: the board small, and a box for what it shows. The items are drawn once in world
+   units under a transform; their strokes keep one width at any scale, so the smallest item
+   still shows. */
+.minimap {
+  right: 24px;
+  bottom: 24px;
+  width: 196px;
+  height: 100px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-float);
+  overflow: hidden;
+  cursor: pointer;
+}
+.mm-items { position: absolute; left: 0; top: 0; overflow: hidden; }
+.mm-item { stroke-width: 1.5px; }
+.mm-item--owner { fill: var(--owner-soft); stroke: var(--owner-soft); }
+.mm-item--owner-line { fill: none; stroke: var(--owner-soft); stroke-width: 2px; }
+.mm-item--agent { fill: var(--agent-line); stroke: var(--agent-line); }
+/* The view box is placed by a transform from the minimap's corner, written as the camera moves. */
+.mm-view { position: absolute; left: 0; top: 0; border: 2px solid var(--agent); border-radius: 4px; pointer-events: none; }
+
+.zoom {
+  right: 24px;
+  bottom: 132px;
+  height: 36px;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-chrome);
+}
+.zoom button {
+  height: 30px;
+  min-width: 30px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.zoom button:hover:not(:disabled) { background: var(--light); }
+.zoom svg { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+/* At a limit, the button that would go past it is grey. */
+.zoom button:disabled { cursor: not-allowed; }
+.zoom button:disabled svg { stroke: var(--grey-2); }
+.zoom__level { min-width: 52px !important; font-size: 12.5px; font-weight: 600; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.zoom__sep { width: 1px; height: 18px; background: var(--line); }
+
+/* The hand on the camera: open while a pan is pressed and has not moved, closed once it moves,
+   over whatever it passes. Nothing else closes it: not the button held down on its own. */
+.app .board[data-grip='armed'] { cursor: grab; }
+.board[data-grip='moving'],
+.board[data-grip='moving'] * { cursor: grabbing !important; }

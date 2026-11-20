@@ -1,0 +1,209 @@
+/* ------------------------------------------------------------------- marks */
+
+.note {
+  width: 100%;
+  min-height: inherit;
+  padding: 12px 16px;
+  background: var(--owner-bg);
+  border: 2px solid var(--owner);
+  border-radius: 6px;
+  box-shadow: var(--shadow-note);
+  font: 600 26px/30px var(--font-hand);
+  color: var(--owner-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.note--label { padding: 0 2px; background: transparent; border: 0; box-shadow: none; font-size: 26px; line-height: 30px; white-space: nowrap; }
+.note--editing { box-shadow: 0 0 0 4px rgba(194, 65, 12, 0.14), var(--shadow-note); }
+.note textarea {
+  display: block;
+  width: 100%;
+  min-height: 30px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.note textarea::placeholder { color: var(--owner); opacity: 0.5; }
+
+.note--voice { display: flex; align-items: flex-start; gap: 8px; font-size: 24px; line-height: 28px; }
+.note--voice svg { flex: none; margin-top: 5px; fill: none; stroke: var(--owner); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+.file-tile {
+  height: 100%;
+  min-height: inherit;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #fff;
+  border: 2px solid var(--owner);
+  border-radius: 8px;
+}
+.file-tile__icon { flex: none; fill: none; stroke: var(--owner); stroke-width: 1.7; stroke-linejoin: round; stroke-linecap: round; }
+.file-tile__text { display: flex; flex-direction: column; font-size: 14px; line-height: 19px; min-width: 0; }
+.file-tile__text b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-tile__text span { font-size: 12.5px; color: var(--text-2); }
+.file-tile__open { margin-left: auto; flex: none; padding: 3px 9px; border: 1.5px solid var(--owner); border-radius: 6px; background: transparent; color: var(--owner-text); font: 600 12.5px/16px var(--font-ui); text-decoration: none; cursor: pointer; }
+.file-tile__open:hover { background: var(--owner-bg); }
+.file-tile__open:focus-visible { outline: 2px solid var(--agent); outline-offset: 2px; }
+
+.drawn-box { width: 100%; min-height: inherit; border: 2.5px solid var(--owner); border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+.drawn-box span { font: 600 24px/28px var(--font-hand); color: var(--owner-text); }
+
+.ink, .line-mark { position: absolute; overflow: visible; pointer-events: none; }
+/* The line itself, and an arrow's head, drawn with the same stroke as its line. */
+.line-mark > path { fill: none; stroke: var(--owner); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.line-mark .line-mark--lasso { stroke-dasharray: 9 7; stroke-width: 2.5; }
+.lasso-outline > .line-mark--lasso { fill: rgba(194, 65, 12, 0.05); }
+.lasso-pill {
+  position: absolute;
+  height: 30px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  background: var(--owner);
+  color: #fff;
+  border-radius: 999px;
+  font: 600 13px/16px var(--font-ui);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* What the hand is drawing now, before it is a mark. */
+.live { position: absolute; left: 0; top: 0; z-index: 6; pointer-events: none; }
+.live-box { position: absolute; border: 2.5px solid var(--owner); border-radius: 6px; background: rgba(194, 65, 12, 0.04); }
+.live-line > path { stroke-width: 3; }
+
+.label-editor { position: absolute; z-index: var(--layer-editor); }
+/*
+ * The field for a label's words is as wide as the words, between a least and a most width set
+ * on the element (LabelEditor), and wraps at the most. The words are drawn twice in one cell:
+ * once unseen, which gives the cell its width, and once in the field, which fills the cell.
+ * The world is one pixel wide, so the width is asked for by name and not left to what fits.
+ */
+.label-editor__fit {
+  display: grid;
+  width: max-content;
+  padding: 2px 8px;
+  border-bottom: 2px dashed var(--owner);
+  background: rgba(255, 240, 224, 0.92);
+  font: 600 24px/30px var(--font-hand);
+  color: var(--owner-text);
+}
+.label-editor__fit::after,
+.label-editor textarea { grid-area: 1 / 1; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A little room after the last word, so the caret fits and the field never wraps a word the unseen copy did not. */
+.label-editor__fit::after { content: attr(data-words); height: 0; padding-right: 6px; overflow: hidden; visibility: hidden; }
+.label-editor textarea {
+  display: block;
+  width: 0;
+  min-width: 100%;
+  min-height: 30px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.label-editor textarea::placeholder { color: var(--owner); opacity: 0.55; }
+
+.drop-hint {
+  position: absolute;
+  inset: 12px;
+  z-index: var(--layer-drop);
+  border: 2.5px dashed var(--owner);
+  border-radius: 16px;
+  background: rgba(255, 240, 224, 0.35);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 96px;
+  pointer-events: none;
+}
+.drop-hint span { padding: 8px 14px; border-radius: 999px; background: var(--owner); color: #fff; font: 600 14px/18px var(--font-ui); }
+/*
+ * An arrow's words are as wide as they are, up to the width their field wraps at (LABEL_MAX_WIDTH),
+ * and wrap there too. Their chip is the ground's own colour, with nothing of the line showing
+ * through: the line is hidden behind the words, and stays the one path it is (`ArrowMark`).
+ */
+.line-mark__text {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: max-content;
+  max-width: 480px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--ground);
+  font: 600 24px/28px var(--font-hand);
+  color: var(--owner-text);
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* The label of the arrow selected takes a press: it slides along the line. Any other lets a press through, as its arrow does. */
+.item--arrow.item--selected .line-mark__text { pointer-events: auto; }
+
+/*
+ * In the overlay, in screen space: the thing an arrow's end would tie to, outlined in the board's
+ * blue just outside it (`TIE_LINE`), and the round handles on the ends of the arrow selected
+ * (`HANDLE_SIZE`). Each is placed by a transform written from code.
+ */
+.tie-outline,
+.end-handle { position: absolute; left: 0; top: 0; }
+.tie-outline { border: 2px solid var(--agent); border-radius: 4px; }
+.end-handle { width: 8px; height: 8px; border-radius: 50%; background: #fff; border: 1px solid var(--agent); }
+
+.pin__icon { fill: #fff; stroke: var(--owner); stroke-width: 1.7; stroke-linejoin: round; transform: translate(-13px, -24px); }
+.pin__text {
+  position: absolute;
+  left: 10px;
+  top: -30px;
+  padding: 4px 10px;
+  background: var(--owner-bg);
+  border: 2px solid var(--owner);
+  border-radius: 6px;
+  font: 600 22px/26px var(--font-hand);
+  color: var(--owner-text);
+  /* The words wrap within a short width, so they do not run across the next card. */
+  width: max-content;
+  max-width: 240px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* A read with no picture: how the agent read a mark, under it. */
+.read-chip {
+  position: absolute;
+  z-index: 4;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 360px;
+  padding: 4px 10px;
+  background: var(--agent-bg);
+  border: 1px solid var(--agent-line);
+  border-radius: 999px;
+  font: 600 13px/18px var(--font-ui);
+  color: var(--ink);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.read-chip svg { flex: none; }
+.read-chip span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.read-chip__as { color: var(--agent); font-weight: 500; }

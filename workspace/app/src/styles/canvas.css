@@ -1,0 +1,55 @@
+/* ------------------------------------------------------------------ canvas */
+
+.app { position: fixed; inset: 0; }
+/*
+ * The board's cursor is set from code, on the board, from one table (`select/cursor.ts`), and
+ * what is on it takes it from there. Only a control inside a picture shows its own, and not
+ * during a press: a drag that passes over a button keeps its hand. The rule names the controls
+ * and not every element, so a stroke's frames do not pay for it.
+ */
+.board { position: absolute; inset: 0; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; cursor: default; }
+.app[data-pressing] .item :is(button, a, .kp-tap) { cursor: inherit; }
+
+.ground {
+  position: absolute;
+  inset: 0;
+  z-index: var(--layer-ground);
+  background-color: var(--ground);
+  background-image: radial-gradient(var(--dot) 1.2px, transparent 1.2px);
+  background-size: 24px 24px;
+}
+.world { position: absolute; z-index: var(--layer-world); left: 0; top: 0; width: 1px; height: 1px; overflow: visible; transform-origin: 0 0; }
+.layer { position: absolute; left: 0; top: 0; }
+/* What keeps its size on screen at any zoom is drawn over the world, in screen space. It never takes a press. */
+.overlay { position: absolute; z-index: var(--layer-overlay); inset: 0; overflow: hidden; pointer-events: none; }
+
+.item { position: absolute; }
+.item--picture { z-index: 1; }
+.item--note, .item--file, .item--box, .item--voice { z-index: 2; }
+.item--ink, .item--arrow { z-index: 3; pointer-events: none; }
+/* A lasso lies under what it holds: its tint shows round them, its dashes outside them. */
+.item--lasso { z-index: 0; pointer-events: none; }
+.item--pin { z-index: 4; }
+/* A box the owner drew is hit on its line only (`lineHit`): a press inside it reaches what it was drawn round. */
+.item--box { pointer-events: none; }
+.item--dragging { z-index: 10; opacity: 0.92; }
+/* What hangs on a thing being dragged, and the arrows tied to it, stay over it while it is lifted,
+   in the order they lie in at rest: a note or a box, then ink and arrows, then pins. A lasso
+   stays under everything. */
+.item--carried:not(.item--lasso) { z-index: 11; }
+.item--carried.item--ink, .item--carried.item--arrow { z-index: 12; }
+.item--carried.item--pin { z-index: 13; }
+.item--dragging .note { box-shadow: 0 8px 18px rgba(154, 52, 18, 0.22); }
+.item--ghost { z-index: 5; opacity: 0.75; pointer-events: none; }
+.item--editor { z-index: var(--layer-editor); }
+.item--pending { z-index: 3; pointer-events: none; }
+.item--flash > * { animation: item-flash 1.3s ease-out; }
+@keyframes item-flash {
+  0%, 60% { box-shadow: 0 0 0 4px rgba(29, 78, 216, 0.45); }
+  100% { box-shadow: 0 0 0 4px rgba(29, 78, 216, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .item--flash > * { animation: none; box-shadow: 0 0 0 4px rgba(29, 78, 216, 0.45); }
+  /* A picture crossed out by the owner dims at once (its fade is in @keel/pictures/styles.css). */
+  .kp { transition: none; }
+}

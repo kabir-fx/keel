@@ -1,0 +1,14 @@
+@media (max-width: 760px) {
+  .view-switch { display: none; }
+  .zoom, .minimap { display: none; }
+  .pill--board, .pill--agent { max-width: calc(50vw - 32px); }
+  .pill { gap: 8px; }
+  .pill__count { display: none; }
+  .toolbar { left: 16px; right: 16px; transform: none; overflow-x: auto; }
+  .crumb { left: 16px; max-width: calc(100vw - 32px); overflow: hidden; }
+  .crumb__note { display: none; }
+  .watch { left: 16px; right: 16px; width: auto; top: 84px; }
+  .story__row { flex-direction: column; }
+  .story__side { width: 100%; margin-top: 0; }
+  .story__inner { padding-left: 16px; padding-right: 16px; }
+}

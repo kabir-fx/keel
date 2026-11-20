@@ -1,0 +1,7 @@
+{
+  "name": "keel-board",
+  "version": "0.1.0",
+  "description": "The keel board: tools to read and draw on the owner's board, the board skill, and a guard that keeps the board's log in the server's hands.",
+  "license": "MIT",
+  "keywords": ["keel", "board", "canvas"]
+}

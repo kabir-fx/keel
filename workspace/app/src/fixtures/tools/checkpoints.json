@@ -1,0 +1,12 @@
+[
+  {
+    "screen": 1,
+    "name": "tools",
+    "title": "Marking the board",
+    "after": "e6",
+    "view": {
+      "mode": "board",
+      "presence": { "state": "listening", "note": "listening", "cursor": { "item": "a1" } }
+    }
+  }
+]

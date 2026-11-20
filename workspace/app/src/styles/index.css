@@ -1,0 +1,19 @@
+/*
+ * The board's styles, by area. The order is the cascade: a later file wins over an earlier one
+ * at the same weight, so keep it. Colours come from the tokens in @keel/pictures/styles.css.
+ */
+@import './layers.css';
+@import './base.css';
+@import './canvas.css';
+@import './select.css';
+@import './focus.css';
+@import './marks.css';
+@import './trails.css';
+@import './agent.css';
+@import './arrival.css';
+@import './chrome.css';
+@import './camera.css';
+@import './tags.css';
+@import './watch.css';
+@import './story.css';
+@import './narrow.css';
