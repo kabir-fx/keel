@@ -1,0 +1,154 @@
+[
+  {
+    "screen": 1,
+    "name": "main",
+    "title": "A blank canvas. You write what you want and sketch it",
+    "view": {
+      "mode": "board",
+      "show": [
+        "n-first",
+        "drop-roadmap",
+        "sketch",
+        "label-clients",
+        "label-engine",
+        "label-model",
+        "label-waits",
+        "label-text-back"
+      ],
+      "presence": {
+        "state": "listening",
+        "note": "I can see many clients, a middle and a model. Keep going. I will draw when you pause.",
+        "cursor": {
+          "at": [
+            1262,
+            600
+          ]
+        }
+      }
+    },
+    "after": "e11"
+  },
+  {
+    "screen": 2,
+    "name": "pictures",
+    "title": "The agent answers in pictures. You draw on them and it thinks along",
+    "view": {
+      "mode": "board",
+      "show": [
+        "n-first",
+        "sketch",
+        "read",
+        "shelf",
+        "spread",
+        "reply-fake",
+        "reply-line",
+        "my-read",
+        "note-draw"
+      ],
+      "presence": {
+        "state": "drawing",
+        "note": "drawing A in full"
+      }
+    },
+    "after": "e31"
+  },
+  {
+    "screen": 3,
+    "name": "model",
+    "title": "Your pick becomes a model of the pipeline. You follow one request through it",
+    "view": {
+      "mode": "board",
+      "show": [
+        "pipe",
+        "walk",
+        "reply-sleeps",
+        "hint"
+      ],
+      "walk": {
+        "id": "req-42",
+        "step": 8
+      },
+      "pipeline": "layers",
+      "presence": {
+        "state": "listening"
+      }
+    },
+    "after": "e41"
+  },
+  {
+    "screen": 4,
+    "name": "focus",
+    "title": "You tap one part. The board opens it up",
+    "view": {
+      "mode": "board",
+      "show": [
+        "focus",
+        "read-marks"
+      ],
+      "focus": "focus",
+      "pipeline": "layers",
+      "presence": {
+        "state": "listening"
+      }
+    },
+    "after": "e48"
+  },
+  {
+    "screen": 5,
+    "name": "solidify",
+    "title": "You lasso your picks and solidify. The agent reads the idea back",
+    "view": {
+      "mode": "board",
+      "show": [
+        "blueprint",
+        "note-yes"
+      ],
+      "pipeline": "layers",
+      "presence": {
+        "state": "waiting",
+        "note": "waiting for your go"
+      }
+    },
+    "after": "e53"
+  },
+  {
+    "screen": 6,
+    "name": "watch",
+    "title": "The agent builds in the background. The same picture fills in",
+    "view": {
+      "mode": "board",
+      "show": [
+        "pipe-build",
+        "choice",
+        "reply-one"
+      ],
+      "pipeline": "layers",
+      "presence": {
+        "state": "building",
+        "note": "building part 3 of 7",
+        "cursor": {
+          "item": "pipe-build"
+        }
+      }
+    },
+    "after": "e69"
+  },
+  {
+    "screen": 7,
+    "name": "story",
+    "title": "Zoom out. The board is the story, and the next idea starts on it",
+    "view": {
+      "mode": "story",
+      "show": [
+        "note-api",
+        "drawing"
+      ],
+      "pipeline": "layers",
+      "presence": {
+        "state": "drawing",
+        "note": "drawing 2 pictures"
+      }
+    },
+    "after": "e88"
+  }
+]

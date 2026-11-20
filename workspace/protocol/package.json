@@ -1,0 +1,19 @@
+{
+  "name": "@keel/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The board contract: events, items, the model, picture specs, the reducer, the rules, the digest.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./fixtures/*": "./fixtures/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  }
+}
