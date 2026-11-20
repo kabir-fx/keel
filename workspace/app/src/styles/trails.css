@@ -1,0 +1,43 @@
+/* ------------------------------------------------------------ trails, the eraser, the live lasso */
+
+/* The trails the hand leaves, in the overlay over the board: one SVG the size of the board. */
+.trails { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+
+/* The eraser's trail: a soft grey smudge under the pointer, fading behind it. */
+.trail--eraser { fill: var(--grey); fill-opacity: 0.4; }
+
+/*
+ * The lasso's trail: marching dashes in the owner's orange round a faint fill of what the loop
+ * closes. Dashes of 7 and 7, one march in 0.3 s: Excalidraw's (animatedTrail.ts). With "reduce
+ * motion" the dashes stand still.
+ */
+.trail--lasso {
+  fill: rgba(194, 65, 12, 0.05);
+  stroke: var(--owner);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 7 7;
+  animation: trail-march 0.3s linear infinite;
+}
+@keyframes trail-march {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -14; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .trail--lasso { animation: none; }
+}
+
+/* What the eraser has reached fades, and stays on the board until the pointer lifts. Excalidraw's 20% (ELEMENT_READY_TO_ERASE_OPACITY). */
+.item[data-erasing] { opacity: 0.2; }
+
+/* What the loop being drawn holds lights up in the owner's orange, as a selection does in blue (styles/canvas.css). */
+.item[data-lassoed] > .note,
+.item[data-lassoed] > .file-tile,
+.item[data-lassoed] > .drawn-box { outline: 2px solid var(--owner-soft); outline-offset: 5px; }
+.item--picture[data-lassoed] > * { outline: 2px solid var(--owner-soft); outline-offset: 6px; }
+/* Each is matched on the element it lights, by its class, so the board's many paths are never asked. */
+.item[data-lassoed] > .ink,
+.item--arrow[data-lassoed] > .line-mark { filter: drop-shadow(0 0 1.5px var(--owner-soft)) drop-shadow(0 0 1.5px var(--owner-soft)); }
+.item[data-lassoed] > .pin__icon { stroke-width: 2.6; }
+[data-sub][data-lassoed] { outline: 2px solid var(--owner-soft); outline-offset: 3px; }

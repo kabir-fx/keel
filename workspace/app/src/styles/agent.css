@@ -1,0 +1,40 @@
+/* ----------------------------------------------------------------- lineage */
+
+.lineage { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; z-index: 0; }
+.lineage path { fill: none; stroke: var(--agent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: 0.75; }
+
+/* ------------------------------------------------------------ agent cursor */
+
+/* In the overlay, at one size at any zoom. Its place is a transform the page writes as the camera
+   and the agent move (overlay/cursor.tsx), so it has no transition of its own. */
+.agent-cursor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  pointer-events: none;
+}
+/* A white halo under the arrow and round the tag, so the cursor reads on any picture. */
+.agent-cursor__arrow { flex: none; overflow: visible; }
+.agent-cursor__halo { fill: #fff; stroke: #fff; stroke-width: 4; stroke-linejoin: round; }
+.agent-cursor__body { fill: var(--agent); stroke: #fff; stroke-width: 1.4; stroke-linejoin: round; }
+.agent-cursor__tag { margin-top: 16px; padding: 2px 8px; border-radius: 999px; background: var(--agent); color: #fff; font: 600 12px/16px var(--font-ui); box-shadow: 0 0 0 2px #fff; }
+/* Faint, as Excalidraw draws a collaborator (clients.ts): while the agent is away, and while its
+   place is off screen, where the cursor waits at the board's edge with its words put away. */
+.agent-cursor[data-away], .agent-cursor[data-off] { opacity: 0.3; }
+.agent-cursor[data-off] .agent-cursor__tag, .agent-cursor[data-off] .agent-cursor__said { display: none; }
+.agent-cursor__said {
+  position: absolute;
+  left: 34px;
+  top: 44px;
+  width: 300px;
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--agent-bg);
+  border: 1px solid var(--agent-line);
+  border-radius: 10px;
+  font: 400 14px/21px var(--font-ui);
+  color: var(--ink);
+}

@@ -1,0 +1,316 @@
+/* ------------------------------------------------------------------ chrome */
+
+.chrome { position: fixed; z-index: var(--layer-panels); }
+
+/* While a press is open on the board the chrome does not hear the pointer: a stroke that passes
+   under a panel lights nothing up, changes no cursor, and can end there. */
+.app[data-pressing] .chrome,
+.app[data-pressing] .chrome *,
+.app[data-pressing] .notices * { pointer-events: none; }
+
+.pill {
+  top: 20px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 20px;
+}
+.pill--board {
+  left: 24px;
+  max-width: calc(50vw - 140px);
+  padding: 0 16px 0 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-chrome);
+}
+.pill--board svg { flex: none; }
+.pill__name { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 15px/20px var(--font-ui); }
+.pill__chapter { font-weight: 600; }
+.sep { flex: none; width: 1px; height: 20px; background: var(--line); }
+.pill__count { flex: none; color: var(--text-2); white-space: nowrap; }
+.pill__open { flex: none; color: var(--text-2); white-space: nowrap; }
+.pill__open--some { color: var(--owner-text); font-weight: 600; }
+
+.pill--agent {
+  right: 24px;
+  max-width: calc(50vw - 140px);
+  padding: 0 14px;
+  gap: 8px;
+  background: var(--agent-bg);
+  border: 1px solid var(--agent-line);
+}
+.pill--agent { height: auto; min-height: 52px; padding-top: 6px; padding-bottom: 6px; }
+/* Said to a screen reader only: drawn nowhere, and takes no room. */
+.for-reader { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.pill__said { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+.pill--agent svg { flex: none; }
+.pill--away { background: #fff; border-color: var(--grey-2); color: var(--ink); }
+.pill--away svg path { fill: var(--grey); }
+
+.presence-sign { flex: none; display: flex; align-items: center; gap: 3px; margin-left: 2px; }
+.presence-sign i { width: 5px; height: 5px; border-radius: 999px; background: var(--agent); }
+.presence-sign--listening i:nth-child(2) { opacity: 0.6; }
+.presence-sign--listening i:nth-child(3) { opacity: 0.3; }
+.presence-sign--drawing i { animation: presence-dot 1.2s ease-in-out infinite; }
+.presence-sign--drawing i:nth-child(2) { animation-delay: 0.15s; }
+.presence-sign--drawing i:nth-child(3) { animation-delay: 0.3s; }
+.presence-sign--waiting i { background: transparent; border: 1.5px solid var(--agent); }
+.presence-sign--building i { border-radius: 1px; animation: presence-fill 1.8s steps(1) infinite; }
+.presence-sign--building i:nth-child(2) { animation-delay: 0.6s; }
+.presence-sign--building i:nth-child(3) { animation-delay: 1.2s; }
+@keyframes presence-dot {
+  0%, 100% { transform: translateY(0); opacity: 1; }
+  50% { transform: translateY(-3px); opacity: 0.5; }
+}
+@keyframes presence-fill {
+  0% { opacity: 1; }
+  33% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .presence-sign i { animation: none !important; }
+}
+
+.view-switch {
+  top: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  height: 40px;
+  padding: 3px;
+  display: flex;
+  gap: 2px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-chrome);
+}
+.view-switch button {
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.view-switch .view-switch__on { background: var(--ink); color: #fff; cursor: default; }
+.view-switch button:disabled { color: var(--grey); cursor: not-allowed; }
+.view-switch button:not(.view-switch__on):hover { background: var(--light); }
+
+.toolbar {
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  height: 64px;
+  padding: 4px 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-float);
+}
+.toolbar__sep { flex: none; width: 1px; height: 28px; background: var(--line); }
+.tool {
+  flex: none;
+  min-width: 50px;
+  height: 56px;
+  padding: 6px 4px 4px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+.tool svg { flex: none; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.tool--work svg { stroke: var(--ink); }
+.tool--owner svg { stroke: var(--owner); }
+.tool__word { font: 600 11px/13px var(--font-ui); color: var(--ink); white-space: nowrap; }
+.tool:hover:not(:disabled) { background: var(--light-2); }
+/* The tool in hand: filled, as in the mockups. */
+.tool--on, .tool--on:hover:not(:disabled) { background: var(--ink); }
+.tool--on svg { stroke: #fff; }
+.tool--on .tool__word { color: #fff; }
+.tool--owner.tool--on, .tool--owner.tool--on:hover:not(:disabled) { background: var(--owner); }
+.tool:focus-visible, .view-switch button:focus-visible, .zoom button:focus-visible, .solidify:focus-visible, .notice--nudge:focus-visible { outline: 2px solid var(--agent); outline-offset: 2px; }
+/* A tool that cannot work here: grey, and it says why on a press. */
+.tool--off { cursor: help; }
+.tool--off svg { stroke: var(--grey-2); }
+.tool--off .tool__word { color: var(--grey); text-decoration: line-through; text-decoration-color: var(--grey-2); }
+
+/* Solidify: the one gate, a real button. Waiting for a lasso, it says so. */
+.solidify {
+  flex: none;
+  height: 48px;
+  margin-left: 2px;
+  padding: 0 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  border: 1.5px solid var(--grey-2);
+  border-radius: 9px;
+  background: var(--light);
+  color: var(--grey);
+  font: 600 14px/18px var(--font-ui);
+  cursor: not-allowed;
+}
+.solidify__hint { font: 500 11px/13px var(--font-ui); color: var(--grey); }
+.solidify--ready {
+  flex-direction: row;
+  gap: 8px;
+  padding: 0 16px;
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(15, 27, 45, 0.25);
+  cursor: pointer;
+}
+.solidify--ready:hover { background: var(--fill); }
+.solidify__n { min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: #fff; color: var(--ink); font: 700 12px/22px var(--font-ui); text-align: center; }
+.tool--listening { animation: listening 1.2s ease-in-out infinite; }
+@keyframes listening {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(194, 65, 12, 0.35); }
+  50% { box-shadow: 0 0 0 5px rgba(194, 65, 12, 0.12); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool--listening { animation: none; }
+}
+
+.talk-caption {
+  left: 50%;
+  bottom: 104px;
+  transform: translateX(-50%);
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--owner-bg);
+  border: 2px solid var(--owner);
+  border-radius: 10px;
+  box-shadow: var(--shadow-float);
+  font: 600 22px/28px var(--font-hand);
+  color: var(--owner-text);
+}
+.talk-caption__dot { flex: none; width: 10px; height: 10px; border-radius: 999px; background: var(--owner); }
+
+.toast {
+  z-index: var(--layer-toast);
+  left: 50%;
+  bottom: 104px;
+  transform: translateX(-50%);
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 10px 10px 10px 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--ink);
+  color: #fff;
+  border-radius: 10px;
+  box-shadow: var(--shadow-float);
+  font-size: 13.5px;
+  line-height: 19px;
+}
+.toast button { flex: none; width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.toast button:hover { background: rgba(255, 255, 255, 0.12); }
+.toast svg { stroke: #fff; stroke-width: 1.6; stroke-linecap: round; }
+
+/* The hint line: the next step, in one quiet line just above the toolbar (24 + 64 px up, and 8
+   between). Neither it nor its empty width takes a press. It hides while a press is open on the
+   board, and while something else speaks there: a toast, Talk's caption, the "drop here" sheet,
+   a tooltip that lands on it (Tooltip.tsx), the note or the label the owner types in where it
+   reaches the line (HintLine.tsx). */
+.hint-line {
+  position: fixed;
+  z-index: var(--layer-hint);
+  left: 16px;
+  right: 16px;
+  bottom: 96px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.hint {
+  margin: 0;
+  text-align: center;
+  text-wrap: balance;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-2);
+  /* The ground's own colour round each letter, so the line reads over a picture without a box. */
+  text-shadow: 0 0 3px var(--ground), 0 0 3px var(--ground);
+}
+.app[data-pressing] .hint-line,
+.app:has(.toast, .talk-caption, .drop-hint, .tooltip[data-on-hint]) .hint-line,
+.hint-line[data-under-field] { visibility: hidden; }
+
+/* A control's tooltip, in place of the browser's own (Tooltip.tsx places it). It never takes a press. */
+.tooltip {
+  position: fixed;
+  z-index: var(--layer-tooltip);
+  left: 0;
+  top: 0;
+  max-width: 280px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: #fff;
+  font: 500 12px/16px var(--font-ui);
+  pointer-events: none;
+}
+
+/* What the board says at the top: the server, and what the agent drew out of view. The column
+   itself takes no press, so the board is reached beside a notice narrower than the widest. */
+.notices {
+  position: fixed;
+  z-index: var(--layer-notices);
+  left: 50%;
+  top: 80px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+.notice {
+  max-width: min(680px, calc(100vw - 32px));
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: var(--shadow-chrome);
+  font-size: 13.5px;
+  line-height: 19px;
+  color: var(--text-2);
+  pointer-events: auto;
+}
+.notice--problem { border-color: var(--owner); background: var(--owner-bg); color: var(--owner-text); }
+.notice__cmd { padding: 1px 6px; border-radius: 5px; background: #fff; border: 1px solid var(--owner-soft); font: 600 12.5px/18px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+.notice--nudge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-color: var(--agent-line);
+  background: var(--agent-bg);
+  color: var(--ink);
+  font: 400 13.5px/19px var(--font-ui);
+  cursor: pointer;
+}
+.notice--nudge b { font-weight: 600; }
+.notice__go { margin-left: 4px; color: var(--agent); font-weight: 600; white-space: nowrap; }
+.notice--nudge:hover .notice__go { text-decoration: underline; }
+
+.problem { max-width: 520px; margin: 18vh auto 0; padding: 0 16px; font-size: 15px; line-height: 22px; }
+.problem h1 { font: 600 22px/28px var(--font-head); }

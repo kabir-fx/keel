@@ -1,0 +1,61 @@
+/* ------------------------------------------------------------ the focus view */
+
+/* The board dims under one opened part. What hangs on it stays above the dim. */
+.focus-dim {
+  position: absolute;
+  left: -200000px;
+  top: -200000px;
+  width: 400000px;
+  height: 400000px;
+  z-index: 7;
+  background: rgba(226, 231, 239, 0.9);
+}
+.app[data-focus] .item--raised { z-index: 9; }
+.app[data-focus] .item--raised.item--picture { z-index: 8; }
+.app[data-focus] .item--raised.item--lasso { z-index: 8; }
+.app[data-focus] .item--raised.item--ink,
+.app[data-focus] .item--raised.item--arrow,
+.app[data-focus] .item--pending { z-index: 10; }
+.app[data-focus] .item--raised.item--pin { z-index: 11; }
+.app[data-focus] .live,
+.app[data-focus] .item--ghost { z-index: 12; }
+.app[data-focus] .read-chip--raised { z-index: 13; }
+/* A thing dragged here is lifted over all that is raised, and what it carries over it, in the
+   order of styles/canvas.css. The rules above would win over that file's by their weight, and
+   leave a dragged note under the ink beside it. */
+.app[data-focus] .item--raised.item--dragging { z-index: 14; }
+.app[data-focus] .item--raised.item--carried:not(.item--lasso) { z-index: 15; }
+.app[data-focus] .item--raised.item--carried.item--ink,
+.app[data-focus] .item--raised.item--carried.item--arrow { z-index: 16; }
+.app[data-focus] .item--raised.item--carried.item--pin { z-index: 17; }
+
+.crumb {
+  left: 24px;
+  top: 88px;
+  height: 40px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-chrome);
+  font-size: 14px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.crumb__back { display: flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: var(--agent); font-weight: 600; cursor: pointer; }
+.crumb__back svg { fill: none; stroke: var(--agent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.crumb__back:hover { color: var(--ink); }
+.crumb__back:focus-visible, .crumb__stop:focus-visible { outline: 2px solid var(--agent); outline-offset: 2px; border-radius: 4px; }
+.crumb__sep { color: var(--text-2); }
+.crumb__note { color: var(--text-2); font-size: 13px; }
+.crumb--opening { background: var(--agent-bg); border-color: var(--agent-line); gap: 8px; }
+.crumb__stop { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
+.crumb__stop svg { stroke: var(--text-2); stroke-width: 1.6; stroke-linecap: round; }
+.crumb__stop:hover { background: rgba(29, 78, 216, 0.1); }
+
+/* What waits to be placed is drawn out of sight, so it can be measured. */
+.measure { position: absolute; left: 0; top: 0; visibility: hidden; pointer-events: none; }
+.measure > div { position: absolute; left: 0; top: 0; }
