@@ -1,11 +1,11 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ROUTES } from '@keel/protocol';
-import type { Io, RunResult } from '../src/cli';
-import { defaultLink, run } from '../src/cli';
+import type { Io, RunDeps, RunResult } from '../src/cli';
+import { NO_CLAUDE, defaultLink, findOnPath, run } from '../src/cli';
 import type { RunningServer } from '../src/server';
 import { call, chapter, note, tempRepo, until, own } from './helpers';
 
@@ -15,10 +15,14 @@ afterEach(async () => {
 });
 
 async function cli(...argv: string[]): Promise<RunResult & { out: string[]; err: string[] }> {
+  return cliWith({}, ...argv);
+}
+
+async function cliWith(deps: RunDeps, ...argv: string[]): Promise<RunResult & { out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = { out: (l) => out.push(l), err: (l) => err.push(l), stdin: async () => '' };
-  const r = await run(argv, io);
+  const r = await run(argv, io, deps);
   if (r.server) servers.push(r.server);
   return { ...r, out, err };
 }
@@ -132,4 +136,117 @@ describe('keel-board', () => {
     expect(await exited).toBe(0);
     expect(fs.existsSync(file)).toBe(false);
   }, 30_000);
+});
+
+describe('keel-board with no command word', () => {
+  it('opens the board, the same as "open"', async () => {
+    const repo = tempRepo();
+    const r = await cli('--no-browser', '--port', '0', '--dir', repo, '--app-dir', path.join(repo, 'no-app'));
+    expect(r.code).toBe(0);
+    expect(r.server).toBeDefined();
+    expect(r.out).toEqual([r.server!.url]);
+    expect(fs.existsSync(path.join(repo, '.keel/board'))).toBe(true);
+  });
+
+  it('prints the usage for --help and help, and fails on a word it does not know', async () => {
+    for (const argv of [['--help'], ['-h'], ['help']]) {
+      const r = await cli(...argv);
+      expect(r.code).toBe(0);
+      expect(r.server).toBeUndefined();
+      expect(r.out.join('\n')).toMatch(/^keel-board: the board server for one repository\.\nWith no command, keel-board opens a board for the folder you are in/);
+    }
+    const unknown = await cli('nonsense', '--no-browser');
+    expect(unknown.code).toBe(2);
+    expect(unknown.err.join('\n')).toMatch(/Unknown command "nonsense"/);
+  });
+});
+
+describe('the folders a board is not opened in', () => {
+  const HOME_SAYS = 'keel-board: this is your home folder. The agent can read every file in the folder a board is opened in, so open the board in a folder for the idea: mkdir my-idea && cd my-idea && keel-board';
+
+  it('refuses the home folder, also through a link and with no command word, and writes nothing there', async () => {
+    const home = tempRepo('home');
+    const alias = path.join(path.dirname(tempRepo()), 'alias');
+    fs.symlinkSync(home, alias);
+    for (const argv of [['open', home], ['open', alias], ['--dir', home]]) {
+      const r = await cliWith({ home }, ...argv, '--no-browser', '--port', '0');
+      expect(r.code).toBe(2);
+      expect(r.server).toBeUndefined();
+      expect(r.err).toEqual([HOME_SAYS]);
+    }
+    // A home given through a link is the same folder.
+    expect((await cliWith({ home: alias }, 'open', home, '--no-browser', '--port', '0')).code).toBe(2);
+    expect(fs.existsSync(path.join(home, '.keel'))).toBe(false);
+
+    // A folder inside the home is fine.
+    const inside = path.join(home, 'my-idea');
+    fs.mkdirSync(inside);
+    const ok = await cliWith({ home }, 'open', inside, '--no-browser', '--port', '0', '--app-dir', path.join(inside, 'no-app'));
+    expect(ok.code).toBe(0);
+  });
+
+  it('refuses the root of the file system', async () => {
+    const r = await cli('open', path.parse(process.cwd()).root, '--no-browser', '--port', '0');
+    expect(r.code).toBe(2);
+    expect(r.err).toEqual([HOME_SAYS.replace('your home folder', 'the root of the file system')]);
+  });
+});
+
+describe('looking for Claude Code', () => {
+  const hosted = fileURLToPath(new URL('../../plugin/dist/hosted-link.js', import.meta.url));
+
+  it('finds an executable file by its name on a PATH, without starting it', () => {
+    const root = path.dirname(tempRepo());
+    const [none, plainFile, folder, real] = ['none', 'plain', 'folder', 'real'].map((d) => {
+      fs.mkdirSync(path.join(root, d));
+      return path.join(root, d);
+    });
+    fs.writeFileSync(path.join(plainFile!, 'claude'), 'not executable', { mode: 0o644 });
+    fs.mkdirSync(path.join(folder!, 'claude'));
+    fs.writeFileSync(path.join(real!, 'claude'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+
+    expect(findOnPath('claude', undefined)).toBeUndefined();
+    expect(findOnPath('claude', '')).toBeUndefined();
+    expect(findOnPath('claude', [none, plainFile, folder].join(path.delimiter))).toBeUndefined();
+    expect(findOnPath('claude', ['', none, plainFile, folder, real].join(path.delimiter))).toBe(path.join(real!, 'claude'));
+  });
+
+  // Only the hosted agent needs Claude Code. An empty board wakes no one, so nothing is started here.
+  it.skipIf(!fs.existsSync(hosted))('warns before the address when the hosted agent cannot find it, and still opens', async () => {
+    const empty = path.dirname(tempRepo());
+    const repo = tempRepo();
+    const base = ['--no-browser', '--port', '0', '--app-dir', path.join(repo, 'no-app'), '--builder', 'none'];
+    const warned = await cliWith({ searchPath: empty }, 'open', repo, '--link', hosted, ...base);
+    expect(warned.code).toBe(0);
+    expect(warned.err[0]).toBe(NO_CLAUDE);
+    expect(warned.err.filter((l) => l === NO_CLAUDE)).toHaveLength(1);
+    expect(warned.out).toEqual([warned.server!.url]);
+    await warned.server!.close();
+    servers.splice(servers.indexOf(warned.server!), 1);
+
+    // No warning with bin=, or with another link.
+    const named = await cliWith({ searchPath: empty }, 'open', tempRepo(), '--link', hosted, '--link-opt', 'bin=/usr/bin/false', ...base);
+    expect(named.code).toBe(0);
+    expect(named.err).not.toContain(NO_CLAUDE);
+    const other = await cliWith({ searchPath: empty }, 'open', tempRepo(), '--link', 'none', ...base);
+    expect(other.code).toBe(0);
+    expect(other.err).not.toContain(NO_CLAUDE);
+  });
+
+  it('says so in plain words', () => {
+    expect(NO_CLAUDE).toBe(
+      'keel-board: Claude Code was not found on your PATH. The board opens, but the agent will not answer until Claude Code is installed and signed in. Get it from https://claude.com/claude-code',
+    );
+  });
+});
+
+describe('the launcher', () => {
+  it('stops on a Node older than 22, before it loads anything', () => {
+    const bin = fileURLToPath(new URL('../bin/keel-board.mjs', import.meta.url));
+    const fake = 'data:text/javascript,Object.defineProperty(process,"versions",{value:{...process.versions,node:"18.19.0"}})';
+    const r = spawnSync(process.execPath, ['--import', fake, bin, '--help'], { encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toBe('keel-board needs Node 22 or newer. This is Node 18.19.0. Get it from https://nodejs.org.\n');
+    expect(r.stdout).toBe('');
+  });
 });

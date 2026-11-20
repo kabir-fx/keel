@@ -9,10 +9,11 @@ import { STATE_DIR_ENV, oneLine, remarksOnPart, renderBrief } from '@keel/protoc
 import { stopLeftoverChecks } from './build-tools';
 import { BoardClient, BoardError } from './client';
 import { readStarts, recordStart } from './starts';
-import { BUILDER_IDENTITY, GitError, ensureWorktree, gitOk, hasIdentity, headOf, pinEnv, removeWorktree, repoTop, samePath } from './git';
+import { BUILDER_IDENTITY, GitError, OwnerFilesError, ensureWorktree, folderFiles, git, gitInstalled, gitOk, hasIdentity, headOf, pinEnv, removeWorktree, repoTop, samePath } from './git';
 import { DENIED_FILES, childEnv, realDir, ruleRoot, stateDirOf, stripFrontmatter } from './hosted-link';
-import { RecordPathError, renderDecision, replaceFile, writeRecords } from './records';
+import { RecordPathError, renderDecision, replaceFile, safeDir, writeRecords } from './records';
 import { NO_SANDBOX_NOTE, defaultDenyRead, sandboxKind } from './sandbox';
+import { makeShow } from './show';
 
 /**
  * The hosted builder: the second seam (`Builder` in the contract). When the owner presses
@@ -212,10 +213,39 @@ export function grammarSection(grammar: string, kind: string): string {
   return (next < 0 ? rest : rest.slice(0, next + 3)).trim();
 }
 
-/** Where a chapter's build lives: its worktree, and the builder's private files beside it. */
-export function buildPlaces(stateDir: string, chapter: string): { base: string; tree: string; own: string } {
+/** Where a chapter's build lives: its worktree, the builder's private files beside it, and the copy a finished build shows. */
+export function buildPlaces(stateDir: string, chapter: string): { base: string; tree: string; own: string; show: string } {
   const base = path.join(stateDir, 'build', chapter);
-  return { base, tree: path.join(base, 'tree'), own: path.join(base, 'own') };
+  return { base, tree: path.join(base, 'tree'), own: path.join(base, 'own'), show: path.join(base, 'show') };
+}
+
+/** The board server clips a run's note at this length, and adds how to try again itself. */
+const NOTE_MAX = 200;
+
+/**
+ * Why a build cannot start from nothing: the folder holds files of the owner's that no commit
+ * has. It names a few of them and how many more (`undefined`: more than were counted), and
+ * fits in `NOTE_MAX`, dropping names before it clips one.
+ */
+export function filesNote(kind: 'repo' | 'folder', names: readonly string[], more: number | undefined): string {
+  const [lead, tail] =
+    kind === 'repo'
+      ? ['No commit yet: the builder\'s copy is made from commits, so it would lack your files (', '). Commit them first; the builder does not commit them for you.']
+      : ['No git repository yet: the builder\'s copy is made from commits, so it would lack your files (', '). Run "git init" and commit them; the builder does not commit for you.'];
+  const list = (shown: string[], rest: number | undefined) => {
+    const others = rest === undefined ? 'more' : rest > 0 ? `${rest} more` : '';
+    if (!others) return shown.length > 1 ? `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}` : shown.join('');
+    return `${shown.join(', ')} and ${others}`;
+  };
+  const room = NOTE_MAX - lead.length - tail.length;
+  let shown = names.map((n) => clip(n, 40));
+  let rest = more;
+  while (shown.length > 1 && list(shown, rest).length > room) {
+    shown = shown.slice(0, -1);
+    rest = rest === undefined ? undefined : rest + 1;
+  }
+  const text = list(shown, rest);
+  return `${lead}${text.length > room ? clip(text, room) : text}${tail}`;
 }
 
 /* ------------------------------------------------------------- the process */
@@ -462,21 +492,38 @@ export class HostedBuilder implements Builder {
     if (this.opts.off) return { outcome: 'failed', note: 'The builder is off (builder=none), so nothing is built.' };
     if (!job.check) return this.fail(ch, 'The blueprint gave no check, so no part can be shown to work. Solidify again with a check.');
 
-    const top = await repoTop(this.ctx.repoDir);
+    if (!(await gitInstalled())) return this.fail(ch, 'Git is not installed here, and the builder works in a git copy of the folder. Install git.');
+    let top = await repoTop(this.ctx.repoDir);
+    let madeRepo = false;
     if (!top) {
-      return this.fail(ch, `${this.ctx.repoDir} is not a git repository, so the builder has no copy of it to work in. Run "git init" and make a first commit.`);
+      const made = await this.makeRepo(ch);
+      if (typeof made !== 'string') return made;
+      top = made;
+      madeRepo = true;
     }
     const sub = path.relative(realDir(top), realDir(this.ctx.repoDir));
     const branch = `board/${ch}`;
     const places = buildPlaces(stateDirOf(this.ctx), ch);
     fs.mkdirSync(places.own, { recursive: true, mode: 0o700 });
     let gitDir: string;
+    let fromNothing = false;
     try {
-      ({ gitDir } = await ensureWorktree(top, places.tree, branch));
+      ({ gitDir, fromNothing = false } = await ensureWorktree(top, places.tree, branch, { board: sub }));
     } catch (e) {
+      if (e instanceof OwnerFilesError) return this.fail(ch, filesNote('repo', e.files.slice(0, 3), e.files.length - Math.min(3, e.files.length)));
       return this.fail(ch, `The builder could not make its own copy on ${branch}: ${e instanceof GitError ? e.message : String(e)}`);
     }
-    const workdir = sub ? path.join(places.tree, sub) : places.tree;
+    // The board's folder may be one the commit does not hold, a new folder in the repository:
+    // it is made in the worktree, and never through a link or outside it.
+    let workdir = places.tree;
+    if (sub) {
+      try {
+        workdir = safeDir(places.tree, sub);
+      } catch (e) {
+        if (e instanceof RecordPathError) return this.fail(ch, `The board's folder, ${oneLine(sub, 80)}, would leave the builder's copy or pass through a link in it, so nothing is built.`);
+        throw e;
+      }
+    }
     if (samePath(workdir, this.ctx.repoDir)) return this.fail(ch, 'The builder\'s copy is the owner\'s own folder. It never builds there.');
     // Every git in the worktree, ours and the builder's own, is told where its git folder is:
     // it never reads a `.git` the code under test could have written. And no hook runs.
@@ -515,6 +562,14 @@ export class HostedBuilder implements Builder {
     const ids = job.track.map((t) => t.id);
     const todo = ids.filter((id) => state.model.parts[id]?.state !== 'built');
     const builtBefore = c.track.length - c.track.filter((id) => state.model.parts[id]?.state !== 'built').length;
+    if (fromNothing) {
+      await this.feed(
+        ch,
+        madeRepo
+          ? `This folder was no git repository, so the builder made it one with "git init". It had no commit to build on either, so the branch ${branch} starts from nothing: an empty first commit, then the build.`
+          : `This folder has no commit yet, so the branch ${branch} starts from nothing: an empty first commit, then the build. Your own branch stays as it is.`,
+      );
+    }
     if (rec.written) {
       await this.feed(ch, `The builder started on its own branch, ${branch}, with ${plural(todo.length, 'part')} to build, one commit each. It committed the brief (${rec.brief}) and the decision record (${rec.decision}) first.`);
     } else {
@@ -590,9 +645,41 @@ export class HostedBuilder implements Builder {
     }
     // The result: the brief again, from the board as it is now, as the branch's last commit.
     const result = await this.commitResult(workdir, rec.brief, state, ch, `${oneLine(done.title, 72)}: the brief, with the result`, identity);
+    // What the owner can look at, copied out before the worktree goes. It never fails the build.
+    const show = await makeShow({ workdir, env: pin, dest: places.show, log: (m) => this.ctx.log(`builder: ${ch}: ${m}`) }).catch((e: unknown) => {
+      this.ctx.log(`builder: ${ch}: no show: ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
+    });
     await this.feed(ch, `Every part is built, on the branch ${branch}${result ? `, with the brief brought up to date (${rec.brief})` : ''}. Merge it when you are ready: git merge ${branch}.`);
     await removeWorktree(top, places.tree).catch(() => undefined);
-    return { outcome: 'done', note: `${plural(done.track.length, 'part')} built on ${branch} in ${minutes} min, $${cost.toFixed(2)}.` };
+    return { outcome: 'done', note: `${plural(done.track.length, 'part')} built on ${branch} in ${minutes} min, $${cost.toFixed(2)}.`, ...(show ? { show } : {}) };
+  }
+
+  /**
+   * The board's folder is no git repository. When it holds nothing of the owner's, the builder
+   * makes it one, and the build starts from nothing. When it holds files, it stops: the
+   * builder's copy is made from commits, and the owner's files are theirs to commit.
+   * Returns the new repository's top, or the failed result.
+   */
+  private async makeRepo(ch: string): Promise<string | BuildResult> {
+    const dir = this.ctx.repoDir;
+    // A `.git` that git cannot read is not an empty folder: say what git says.
+    if (fs.existsSync(path.join(dir, '.git'))) {
+      const r = await git(dir, ['rev-parse', '--show-toplevel']);
+      return this.fail(ch, `Git cannot read the repository in this folder, so the builder has no copy to work in: ${clip(r.stderr || r.stdout, 100)}`);
+    }
+    let theirs: ReturnType<typeof folderFiles>;
+    try {
+      theirs = folderFiles(dir);
+    } catch (e) {
+      return this.fail(ch, `The builder could not look in ${dir}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (theirs.names.length > 0) return this.fail(ch, filesNote('folder', theirs.names, theirs.more));
+    await gitOk(dir, ['init', '--quiet']);
+    const top = await repoTop(dir);
+    if (!top) return this.fail(ch, 'The builder ran "git init" here, but git still finds no repository, so nothing is built.');
+    this.ctx.log(`builder: ${ch}: ${dir} was no git repository; the builder made it one`);
+    return top;
   }
 
   /**

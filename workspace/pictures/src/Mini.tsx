@@ -1,4 +1,5 @@
 import type { MiniPicture, Tone } from '@keel/protocol';
+import { asPart, drawingOrder } from './build';
 import type { Pt, Rect, Route } from './grid';
 import { finish, placeLabels } from './grid';
 import { measure, widest, wrap } from './measure';
@@ -31,8 +32,10 @@ const MARGIN = 20;
 export interface MiniLayout {
   width: number;
   height: number;
-  boxes: Array<{ rect: Rect; name: string[]; sub: string[] }>;
-  arrows: Array<{ r: Route; label?: string; wait?: boolean; at?: ReturnType<typeof placeLabels>[number] }>;
+  /** `col` counts columns from 0, left to right. */
+  boxes: Array<{ rect: Rect; col: number; name: string[]; sub: string[] }>;
+  /** `from` and `to` are boxes, by their index in `boxes`. */
+  arrows: Array<{ r: Route; from: number; to: number; label?: string; wait?: boolean; at?: ReturnType<typeof placeLabels>[number] }>;
 }
 
 export function layoutMini(p: MiniPicture): MiniLayout {
@@ -107,7 +110,7 @@ export function layoutMini(p: MiniPicture): MiniLayout {
       const y = height - 6;
       pts = [[a.x + a.w / 2, a.y + a.h], [a.x + a.w / 2, y], [b.x + b.w / 2 + 8, y], [b.x + b.w / 2 + 8, b.y + b.h]];
     }
-    return { r: finish(pts), label: f.label, wait: f.wait };
+    return { r: finish(pts), from: f.from - 1, to: f.to - 1, label: f.label, wait: f.wait };
   });
   const width = diagramW + (flows.some((f) => rank[f.to - 1] === rank[f.from - 1]) ? 22 : 0);
   const placed = placeLabels(
@@ -117,7 +120,7 @@ export function layoutMini(p: MiniPicture): MiniLayout {
   return {
     width,
     height,
-    boxes: rects.map((rect, i) => ({ rect, name: text[i]!.name, sub: text[i]!.sub })),
+    boxes: rects.map((rect, i) => ({ rect, col: rank[i]!, name: text[i]!.name, sub: text[i]!.sub })),
     arrows: arrows.map((a, i) => ({ ...a, at: placed[i] })),
   };
 }
@@ -128,19 +131,21 @@ export function MiniCard({ item, markings, onAct }: PictureProps & { item: { pic
   const ids = useSvgIds();
   const L = layoutMini(p);
   const tap = svgTapper(item.id, onAct);
+  // Drawn on in reading order: the boxes by column, then the arrows, though the arrows are painted first.
+  const order = drawingOrder(0, L.boxes.map((b) => ({ col: b.col, row: b.rect.y })), L.arrows);
   // As wide as the drawing or the title needs, and at least as wide as a text card.
   const width = Math.max(360, L.width + 34, Math.ceil(measure(p.title, 'ui600', 13)) + 60);
   const svgW = Math.max(L.width, 1);
   return (
-    <article className={`kp kp-card kp-mini${wholeClass(m)}`} data-kind="mini" style={{ width }}>
-      <h3 className="kp-card__head">
+    <article className={`kp kp-card kp-mini${wholeClass(m)}`} {...asPart('frame')} data-kind="mini" style={{ width }}>
+      <h3 className="kp-card__head" {...asPart('head')}>
         <Star />
         <span>{p.title}</span>
       </h3>
       <svg className="kp-svg" width={svgW} height={L.height} viewBox={`0 0 ${svgW} ${L.height}`} role="img" aria-label={p.title}>
         <Defs ids={ids} />
         {L.arrows.map((a, i) => (
-          <ArrowPath key={i} ids={ids} r={a.r} tone="ink" dashed={a.wait === true} width={1.6} />
+          <ArrowPath key={i} ids={ids} r={a.r} tone="ink" dashed={a.wait === true} width={1.6} order={order.arrows[i]} />
         ))}
         {L.boxes.map((b, i) => {
           const box = p.boxes[i]!;
@@ -152,7 +157,7 @@ export function MiniCard({ item, markings, onAct }: PictureProps & { item: { pic
           const block = b.name.length * NAME.lh + b.sub.length * SUB.lh + (b.sub.length ? 2 : 0);
           const ty = r.y + (r.h - block) / 2 + 12;
           return (
-            <g key={sub} {...tap(sub)} opacity={crossed ? 0.42 : undefined}>
+            <g key={sub} {...tap(sub)} {...asPart('shape', order.boxes[i])} opacity={crossed ? 0.42 : undefined}>
               {circled && <rect x={r.x - 4} y={r.y - 4} width={r.w + 8} height={r.h + 8} rx={10} fill="none" stroke={T.owner} strokeWidth={2} />}
               <rect x={r.x} y={r.y} width={r.w} height={r.h} rx={7} fill={tone.fill} stroke={tone.stroke} strokeWidth={tone.width} />
               <Lines x={r.x + r.w / 2} y={ty} lines={b.name} face={NAME.face} size={NAME.size} color={tone.text} lh={NAME.lh} anchor="middle" />
@@ -160,9 +165,9 @@ export function MiniCard({ item, markings, onAct }: PictureProps & { item: { pic
             </g>
           );
         })}
-        {L.arrows.map((a, i) => (a.at ? <LabelView key={`l${i}`} l={a.at} tone="ink" /> : null))}
+        {L.arrows.map((a, i) => (a.at ? <LabelView key={`l${i}`} l={a.at} tone="ink" order={order.arrows[i]} /> : null))}
       </svg>
-      {p.caption && <p className="kp-text__body">{p.caption}</p>}
+      {p.caption && <p className="kp-text__body" {...asPart('block')}>{p.caption}</p>}
     </article>
   );
 }

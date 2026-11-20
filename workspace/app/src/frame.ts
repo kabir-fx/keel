@@ -1,6 +1,7 @@
 /**
- * Timed work on the page's frames: one loop that runs only while something moves, and a
- * wrapper that lets a function run at most once a frame.
+ * Timed work on the page's frames: one loop that runs only while something moves, a clock that
+ * moves only when a test or a reviewer moves it, and a wrapper that lets a function run at most
+ * once a frame.
  *
  * Adapted from Excalidraw (MIT licence, copyright 2020 Excalidraw), at commit 9fbeaed:
  * - `FrameLoop` from packages/excalidraw/renderer/animation.ts (`AnimationController`);
@@ -15,6 +16,14 @@ export interface FrameScheduler {
   requestAnimationFrame(callback: FrameRequestCallback): number;
   cancelAnimationFrame(handle: number): void;
 }
+
+/** Frames and the time they run at: the page's own, or a `ManualClock`. `now` is called on its own, with no `this`. */
+export interface Clock extends FrameScheduler {
+  now(): number;
+}
+
+/** The parts of a Web Animation a manual clock sets. */
+export type HeldAnimation = Pick<Animation, 'pause' | 'currentTime' | 'playState'>;
 
 /**
  * One step of something that moves. `dt` is the time since its last call, in ms; on its first
@@ -36,11 +45,31 @@ export class FrameLoop {
   private readonly steps = new Map<unknown, Running>();
   private frame: number | null = null;
   private readonly scheduler: FrameScheduler;
-  private readonly now: () => number;
+  /** The time this loop runs on, in ms: what each step's `dt` is counted in. */
+  readonly now: () => number;
 
   constructor(scheduler: FrameScheduler = window, now: () => number = () => performance.now()) {
     this.scheduler = scheduler;
     this.now = now;
+  }
+
+  /** True when the loop runs on a `ManualClock`: nothing moves until a test or a reviewer moves the clock. */
+  get manual(): boolean {
+    return this.scheduler instanceof ManualClock;
+  }
+
+  /**
+   * Put a Web Animation on this loop's clock. On the page's own clock it runs as it is. On a
+   * manual clock it is paused at once, and each move of the clock sets it to the time since
+   * `start` (by default, now), so a frame asked for twice shows it the same.
+   */
+  hold(animation: HeldAnimation, start: number = this.now()): void {
+    if (this.scheduler instanceof ManualClock) this.scheduler.hold(animation, start);
+  }
+
+  /** Take an animation off this loop's clock: the clock sets it no more. Nothing to do on the page's own clock. */
+  release(animation: HeldAnimation): void {
+    if (this.scheduler instanceof ManualClock) this.scheduler.release(animation);
   }
 
   /** Run `step` on every frame from the next one, until it answers false. A key that is already running is left as it is. */
@@ -90,6 +119,87 @@ export class FrameLoop {
       if (!more && this.steps.get(key) === running) this.steps.delete(key);
     }
     if (this.steps.size > 0) this.schedule();
+  }
+}
+
+/**
+ * A clock that moves only when it is told to: for a fixture played in a test or a review, so
+ * the same moment always shows the same frame. Frames asked for wait until `advance` runs them,
+ * one frame per call, at the new time. A frame asked for while one runs waits for the next call.
+ * The Web Animations it holds are set to its time on each move.
+ */
+export class ManualClock implements Clock {
+  private time = 0;
+  private nextHandle = 1;
+  private readonly waiting = new Map<number, FrameRequestCallback>();
+  /** The animations on this clock, and when each began. */
+  private readonly held = new Map<HeldAnimation, number>();
+
+  now = (): number => this.time;
+
+  requestAnimationFrame = (callback: FrameRequestCallback): number => {
+    const handle = this.nextHandle++;
+    this.waiting.set(handle, callback);
+    return handle;
+  };
+
+  cancelAnimationFrame = (handle: number): void => {
+    this.waiting.delete(handle);
+  };
+
+  /** True when a frame has been asked for and not run yet. */
+  get asked(): boolean {
+    return this.waiting.size > 0;
+  }
+
+  /** Move time forward by `ms` and run one frame. Answers how many frame callbacks ran. */
+  advance(ms: number): number {
+    return this.advanceTo(this.time + ms);
+  }
+
+  /**
+   * Move time to `t` and run one frame: the callbacks asked for before this call, in the order
+   * they were asked for. Time never goes back. Answers how many callbacks ran.
+   */
+  advanceTo(t: number): number {
+    if (!(t >= this.time)) throw new RangeError(`The clock is at ${this.time} ms: it cannot go back to ${t} ms.`);
+    this.time = t;
+    const run = [...this.waiting.values()];
+    this.waiting.clear();
+    for (const callback of run) callback(t);
+    for (const [animation, start] of this.held) this.setTo(animation, t - start);
+    return run.length;
+  }
+
+  /**
+   * Pause `animation` and keep it at the time since `start`, from now on. A cancelled animation
+   * (`idle`) is not taken: pausing it would bring it back.
+   */
+  hold(animation: HeldAnimation, start: number = this.time): void {
+    if (animation.playState === 'idle') return;
+    animation.pause();
+    this.held.set(animation, start);
+    this.setTo(animation, this.time - start);
+  }
+
+  /** Take `animation` off the clock: it is not set again. */
+  release(animation: HeldAnimation): void {
+    this.held.delete(animation);
+  }
+
+  /**
+   * Set an animation to a time; before its start, it shows its first frame. One that was
+   * cancelled since (a picture landed at once under the owner's press) leaves the clock instead:
+   * setting a time on it would bring it back, mid-flight.
+   */
+  private setTo(animation: HeldAnimation, ms: number): void {
+    if (animation.playState === 'idle') this.held.delete(animation);
+    else animation.currentTime = Math.max(0, ms);
+  }
+
+  /** True when `animation` is on this clock. */
+  holds(animation: HeldAnimation): boolean {
+    return this.held.has(animation);
   }
 }
 

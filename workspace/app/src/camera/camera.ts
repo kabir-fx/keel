@@ -90,12 +90,13 @@ export type Grip = 'none' | 'armed' | 'moving';
 
 type Listener = (cam: Camera) => void;
 
-/** A glide under way: where it began, where it goes, how long it takes, and how long it has run, in ms. */
+/** A glide under way: where it began, where it goes, how long it takes, how long it has run, in ms, and its easing. */
 interface Glide {
   from: Camera;
   to: Camera;
   ms: number;
   elapsed: number;
+  ease: (t: number) => number;
 }
 
 /** What a camera is made with. Tests hand in their own frames and their own answer to "reduce motion". */
@@ -149,17 +150,18 @@ export class CameraStore {
 
   /**
    * Glide to `to` over `ms`: the zoom changes by the same ratio each moment, and every world
-   * point travels a straight line on the screen, slowing as it arrives. It lands exactly on
-   * `to`. With "reduce motion" it is a jump, and takes no frames.
+   * point travels a straight line on the screen, as fast at each moment as `ease` says: by
+   * default slowing as it arrives, for a move the owner asked for. It lands exactly on `to`.
+   * With "reduce motion" it is a jump, and takes no frames.
    */
-  glide = (to: Camera, ms: number = GLIDE_MS): void => {
+  glide = (to: Camera, ms: number = GLIDE_MS, ease: (t: number) => number = easeOut): void => {
     this.stop();
     if (sameCamera(to, this.cam)) return;
     if (ms <= 0 || this.reduced()) {
       this.apply(to);
       return;
     }
-    const g: Glide = { from: this.cam, to, ms, elapsed: 0 };
+    const g: Glide = { from: this.cam, to, ms, elapsed: 0, ease };
     this.glideNow = g;
     this.loop.start(this, (dt) => {
       if (this.glideNow !== g) return false;
@@ -173,7 +175,7 @@ export class CameraStore {
         this.apply(g.to);
         return false;
       }
-      this.apply(between(g.from, g.to, easeOut(t)));
+      this.apply(between(g.from, g.to, g.ease(t)));
       return true;
     });
   };

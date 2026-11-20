@@ -2,7 +2,7 @@ import type { BoardState, Box, Id, ItemState, Presence } from '@keel/protocol';
 import { currentChapter } from '@keel/protocol';
 import type { RefObject } from 'react';
 import { useEffect, useLayoutEffect } from 'react';
-import { cursorPoint } from '../overlay/cursorPlace';
+import { cursorPoint, markOf } from '../overlay/cursorPlace';
 import type { CameraStore } from '../camera/camera';
 import { fitBox, unionBox } from '../camera/camera';
 import type { ViewMode } from '../chrome';
@@ -76,7 +76,7 @@ export function useFirstView(p: FirstViewNeeds): void {
       return;
     }
     // The agent is part of the first view: its cursor, and what it says beside it.
-    const at = cursorPoint(presence, p.boxOf);
+    const at = cursorPoint(presence, p.boxOf, markOf(state));
     const long = !!presence.note && presence.note.length > PILL_NOTE_MAX;
     const agent: Box[] = at ? [[at[0], at[1], long ? 340 : 80, long ? 150 : 40]] : [];
     // With nothing kept, the first view is the chapter in work, not the whole board.

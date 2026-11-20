@@ -1,4 +1,5 @@
 import type { TextPicture } from '@keel/protocol';
+import { asPart } from './build';
 import { Star, subClass, wholeClass } from './parts';
 import type { PictureProps } from './types';
 
@@ -24,25 +25,23 @@ export function TextCard({ item, markings, onAct }: PictureProps & { item: { pic
   const m = markings ?? { crossed: [], circled: [] };
   const paragraphs = (p.body ?? '').split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
   return (
-    <article className={`kp kp-card kp-text${wholeClass(m)}`} data-kind="text" style={{ width: textWidth(p) }}>
-      <h3 className="kp-card__head">
+    <article className={`kp kp-card kp-text${wholeClass(m)}`} {...asPart('frame')} data-kind="text" style={{ width: textWidth(p) }}>
+      <h3 className="kp-card__head" {...asPart('head')}>
         <Star />
         <span>{p.title}</span>
       </h3>
       {paragraphs.map((t, i) => (
-        <p key={i} className="kp-text__body">
-          {t}
-        </p>
+        <p key={i} className="kp-text__body" {...asPart('block')}>{t}</p>
       ))}
       {p.points && p.points.length > 0 && (
         <ul className="kp-text__points">
           {p.points.map((t, i) => (
-            <li key={i}>{t}</li>
+            <li key={i} {...asPart('block')}>{t}</li>
           ))}
         </ul>
       )}
       {p.lean && (
-        <p className="kp-text__lean">
+        <p className="kp-text__lean" {...asPart('block')}>
           <b>My read:</b> {p.lean}
         </p>
       )}
@@ -53,6 +52,7 @@ export function TextCard({ item, markings, onAct }: PictureProps & { item: { pic
             return (
               <li
                 key={sub}
+                {...asPart('block')}
                 data-sub={sub}
                 className={subClass(m, sub)}
                 onClick={onAct ? () => onAct({ type: 'tap', item: item.id, sub }) : undefined}

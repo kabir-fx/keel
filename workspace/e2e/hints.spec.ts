@@ -409,9 +409,28 @@ test.describe('the agent’s cursor', () => {
     await expect(cursor).toBeVisible();
   });
 
-  test('off screen it waits faint at the board’s edge, and is whole again back in view', async ({ page }) => {
+  test('at rest it dims, and off screen it is not drawn', async ({ page }) => {
+    // The fixture's agent listens: at rest.
     await open(page);
     const cursor = page.getByTestId('agent-cursor');
+    await expect(cursor).toHaveAttribute('data-rest', '');
+    await expect.poll(() => cursor.evaluate((el) => getComputedStyle(el).opacity)).toBe('0.5');
+    await expect(page.locator('.agent-cursor__tag')).toHaveText('agent');
+    await page.mouse.move(700, 400);
+    for (let i = 0; i < 4; i++) await page.mouse.wheel(20000, 0);
+    await nextFrame(page);
+    await expect(cursor).toHaveAttribute('data-off', '');
+    await expect(cursor).toBeHidden();
+    for (let i = 0; i < 4; i++) await page.mouse.wheel(-20000, 0);
+    await nextFrame(page);
+    await expect(cursor).toBeVisible();
+  });
+
+  test('working, off screen it waits faint at the board’s edge, and is whole again back in view', async ({ page }) => {
+    await open(page);
+    const cursor = page.getByTestId('agent-cursor');
+    // As if the agent were drawing: the fixture's agent listens.
+    await cursor.evaluate((el) => el.removeAttribute('data-rest'));
     expect(await cursor.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
     const cam = await readCamera(page);
     await page.mouse.move(700, 400);

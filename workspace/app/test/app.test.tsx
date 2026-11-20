@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest';
 import { App } from '../src/App';
 import { CameraStore, fitBox, zoomAt } from '../src/camera/camera';
+import { CURSOR_BESIDE, CURSOR_DOWN } from '../src/overlay/cursorPlace';
 import { localSource } from '../src/source';
 import { lanes, note, openBoard, text } from './helpers';
 
@@ -84,7 +85,8 @@ describe('the app shell', () => {
     const c = screen.getByTestId('agent-cursor');
     expect(c.dataset.at).toBe('640,320');
     act(() => src.setPresence({ state: 'drawing', cursor: { item: 'm1' } }));
-    expect(screen.getByTestId('agent-cursor').dataset.at).toBe(`${100 + 320 - 28},${100 + 120 - 18}`);
+    // Beside the owner's note, outside its right edge, not over its words.
+    expect(screen.getByTestId('agent-cursor').dataset.at).toBe(`${100 + 320 + CURSOR_BESIDE},${100 + 120 * CURSOR_DOWN}`);
   });
 });
 

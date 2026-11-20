@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FrameScheduler } from '../src/frame';
-import { FrameLoop, oncePerFrame } from '../src/frame';
+import { FrameLoop, ManualClock, oncePerFrame } from '../src/frame';
 
 /** Frames stepped by hand, with a clock that moves 16 ms a frame. */
 function frames() {
@@ -238,5 +238,152 @@ describe('once per frame', () => {
     draw(2);
     f.step();
     expect(seen).toEqual([2]);
+  });
+});
+
+/** A Web Animation as far as the clock touches it. `cancel` makes it idle, as `Animation.cancel` does. */
+function fakeAnimation(currentTime: number | null = null) {
+  return {
+    paused: false,
+    playState: 'running' as AnimationPlayState,
+    currentTime: currentTime as CSSNumberish | null,
+    pause() {
+      this.paused = true;
+      this.playState = 'paused';
+    },
+    cancel() {
+      this.playState = 'idle';
+      this.currentTime = null;
+    },
+  };
+}
+
+describe('the manual clock', () => {
+  it('stands still until it is moved, and runs no frame by itself', () => {
+    const clock = new ManualClock();
+    const loop = new FrameLoop(clock, clock.now);
+    let calls = 0;
+    loop.start('k', () => ++calls < 10);
+    expect(clock.now()).toBe(0);
+    expect(calls).toBe(0);
+    expect(clock.asked).toBe(true);
+  });
+
+  it('runs one frame per move, at the new time, with the time since the last call', () => {
+    const clock = new ManualClock();
+    const loop = new FrameLoop(clock, clock.now);
+    const seen: number[] = [];
+    loop.start('k', (dt) => {
+      seen.push(dt);
+      return true;
+    });
+    clock.advance(10);
+    clock.advance(25);
+    clock.advanceTo(100);
+    expect(seen).toEqual([10, 25, 65]);
+    expect(clock.now()).toBe(100);
+    expect(loop.now()).toBe(100);
+  });
+
+  it('a frame asked for during a frame waits for the next move', () => {
+    const clock = new ManualClock();
+    const times: number[] = [];
+    clock.requestAnimationFrame((t) => {
+      times.push(t);
+      clock.requestAnimationFrame((t2) => times.push(t2));
+    });
+    expect(clock.advance(16)).toBe(1);
+    expect(times).toEqual([16]);
+    expect(clock.advance(16)).toBe(1);
+    expect(times).toEqual([16, 32]);
+    expect(clock.advance(16)).toBe(0);
+  });
+
+  it('a cancelled frame does not run', () => {
+    const clock = new ManualClock();
+    let ran = false;
+    const handle = clock.requestAnimationFrame(() => {
+      ran = true;
+    });
+    clock.cancelAnimationFrame(handle);
+    expect(clock.asked).toBe(false);
+    clock.advance(16);
+    expect(ran).toBe(false);
+  });
+
+  it('never goes back', () => {
+    const clock = new ManualClock();
+    clock.advanceTo(50);
+    expect(() => clock.advanceTo(40)).toThrow('The clock is at 50 ms: it cannot go back to 40 ms.');
+    expect(() => clock.advance(-1)).toThrow(RangeError);
+    expect(clock.now()).toBe(50);
+  });
+
+  it('holds an animation paused at the time since it began, and moves it with the clock', () => {
+    const clock = new ManualClock();
+    clock.advanceTo(100);
+    const anim = fakeAnimation();
+    const loop = new FrameLoop(clock, clock.now);
+    loop.hold(anim, 120);
+    expect(anim.paused).toBe(true);
+    // Before its start it shows its first frame.
+    expect(anim.currentTime).toBe(0);
+    clock.advanceTo(200);
+    expect(anim.currentTime).toBe(80);
+    expect(clock.holds(anim)).toBe(true);
+  });
+
+  it('a loop on it says it is manual; a loop on the page is not, and holds nothing', () => {
+    const clock = new ManualClock();
+    expect(new FrameLoop(clock, clock.now).manual).toBe(true);
+    const f = frames();
+    const page = new FrameLoop(f.scheduler, f.now);
+    expect(page.manual).toBe(false);
+    const anim = fakeAnimation(5);
+    page.hold(anim);
+    page.release(anim);
+    expect(anim.paused).toBe(false);
+    expect(anim.currentTime).toBe(5);
+    expect(page.now()).toBe(0);
+  });
+
+  it('lets go of an animation that was cancelled: it is not set again, and leaves the clock', () => {
+    const clock = new ManualClock();
+    const landed = fakeAnimation();
+    const other = fakeAnimation();
+    clock.hold(landed, 0);
+    clock.hold(other, 0);
+    clock.advanceTo(50);
+    landed.cancel();
+    clock.advanceTo(100);
+    // Setting a time on it would bring it back, mid-flight.
+    expect(landed.currentTime).toBeNull();
+    expect(clock.holds(landed)).toBe(false);
+    expect(other.currentTime).toBe(100);
+  });
+
+  it('does not take an animation that is cancelled already', () => {
+    const clock = new ManualClock();
+    const anim = fakeAnimation();
+    anim.cancel();
+    clock.hold(anim);
+    expect(anim.paused).toBe(false);
+    expect(anim.currentTime).toBeNull();
+    expect(clock.holds(anim)).toBe(false);
+  });
+
+  it('release takes an animation off the clock, and the clock still sets the others', () => {
+    const clock = new ManualClock();
+    const loop = new FrameLoop(clock, clock.now);
+    const mine = fakeAnimation();
+    const other = fakeAnimation();
+    loop.hold(mine, 0);
+    loop.hold(other, 0);
+    clock.advanceTo(40);
+    loop.release(mine);
+    clock.advanceTo(90);
+    expect(clock.holds(mine)).toBe(false);
+    expect(mine.currentTime).toBe(40);
+    expect(other.currentTime).toBe(90);
   });
 });

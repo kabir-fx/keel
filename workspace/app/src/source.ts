@@ -1,5 +1,5 @@
-import type { Actor, BoardEvent, BoardInfo, BoardState, ForeignRange, Presence, PresenceUpdate, RuleId, ServerMessage } from '@keel/protocol';
-import { ROUTES, admit, reduce, replay } from '@keel/protocol';
+import type { Actor, BoardEvent, BoardInfo, BoardState, ForeignRange, Id, Presence, PresenceUpdate, RuleId, ServerMessage } from '@keel/protocol';
+import { ROUTES, admit, isMark, reduce, replay } from '@keel/protocol';
 import type { Draft } from './drafts';
 import { cleanAssetName } from './marks';
 
@@ -21,6 +21,12 @@ export interface BoardSource {
    */
   readonly build?: BuildInfo | undefined;
   /**
+   * What the owner can look at: for each built chapter that has something to show, the address
+   * of its page. It comes in `init` and in a `shows` message whenever it changes, and is said to
+   * the owner's page only. Every address here passed `safeShowUrl`. Empty when there is nothing.
+   */
+  readonly shows: ReadonlyMap<string, string>;
+  /**
    * The runs of events that came with the log from outside (a clone, a pull, a change to the
    * file outside the board) and that the owner has not kept yet. Undefined when there are none,
    * and always for a board in memory.
@@ -40,6 +46,12 @@ export interface BoardSource {
   upload(name: string, body: Blob): Promise<UploadResult>;
   /** Called after every change of state, presence or connection. Returns the unsubscribe. */
   subscribe(listener: () => void): () => void;
+  /**
+   * Called with each mark of the owner's that reaches the board as made on this page, though it
+   * was not posted through `post`: the owner's marks a played fixture feeds in, which stand for
+   * the owner at this page. Returns the unsubscribe. Left out where the page posts all its own.
+   */
+  onOwnMark?(listener: (mark: Id) => void): () => void;
   close(): void;
 }
 
@@ -54,6 +66,42 @@ export type UploadResult = { ok: true; asset: string } | { ok: false; reason: st
 
 /** What the server says about the build it drives (`BoardInfo.build`). */
 export type BuildInfo = NonNullable<BoardInfo['build']>;
+
+/** No page to show: one map, so a page that shows nothing keeps the same value. */
+const NO_SHOWS: ReadonlyMap<string, string> = new Map();
+
+/**
+ * The address of a built page, when it is one the board may link to: plain http on this
+ * machine, where the board server serves it. Anything else is dropped, so an address from the
+ * wire (a `javascript:` one, or another site) never becomes a link on the page.
+ */
+export function safeShowUrl(address: unknown): string | undefined {
+  if (typeof address !== 'string') return undefined;
+  let url: URL;
+  try {
+    url = new URL(address);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== 'http:') return undefined;
+  if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') return undefined;
+  return url.href;
+}
+
+/**
+ * The map the server sent, with only the addresses `safeShowUrl` keeps. A `Map`, not an object,
+ * so a chapter named like an object's own key (`constructor`) finds nothing it was not given.
+ */
+function keptShows(shows: Record<string, string> | undefined): ReadonlyMap<string, string> {
+  const kept = new Map<string, string>();
+  if (shows && typeof shows === 'object') {
+    for (const [chapter, address] of Object.entries(shows)) {
+      const safe = safeShowUrl(address);
+      if (safe) kept.set(chapter, safe);
+    }
+  }
+  return kept.size > 0 ? kept : NO_SHOWS;
+}
 
 /** The largest file the board server takes. */
 export const MAX_UPLOAD = 20 * 1024 * 1024;
@@ -141,7 +189,10 @@ export class LocalSource implements BoardSource {
 
   /** Post as another actor: how a fixture or a test plays the agent on a board in memory. */
   postAs = (by: Actor, draft: Draft): Promise<PostResult> => {
-    const r = admit(this.state, draft, by, this.clock());
+    // While a recorded log is fed in, what the page posts is numbered after the last recorded
+    // event, so it never takes an id the recording still holds.
+    const numbered = this.state.seq < this.recordedUpTo ? { ...this.state, seq: this.recordedUpTo } : this.state;
+    const r = admit(numbered, draft, by, this.clock());
     if (!r.ok) return Promise.resolve({ ok: false, rule: r.rule, reason: r.reason });
     this.state = r.state;
     this.events.push(r.event);
@@ -167,6 +218,8 @@ export class LocalSource implements BoardSource {
 
   build: BuildInfo | undefined = undefined;
   foreign: readonly ForeignRange[] | undefined = undefined;
+  /** A played fixture has nothing to show: no server built anything. */
+  shows: ReadonlyMap<string, string> = NO_SHOWS;
 
   /** Say which events came from outside, as a server would: for tests. A fixture has none. */
   setForeign(ranges: readonly ForeignRange[] | undefined): void {
@@ -185,6 +238,51 @@ export class LocalSource implements BoardSource {
     this.build = info;
     this.listeners.emit();
   }
+
+  /** Say what the server would say there is to show, checked as the server's would be: for tests. */
+  setShows(shows: Record<string, string> | undefined): void {
+    this.shows = keptShows(shows);
+    this.listeners.emit();
+  }
+
+  /** The number of the last event a recorded log will feed in: see `expectRecorded`. */
+  private recordedUpTo = 0;
+
+  /**
+   * Say that a recorded log will be fed in up to the event numbered `seq`. Until it has been, the
+   * page's own posts are numbered after it. A played fixture holds every `item.place` and hands
+   * each one in with the picture it places, so the page posts nothing during a play. A
+   * placeholder the agent is still drawing gets a spot on this page only, as on a live board, and
+   * is placed in the log once it is finished (`board/placement.ts`), and that `item.place` comes
+   * from the fixture too. This keeps the ids apart anyway, for a log that leaves placing to the
+   * page (the golden fixture) and for an owner who draws while it plays.
+   */
+  expectRecorded(seq: number): void {
+    this.recordedUpTo = seq;
+  }
+
+  /**
+   * Take events as they were recorded: their own ids, times and actors, applied with the
+   * contract's `reduce` and not admitted again, since the log already passed the rules once.
+   * Several events are one change, told to the listeners once.
+   */
+  feed(events: readonly BoardEvent[]): void {
+    if (events.length === 0) return;
+    let state = this.state;
+    for (const ev of events) state = reduce(state, ev);
+    this.state = state;
+    this.events.push(...events);
+    this.listeners.emit();
+    // A mark fed in as this page's own was made here, as far as the page can tell.
+    for (const ev of events) if (ev.type === 'item.add' && ev.by === this.role && isMark(ev.item)) for (const l of this.ownMarks) l(ev.item.id);
+  }
+
+  private readonly ownMarks = new Set<(mark: Id) => void>();
+
+  onOwnMark = (listener: (mark: Id) => void): (() => void) => {
+    this.ownMarks.add(listener);
+    return () => this.ownMarks.delete(listener);
+  };
 
   /** Set what the agent is doing, as the server would on a presence report. */
   setPresence(p: PresenceUpdate): void {
@@ -242,6 +340,7 @@ export class ServerSource implements BoardSource {
   connection: Connection = 'connecting';
   build: BuildInfo | undefined = undefined;
   foreign: readonly ForeignRange[] | undefined = undefined;
+  shows: ReadonlyMap<string, string> = NO_SHOWS;
   readonly snapshots = true;
   /** How many reconnects have been tried since the last good `init`. */
   attempts = 0;
@@ -308,6 +407,8 @@ export class ServerSource implements BoardSource {
         this.presence = msg.presence;
         // A page that (re)connects learns the build from `init`: none there means none goes.
         this.build = msg.build ?? undefined;
+        // And what there is to show: none there means nothing.
+        this.shows = keptShows(msg.shows);
         this.connection = 'open';
         this.attempts = 0;
         this.startPing();
@@ -330,6 +431,10 @@ export class ServerSource implements BoardSource {
       case 'build':
         // The server's build driver changed what it does: `null` when no build goes any more.
         this.build = msg.build ?? undefined;
+        break;
+      case 'shows':
+        // What there is to show changed: the whole map comes each time, empty when nothing is left.
+        this.shows = keptShows(msg.shows);
         break;
       case 'pong':
         return;
@@ -377,6 +482,9 @@ export class ServerSource implements BoardSource {
     if (this.connection === 'refused') return;
     this.connection = 'closed';
     this.presence = { state: 'away', note: 'the board server is not reachable', since: nowIso() };
+    // What a build shows is served by that server, at an address that is new for each start:
+    // a link to it now may lead nowhere. The next `init` says what there is to show.
+    this.shows = NO_SHOWS;
     for (const done of this.pending.values()) done(OFFLINE);
     this.pending.clear();
     if (this.ping !== undefined) this.opts.timers.clear(this.ping);

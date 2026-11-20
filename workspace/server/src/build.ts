@@ -1,4 +1,4 @@
-import type { BoardEvent, BoardState, Builder, BuildJob, BuildResult, Id, Presence, PresenceUpdate } from '@keel/protocol';
+import type { BoardEvent, BoardState, Builder, BuildJob, BuildResult, BuildShow, Id, Presence, PresenceUpdate } from '@keel/protocol';
 import { renderBrief, trackProgress } from '@keel/protocol';
 import { plain } from './text';
 
@@ -70,6 +70,11 @@ export interface BuildRunnerOptions {
   inWake: () => boolean;
   /** What the pill says when nothing builds and the agent is not in a wake. */
   rest: () => PresenceUpdate;
+  /**
+   * A run ended `done`, the chapter is built, and the builder gave something to show. What it
+   * gave is passed on as it came, its folder and page as text: the server checks it and serves it.
+   */
+  show?: (chapter: Id, show: BuildShow) => void;
   log?: (message: string) => void;
   /** How long close waits for the builder's pause, then for its close. */
   closeTimeoutMs?: number;
@@ -419,10 +424,28 @@ export class BuildRunner {
       this.stopped.add(run.chapter);
       this.say(run.chapter, problem, 'problem');
       this.log(problem);
+    } else if ('result' in outcome && isResult(outcome.result) && outcome.result.outcome === 'done' && c?.state === 'built') {
+      this.handOver(run.chapter, outcome.result.show);
     }
     // The pill goes back to rest, whatever the builder said last, unless a wake has it now.
     if (!this.opts.inWake() && !this.current) this.opts.presence.set(this.opts.rest());
     this.schedule();
+  }
+
+  /** Pass on what a finished build shows, when it is the shape a show has. Anything else is left out. */
+  private handOver(chapter: Id, show: unknown): void {
+    const to = this.opts.show;
+    if (!to || typeof show !== 'object' || show === null) return;
+    const { dir, page } = show as { dir?: unknown; page?: unknown };
+    if (typeof dir !== 'string' || typeof page !== 'string') {
+      this.log('the builder gave something to show that is not a folder and a page. Nothing is shown.');
+      return;
+    }
+    try {
+      to(chapter, { dir, page });
+    } catch (e) {
+      this.log(`could not show the build: ${messageOf(e)}`);
+    }
   }
 
   /* ------------------------------------------------------------ helpers */

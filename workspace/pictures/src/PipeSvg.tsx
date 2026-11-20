@@ -1,5 +1,6 @@
 import type { Edge, Id, Markings, Part } from '@keel/protocol';
 import type { MouseEvent } from 'react';
+import { asPart, drawingOrder } from './build';
 import type { Grid, PlacedLabel, Pt, Rect, Route } from './grid';
 import { cellRect, finish, placeLabels, roundedPath, route } from './grid';
 import { measure, wrap } from './measure';
@@ -67,6 +68,12 @@ const pen = (m: Markings, sub: string) => {
   const crossed = m.crossed.includes(sub);
   return { crossed, circled: !crossed && m.circled.includes(sub) };
 };
+
+/** The order a drawing of the model is drawn on in: the lanes, the parts by column, then the arrows. */
+function modelOrder(lanes: number, parts: ReadonlyArray<{ id: Id; col: number; row: number }>, edges: readonly Edge[]) {
+  const at = new Map(parts.map((p, i) => [p.id, i]));
+  return drawingOrder(lanes, parts, edges.map((e) => ({ from: at.get(e.from)!, to: at.get(e.to)! })));
+}
 
 /** The dots of a walk on one part: done steps filled, steps to come hollow, the played one lit. */
 function Dots({ x, y, ns, walk }: { x: number; y: number; ns: readonly number[]; walk: WalkMarks }) {
@@ -200,13 +207,18 @@ export function FlatSvg(props: PipeSvgProps & { metrics?: FlatMetrics }) {
   const onTop = M.labelW === 0;
   const ids = useSvgIds();
   const L = layoutFlat(pm, M, props.edges !== false);
+  const order = modelOrder(
+    L.lanes.length,
+    L.parts.map((p) => ({ id: p.part.id, col: p.rect.x, row: p.rect.y })),
+    L.arrows.map((a) => a.edge),
+  );
   return (
     <svg className="kp-svg" width={L.width} height={L.height} viewBox={`0 0 ${L.width} ${L.height}`} role="img" aria-label="the pipeline, flat">
       <Defs ids={ids} />
-      {L.lanes.map((lane) => {
+      {L.lanes.map((lane, i) => {
         const p = pen(m, `lane:${lane.id}`);
         return (
-          <g key={lane.id} {...partTap(props, 'lane', lane.id)} opacity={p.crossed ? 0.42 : undefined}>
+          <g key={lane.id} {...partTap(props, 'lane', lane.id)} {...asPart('shape', order.bands[i])} opacity={p.crossed ? 0.42 : undefined}>
             <rect
               x={0}
               y={lane.top}
@@ -223,9 +235,9 @@ export function FlatSvg(props: PipeSvgProps & { metrics?: FlatMetrics }) {
         );
       })}
       {L.arrows.map((a, i) => (
-        <ArrowPath key={i} ids={ids} r={a.r} tone={edgeTone(a.edge, walk)} dashed={a.edge.kind === 'wait'} />
+        <ArrowPath key={i} ids={ids} r={a.r} tone={edgeTone(a.edge, walk)} dashed={a.edge.kind === 'wait'} order={order.arrows[i]} />
       ))}
-      {L.parts.map(({ part, rect: r, name, plain }) => {
+      {L.parts.map(({ part, rect: r, name, plain }, i) => {
         const look = LOOK[lookOf(part)];
         const p = pen(m, `part:${part.id}`);
         const lit = walk?.litPart === part.id;
@@ -234,7 +246,15 @@ export function FlatSvg(props: PipeSvgProps & { metrics?: FlatMetrics }) {
         const dots = walk?.dots.get(part.id);
         const n = trackNo?.get(part.id);
         return (
-          <g key={part.id} {...partTap(props, 'part', part.id)} data-part={part.id} data-state={lookOf(part)} data-lit={lit ? '' : undefined} opacity={p.crossed ? 0.42 : undefined}>
+          <g
+            key={part.id}
+            {...partTap(props, 'part', part.id)}
+            {...asPart('shape', order.boxes[i])}
+            data-part={part.id}
+            data-state={lookOf(part)}
+            data-lit={lit ? '' : undefined}
+            opacity={p.crossed ? 0.42 : undefined}
+          >
             {lit && <rect x={r.x - 6} y={r.y - 6} width={r.w + 12} height={r.h + 12} rx={12} fill={T.tealMid} fillOpacity={0.55} />}
             {p.circled && <rect x={r.x - 5} y={r.y - 5} width={r.w + 10} height={r.h + 10} rx={11} fill="none" stroke={T.owner} strokeWidth={2} />}
             <rect
@@ -257,7 +277,7 @@ export function FlatSvg(props: PipeSvgProps & { metrics?: FlatMetrics }) {
           </g>
         );
       })}
-      {L.arrows.map((a, i) => (a.at ? <LabelView key={`l${i}`} l={a.at} tone={edgeTone(a.edge, walk)} /> : null))}
+      {L.arrows.map((a, i) => (a.at ? <LabelView key={`l${i}`} l={a.at} tone={edgeTone(a.edge, walk)} order={order.arrows[i]} /> : null))}
     </svg>
   );
 }
@@ -338,6 +358,11 @@ export function LayersSvg(props: PipeSvgProps) {
     blockRects,
     { x: 0, y: 0, w: width, h: height },
   );
+  const order = modelOrder(
+    pm.lanes.length,
+    pm.parts.map((p) => ({ id: p.id, col: col.get(p.id) ?? 1, row: laneIdx.get(p.lane) ?? 0 })),
+    edges.map((e) => e.edge),
+  );
 
   return (
     <svg className="kp-svg" width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="the pipeline, in layers">
@@ -352,7 +377,7 @@ export function LayersSvg(props: PipeSvgProps) {
         const D = LY.depthX;
         const H = LY.depthY;
         return (
-          <g key={l.id} opacity={p.crossed ? 0.42 : undefined}>
+          <g key={l.id} {...asPart('shape', order.bands[i])} opacity={p.crossed ? 0.42 : undefined}>
             {/* The lane's name stands beside the floor. It is not part of what a mark on the lane takes in. */}
             <Lines x={14} y={y + 24} lines={name} face="ui600" size={15} color={T.ink} lh={19} />
             <Lines x={14} y={y + 24 + name.length * 19} lines={note} face="ui400" size={12.5} color={T.text2} lh={16} />
@@ -368,9 +393,9 @@ export function LayersSvg(props: PipeSvgProps) {
       })}
       {edges.map((e, i) => {
         const tone = edgeTone(e.edge, walk);
-        return <ArrowPath key={i} ids={ids} r={e.r} tone={tone} dashed={e.edge.kind === 'wait'} width={tone === 'grey' ? 1.4 : 1.9} />;
+        return <ArrowPath key={i} ids={ids} r={e.r} tone={tone} dashed={e.edge.kind === 'wait'} width={tone === 'grey' ? 1.4 : 1.9} order={order.arrows[i]} />;
       })}
-      {pm.parts.map((part) => {
+      {pm.parts.map((part, i) => {
         const f = laneIdx.get(part.lane) ?? 0;
         const X = bx(col.get(part.id) ?? 1);
         const Y = frontTop(f);
@@ -385,7 +410,15 @@ export function LayersSvg(props: PipeSvgProps) {
         const dots = walk?.dots.get(part.id);
         const n = props.trackNo?.get(part.id);
         return (
-          <g key={part.id} {...partTap(props, 'part', part.id)} data-part={part.id} data-state={lookOf(part)} data-lit={lit ? '' : undefined} opacity={p.crossed ? 0.42 : undefined}>
+          <g
+            key={part.id}
+            {...partTap(props, 'part', part.id)}
+            {...asPart('shape', order.boxes[i])}
+            data-part={part.id}
+            data-state={lookOf(part)}
+            data-lit={lit ? '' : undefined}
+            opacity={p.crossed ? 0.42 : undefined}
+          >
             {lit && (
               <path
                 d={roundedPath([[X - 7, Y - 3], [X + 7, Y - 17], [X + 193, Y - 17], [X + 193, Y + 57], [X + 179, Y + 71], [X - 7, Y + 71]], 4) + ' Z'}
@@ -407,7 +440,7 @@ export function LayersSvg(props: PipeSvgProps) {
           </g>
         );
       })}
-      {labels.map((l, i) => (l ? <LabelView key={`l${i}`} l={l} tone={edgeTone(edges[i]!.edge, walk)} /> : null))}
+      {labels.map((l, i) => (l ? <LabelView key={`l${i}`} l={l} tone={edgeTone(edges[i]!.edge, walk)} order={order.arrows[i]} /> : null))}
     </svg>
   );
 }

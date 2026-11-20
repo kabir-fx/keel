@@ -1,4 +1,5 @@
 import type { BoardState, ShelfPicture, ShelfTile } from '@keel/protocol';
+import { asPart } from './build';
 import { StateChip, Star, tapper, wholeClass } from './parts';
 import type { Look } from './theme';
 import { LOOK_ORDER, lookOf } from './theme';
@@ -30,8 +31,8 @@ export function ShelfCard({ item, state, markings, onAct }: PictureProps & { ite
   const looks = p.tiles.map((t) => tileLook(state, t));
   const used = LOOK_ORDER.filter((l) => looks.includes(l));
   return (
-    <article className={`kp kp-card kp-shelf${wholeClass(m)}`} data-kind="shelf" style={{ width }}>
-      <h3 className="kp-card__head">
+    <article className={`kp kp-card kp-shelf${wholeClass(m)}`} {...asPart('frame')} data-kind="shelf" style={{ width }}>
+      <h3 className="kp-card__head" {...asPart('head')}>
         <Star />
         <span>{p.title ?? 'Already on the shelf'}</span>
         {used.length > 0 && (
@@ -44,10 +45,10 @@ export function ShelfCard({ item, state, markings, onAct }: PictureProps & { ite
       </h3>
       <div className="kp-shelf__tiles" style={{ gridTemplateColumns: `repeat(${cols}, ${TILE_W}px)`, gap: TILE_GAP }}>
         {p.tiles.map((t, i) => (
-          <div key={t.id} {...tap(`tile:${t.id}`, `kp-tile kp-tile--${looks[i] ?? 'none'}`)} data-state={looks[i]}>
-            <b className="kp-tile__name">{t.name}</b>
-            {t.plain && <span className="kp-tile__plain">{t.plain}</span>}
-            {t.ref && <span className="kp-tile__ref">{t.ref}</span>}
+          <div key={t.id} {...tap(`tile:${t.id}`, `kp-tile kp-tile--${looks[i] ?? 'none'}`)} {...asPart('frame')} data-state={looks[i]}>
+            <b className="kp-tile__name" {...asPart('head')}>{t.name}</b>
+            {t.plain && <span className="kp-tile__plain" {...asPart('block')}>{t.plain}</span>}
+            {t.ref && <span className="kp-tile__ref" {...asPart('block')}>{t.ref}</span>}
           </div>
         ))}
       </div>

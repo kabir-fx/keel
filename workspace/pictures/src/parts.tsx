@@ -1,5 +1,6 @@
 import type { Markings } from '@keel/protocol';
 import type { MouseEvent, ReactNode } from 'react';
+import { asPart } from './build';
 import type { Look } from './theme';
 import { LOOK_WORD } from './theme';
 import type { PictureAct } from './types';
@@ -70,10 +71,10 @@ export function StateChip({ state, children }: { state: Look; children?: ReactNo
   return <span className={`k-state k-state--${state}`}>{children ?? LOOK_WORD[state]}</span>;
 }
 
-/** The agent's voice above a picture: a pale blue strip with a star, a head and a sentence. */
+/** The agent's voice above a picture: a pale blue strip with a star, a head and a sentence. It is the picture's head. */
 export function Strip({ head, children, aside }: { head: ReactNode; children?: ReactNode; aside?: ReactNode }) {
   return (
-    <div className="kp-strip">
+    <div className="kp-strip" {...asPart('head')}>
       <span className="kp-strip__head">
         <Star />
         {head}
@@ -88,7 +89,7 @@ export function Strip({ head, children, aside }: { head: ReactNode; children?: R
 export function Gaps({ gaps }: { gaps?: readonly string[] }) {
   if (!gaps?.length) return null;
   return (
-    <div className="kp-gaps" role="note">
+    <div className="kp-gaps" role="note" {...asPart('block')}>
       <span className="kp-gaps__head">This picture leaves out</span>
       <ul>
         {gaps.map((g, i) => (
@@ -110,7 +111,7 @@ export function LeanChip() {
 
 export function Risk({ children }: { children: ReactNode }) {
   return (
-    <p className="kp-risk">
+    <p className="kp-risk" {...asPart('block')}>
       <b>Risk:</b> {children}
     </p>
   );

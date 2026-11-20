@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Id } from '@keel/protocol';
-import { MAX_FOREIGN_RANGES, PRIVATE_BOARD_FILE, PrivateBoardFile, STATE_DIR_ENV, privateBoardKey } from '@keel/protocol';
+import { MAX_FOREIGN_RANGES, MAX_SHOWS, PRIVATE_BOARD_FILE, PrivateBoardFile, STATE_DIR_ENV, privateBoardKey } from '@keel/protocol';
 import { NOFOLLOW, errCode, lstatOf, readNoFollow, replaceFile, writeAll } from './files';
 
 /**
@@ -12,8 +12,9 @@ import { NOFOLLOW, errCode, lstatOf, readNoFollow, replaceFile, writeAll } from 
  *
  *   <root>/boards/<privateBoardKey(dev, ino)>/   0700
  *     board.json      0600  `PrivateBoardFile`: the owner's token, the port, the running server's
- *                           tokens, the builds the owner agreed to on this machine, and the
- *                           seal of the log as this machine's server last wrote it
+ *                           tokens, the builds the owner agreed to on this machine, the
+ *                           seal of the log as this machine's server last wrote it, and
+ *                           what finished builds have to show
  *     server.lock     0600  held while a server runs, so two servers never write one log
  *     link/           0700  the agent link's own files (`LinkContext.stateDir`)
  *     builder/        0700  the builder's own files (`BuilderContext.stateDir`)
@@ -34,6 +35,8 @@ export type Consent = NonNullable<PrivateBoardFile['consents']>[number];
 export type Running = NonNullable<PrivateBoardFile['running']>;
 export type LogSeal = NonNullable<PrivateBoardFile['log']>;
 export type ForeignRange = NonNullable<PrivateBoardFile['foreign']>[number];
+/** What a finished build shows: the real path of its folder, its page, when it came, and whether it was opened. */
+export type KeptShow = NonNullable<PrivateBoardFile['shows']>[number];
 
 export interface PrivatePlace {
   /** `<root>/boards/<key>` */
@@ -231,6 +234,36 @@ export class PrivateBoard {
     if (n === 0) return 0;
     const { consents: _gone, ...rest } = this.data;
     this.data = rest;
+    this.save();
+    return n;
+  }
+
+  /** What finished builds have to show, one per chapter, oldest first. */
+  get shows(): readonly KeptShow[] {
+    return this.data.shows ?? [];
+  }
+
+  /** Keep what a finished build shows. It takes the place of the chapter's last one, and the oldest go past `MAX_SHOWS`. */
+  addShow(show: KeptShow): void {
+    const kept = this.shows.filter((x) => x.chapter !== show.chapter);
+    this.data = { ...this.data, shows: [...kept, show].slice(-MAX_SHOWS) };
+    this.save();
+  }
+
+  /**
+   * Drop the shows that `keep` does not keep, or all of them. Returns how many went. The file
+   * is written only when one did.
+   */
+  dropShows(keep: (show: KeptShow) => boolean = () => false): number {
+    const before = this.shows;
+    const after = before.filter(keep);
+    const n = before.length - after.length;
+    if (n === 0) return 0;
+    if (after.length > 0) this.data = { ...this.data, shows: after };
+    else {
+      const { shows: _gone, ...rest } = this.data;
+      this.data = rest;
+    }
     this.save();
     return n;
   }

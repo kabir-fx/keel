@@ -1,5 +1,6 @@
 import type { PipelinePicture } from '@keel/protocol';
 import { useState } from 'react';
+import { asPart } from './build';
 import { FlatSvg, LayersSvg, layersSize, layoutFlat, FLAT_FULL } from './PipeSvg';
 import { Gaps, StateChip, Strip, wholeClass } from './parts';
 import type { PipeModel, WalkMarks } from './pipemodel';
@@ -30,7 +31,7 @@ function usePipeView(spec: PipeView | undefined, board: PipeView | undefined): [
 /** The switch between Layers and Flat. */
 export function ViewSwitch({ view, onPick }: { view: PipeView; onPick: (v: PipeView) => void }) {
   return (
-    <div className="kp-switch" role="group" aria-label="How the model is drawn">
+    <div className="kp-switch" role="group" aria-label="How the model is drawn" {...asPart('block')}>
       {(['layers', 'flat'] as const).map((v) => (
         <button
           key={v}
@@ -54,7 +55,7 @@ export function Legend({ pm, walk }: { pm: PipeModel; walk?: WalkMarks }) {
   const used = LOOK_ORDER.filter((l) => pm.parts.some((p) => lookOf(p) === l));
   if (used.length === 0 && !walk) return null;
   return (
-    <div className="kp-legend" aria-label="How to read it">
+    <div className="kp-legend" aria-label="How to read it" {...asPart('block')}>
       {used.map((l) => (
         <StateChip key={l} state={l} />
       ))}
@@ -91,6 +92,7 @@ export function PipelineCard({ item, state, markings, view, onAct }: PictureProp
   return (
     <article
       className={`kp kp-pipeline${wholeClass(m)}`}
+      {...asPart('frame')}
       data-kind="pipeline"
       data-view={shown}
       data-live={pm.live ? '' : undefined}
@@ -101,13 +103,13 @@ export function PipelineCard({ item, state, markings, view, onAct }: PictureProp
         <ViewSwitch view={shown} onPick={pick} />
       </div>
       {pm.parts.length === 0 ? (
-        <p className="kp-caption">The model has no part in a lane yet.</p>
+        <p className="kp-caption" {...asPart('block')}>The model has no part in a lane yet.</p>
       ) : shown === 'layers' ? (
         <div className="kp-pipeline__layers">
           <LayersSvg {...svgProps} />
         </div>
       ) : (
-        <div className="kp-sheet kp-pipeline__flat">
+        <div className="kp-sheet kp-pipeline__flat" {...asPart('frame')}>
           <FlatSvg {...svgProps} />
         </div>
       )}

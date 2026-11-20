@@ -90,10 +90,28 @@ export interface BuildJob {
   resume: boolean;
 }
 
+/**
+ * What a finished build has to show the owner: the files as they were built, and the page
+ * among them to open. The board server serves the folder from an address of its own, never
+ * from the board's, and runs nothing to show it. A build with nothing a browser can open by
+ * itself (a command, a server, a page that needs a build step) gives none.
+ */
+export interface BuildShow {
+  /**
+   * A folder that holds a copy of the built files. It is inside the builder's private folder
+   * (`BuilderContext.stateDir`), so nothing in the repository can change what is shown.
+   */
+  dir: string;
+  /** The page to open, as a path inside `dir` with `/` between its parts: `index.html`. */
+  page: string;
+}
+
 export interface BuildResult {
   /** `done`: every part on the track is built. `paused`: stopped when asked. `failed`: it could not go on. */
   outcome: 'done' | 'paused' | 'failed';
   note?: string;
+  /** With `done` only: what the owner can look at now. */
+  show?: BuildShow;
 }
 
 export interface Builder {

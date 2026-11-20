@@ -38,13 +38,15 @@ export type ClientMessage = z.infer<typeof ClientMessage>;
 
 /** From the server to the app, over the websocket. */
 export type ServerMessage =
-  | { t: 'init'; name: string; role: z.infer<typeof Actor>; events: BoardEvent[]; presence: Presence; build?: BoardInfo['build'] }
+  | { t: 'init'; name: string; role: z.infer<typeof Actor>; events: BoardEvent[]; presence: Presence; build?: BoardInfo['build']; shows?: BoardInfo['shows'] }
   | { t: 'event'; event: BoardEvent }
   | { t: 'ok'; ref: string; event: BoardEvent }
   | { t: 'refused'; ref: string; rule: RuleId; reason: string }
   | { t: 'presence'; presence: Presence }
   /** What the server's build driver does now, sent when it changes. `null` when no build is going. */
   | { t: 'build'; build: NonNullable<BoardInfo['build']> | null }
+  /** Every built chapter the owner can look at now, sent to the owner's page when it changes. Empty when there is none. */
+  | { t: 'shows'; shows: NonNullable<BoardInfo['shows']> }
   | { t: 'pong' };
 
 /** The reply to a refused post, over HTTP. `index` is the draft that failed, when several were sent. */
@@ -110,6 +112,9 @@ export type ForeignRange = z.infer<typeof ForeignRange>;
 /** At most this many runs are kept apart. Past it, the two oldest are joined. */
 export const MAX_FOREIGN_RANGES = 32;
 
+/** The most built chapters whose result is kept to be shown. The oldest go first. */
+export const MAX_SHOWS = 40;
+
 /** Did this event, by its id or its number, come with a log from outside, and is not kept yet? */
 export function isForeign(ranges: readonly ForeignRange[] | undefined, event: string | number): boolean {
   if (!ranges || ranges.length === 0) return false;
@@ -146,6 +151,14 @@ export interface BoardInfo {
     part?: string;
     check?: string;
   };
+  /**
+   * What the owner can look at: for each built chapter that has something to show, the
+   * address of its page. The address is on a port of its own, so the page shown is never in
+   * the board's origin and cannot act as the owner. It holds a key made new for each start of
+   * the server, and it is said to the owner only: never to the agent or the system, and never
+   * in the log. Left out when there is nothing to show.
+   */
+  shows?: Record<string, string>;
 }
 
 /** How long a one-time code in a printed address works, in ms. It also stops working the first time it is used. */
@@ -214,6 +227,16 @@ export const PrivateBoardFile = z.strictObject({
   log: z.strictObject({ bytes: z.number().int().min(0), sha256: z.string().regex(/^[0-9a-f]{64}$/) }).optional(),
   /** The events that came with a log from outside, until the owner keeps them (`ROUTES.keep`). */
   foreign: z.array(ForeignRange).max(MAX_FOREIGN_RANGES).optional(),
+  /**
+   * What the builds finished on this machine have to show (`BuildShow`), one per chapter, so a
+   * built chapter can be looked at again after the server starts anew. It is kept here and
+   * not in the log: a folder on this machine is nothing a repository may name. `opened` is
+   * true once the page was opened for the owner, which happens once.
+   */
+  shows: z
+    .array(z.strictObject({ chapter: Id, dir: z.string().min(1).max(4096), page: z.string().min(1).max(300), at: z.string(), opened: z.boolean().optional() }))
+    .max(MAX_SHOWS)
+    .optional(),
 });
 export type PrivateBoardFile = z.infer<typeof PrivateBoardFile>;
 

@@ -6,7 +6,8 @@
 /* ------------------------------------------------------------ agent cursor */
 
 /* In the overlay, at one size at any zoom. Its place is a transform the page writes as the camera
-   and the agent move (overlay/cursor.tsx), so it has no transition of its own. */
+   and the agent move (overlay/cursor.tsx), so its place has no transition of its own: only how
+   strongly it shows does. */
 .agent-cursor {
   position: absolute;
   left: 0;
@@ -15,16 +16,33 @@
   align-items: flex-start;
   gap: 2px;
   pointer-events: none;
+  transition: opacity 160ms ease-out;
 }
-/* A white halo under the arrow and round the tag, so the cursor reads on any picture. */
-.agent-cursor__arrow { flex: none; overflow: visible; }
+/* A white halo under the arrow and round the tag, so the cursor reads on any picture, and a soft
+   shadow under the arrow, so it sits above the board. */
+.agent-cursor__arrow { flex: none; overflow: visible; filter: drop-shadow(0 1px 1.5px rgb(16 24 40 / 0.28)); }
 .agent-cursor__halo { fill: #fff; stroke: #fff; stroke-width: 4; stroke-linejoin: round; }
 .agent-cursor__body { fill: var(--agent); stroke: #fff; stroke-width: 1.4; stroke-linejoin: round; }
-.agent-cursor__tag { margin-top: 16px; padding: 2px 8px; border-radius: 999px; background: var(--agent); color: #fff; font: 600 12px/16px var(--font-ui); box-shadow: 0 0 0 2px #fff; }
+.agent-cursor__tag { display: flex; align-items: center; gap: 6px; margin-top: 16px; padding: 2px 8px; border-radius: 999px; background: var(--agent); color: #fff; font: 600 12px/16px var(--font-ui); white-space: nowrap; box-shadow: 0 0 0 2px #fff; }
+/* With no room for the tag right of the point inside the board, it hangs left of the point, still
+   below the tip: under the edge of what the cursor rests by, not over it (overlay/cursor.tsx). */
+.agent-cursor[data-flip] .agent-cursor__tag { position: absolute; top: 0; right: calc(100% - 4px); }
+/* What the agent does, after its name, in the tag: the pill's words and its three quiet dots, in white. */
+.agent-cursor__words { font-weight: 500; }
+.agent-cursor__tag .presence-sign { margin-left: 0; }
+.agent-cursor__tag .presence-sign i { width: 4px; height: 4px; background: #fff; }
+/* At rest it holds a moment, then dims (the hold and the fade come from motion/timing.ts); off
+   screen at rest it is not drawn at all. Working, it brightens at once. */
+.agent-cursor[data-rest] { opacity: 0.5; transition: opacity var(--cursor-dim, 400ms) ease-in-out var(--cursor-hold, 1200ms); }
+.agent-cursor[data-rest][data-off] { visibility: hidden; }
 /* Faint, as Excalidraw draws a collaborator (clients.ts): while the agent is away, and while its
    place is off screen, where the cursor waits at the board's edge with its words put away. */
-.agent-cursor[data-away], .agent-cursor[data-off] { opacity: 0.3; }
+.agent-cursor[data-away], .agent-cursor[data-off] { opacity: 0.3; transition-delay: 0s; }
 .agent-cursor[data-off] .agent-cursor__tag, .agent-cursor[data-off] .agent-cursor__said { display: none; }
+/* With reduced motion nothing is timed: it dims at once at rest. */
+@media (prefers-reduced-motion: reduce) {
+  .agent-cursor { transition: none !important; }
+}
 .agent-cursor__said {
   position: absolute;
   left: 34px;

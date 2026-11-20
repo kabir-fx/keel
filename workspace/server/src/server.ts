@@ -12,7 +12,9 @@ import type {
   BoardInfo,
   Builder,
   BuilderContext,
+  BuildShow,
   DigestReply,
+  Id,
   LinkContext,
   Refusal,
   ServerFile,
@@ -28,8 +30,11 @@ import { errCode } from './files';
 import { MAX_ITEMS, idsParam, itemViews } from './items';
 import { loadBuilder, loadLink } from './link';
 import { PresenceHub } from './presence';
+import type { KeptShow } from './private';
 import { PrivateBoard, takeLock } from './private';
 import { CHALLENGE_HEADER, PROOF_HEADER, ensureGitignore, proofOf, removeServerFile, sameSecret, writeServerFile } from './serverfile';
+import type { CheckedShow, ShowServer } from './show';
+import { checkShow, startShowServer } from './show';
 import { plain } from './text';
 import type { Clock } from './wake';
 import { WakeScheduler } from './wake';
@@ -121,6 +126,12 @@ export interface ServerOptions {
   clock?: Clock;
   now?: () => Date;
   log?: (message: string) => void;
+  /**
+   * Open the page a finished build shows, in the owner's browser. Called once, for a show that
+   * just came, and never for one read back at start. Left out: nothing is opened, and the feed
+   * says where to press to look. The server itself never starts a program.
+   */
+  openShow?: (url: string) => void;
 }
 
 export interface RunningServer {
@@ -146,6 +157,10 @@ export interface RunningServer {
   readonly builderName: string;
   /** The build's life on this board. */
   readonly builds: BuildRunner;
+  /** What the owner can look at now: for each built chapter with something to show, the address of its page. */
+  shows(): Record<string, string>;
+  /** `http://127.0.0.1:<port>` of the listener for shows, once it has started. Never one the board allows. */
+  showOrigin(): string | undefined;
   close(): Promise<void>;
   /** Resolves when the server has closed, for any reason: `close`, or a stop over `ROUTES.stop`. */
   readonly closed: Promise<void>;
@@ -169,6 +184,11 @@ class HttpError extends Error {
 
 const ACTORS = ['owner', 'agent', 'system'] as const satisfies readonly Actor[];
 const NO_AGENT = 'no agent is linked';
+
+/** What the feed says once a finished build's page is open in the owner's browser. */
+export const SHOW_OPENED = 'It is open in your browser now. "See it" on the build panel opens it again.';
+/** What the feed says when it was not opened: the owner started the board with --no-browser. */
+export const SHOW_WAITS = 'You can look at it: press "See it" on the build panel.';
 
 /** At most this many left-out lines are listed when a board opens. The rest are counted. */
 const PROBLEMS_SHOWN = 5;
@@ -212,6 +232,8 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     let dropped = 0;
     try {
       dropped = own.dropConsents();
+      // What the builds showed was of that board too. Nothing a log says brings it back.
+      own.dropShows();
     } catch (e) {
       log(`could not write the board's private file: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -279,6 +301,9 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   let linkName = 'none';
   let builderName = 'none';
   let builds: BuildRunner | undefined;
+  /** The listener for what finished builds show, started the first time there is something. */
+  let showServer: ShowServer | undefined;
+  let showStarting: Promise<ShowServer> | undefined;
 
   /* ---------------------------------------------------------- helpers */
 
@@ -300,6 +325,32 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     return typeof host === 'string' && hosts.has(host.toLowerCase());
   };
 
+  /**
+   * A kept show is current while its chapter is built, and was built no later than the show
+   * came. A chapter that went back to building, or was built again since, shows nothing old.
+   */
+  const current = (kept: KeptShow): boolean => {
+    const c = board.state.chapters[kept.chapter];
+    if (c?.state !== 'built') return false;
+    return c.builtAt === undefined || !(Date.parse(c.builtAt) > Date.parse(kept.at));
+  };
+
+  /** The address of each current show. For the owner only: it holds the key of the listener. */
+  const showsNow = (): Record<string, string> => {
+    const out: Record<string, string> = {};
+    if (!showServer) return out;
+    for (const kept of own.shows) {
+      const url = current(kept) ? showServer.url(kept.chapter) : undefined;
+      if (url) out[kept.chapter] = url;
+    }
+    return out;
+  };
+  const ownerShows = (role: Actor): { shows?: Record<string, string> } => {
+    if (role !== 'owner') return {};
+    const shows = showsNow();
+    return Object.keys(shows).length > 0 ? { shows } : {};
+  };
+
   const info = (role: Actor): BoardInfoReply => {
     const build = builds?.status();
     return {
@@ -312,6 +363,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       builder: builderName,
       ...(own.foreign ? { foreign: [...own.foreign] } : {}),
       ...(build ? { build } : {}),
+      ...ownerShows(role),
     };
   };
 
@@ -569,7 +621,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     ws.on('close', () => clients.delete(ws));
     ws.on('error', () => clients.delete(ws));
     const build = builds?.status();
-    send(ws, { t: 'init', name: board.state.name, role: actor, events: [...board.events], presence: presence.get(), ...(build ? { build } : {}) });
+    send(ws, { t: 'init', name: board.state.name, role: actor, events: [...board.events], presence: presence.get(), ...(build ? { build } : {}), ...ownerShows(actor) });
 
     ws.on('message', (data, isBinary) => {
       if (isBinary) return send(ws, { t: 'refused', ref: '', rule: 'shape', reason: 'Send JSON text.' });
@@ -629,6 +681,18 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   };
   const buildWatch = setInterval(pushBuild, 1000);
   buildWatch.unref();
+
+  // What the owner can look at, pushed to the owner's pages when it changes: a show that came,
+  // or a chapter that is no longer built. Never to the agent or the system.
+  let lastShows = '{}';
+  const pushShows = (): void => {
+    const shows = showsNow();
+    const json = JSON.stringify(shows);
+    if (json === lastShows) return;
+    lastShows = json;
+    const text = JSON.stringify({ t: 'shows', shows } satisfies ServerMessage);
+    for (const [ws, actor] of clients) if (actor === 'owner' && ws.readyState === WebSocket.OPEN) ws.send(text);
+  };
 
   /* ------------------------------------------------------------ start */
 
@@ -708,6 +772,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     for (const event of events) broadcast({ t: 'event', event });
     // After the build driver has heard the same events.
     queueMicrotask(pushBuild);
+    pushShows();
   });
   presence.subscribe((p) => broadcast({ t: 'presence', presence: p }));
 
@@ -747,6 +812,9 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
         server.close(() => resolve());
         server.closeAllConnections();
       });
+      // The listener for shows goes with the server. One still starting is closed once it has.
+      const shown = showServer ?? (await showStarting?.catch(() => undefined));
+      await shown?.close();
       board.close();
       release();
     })().finally(() => markClosed()));
@@ -800,6 +868,82 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     throw e;
   }
 
+  /* ------------------------------------------------------------ shows */
+
+  /** The listener for shows, started once, the first time there is something to show. */
+  const showListener = (): Promise<ShowServer> => {
+    if (showStarting) return showStarting;
+    // None starts once the server is closing: nothing would close it.
+    if (closing) return Promise.reject(new Error('the board server is closing'));
+    showStarting = startShowServer(log).then(
+      (s) => (showServer = s),
+      (e: unknown) => {
+        // The next show tries again.
+        showStarting = undefined;
+        throw e;
+      },
+    );
+    return showStarting;
+  };
+
+  /**
+   * A finished build gave something to show: check it, serve it, keep it, tell the owner's
+   * pages, then open it once and say so in the feed. The feed line holds no address: the log
+   * goes with the repository, and an address with the key is for the owner only.
+   */
+  const takeShow = async (chapter: Id, given: BuildShow): Promise<void> => {
+    const checked = checkShow(own.place.builderDir, given.dir, given.page);
+    if ('refused' in checked) {
+      log(`build: what the builder gave to show for "${chapter}" was refused, so nothing is shown: ${checked.refused}.`);
+      return;
+    }
+    const listener = await showListener();
+    if (closing) return;
+    listener.put(chapter, checked);
+    const kept: KeptShow = { chapter, dir: checked.dir, page: checked.page, at: now().toISOString() };
+    own.addShow(kept);
+    listener.retain(new Set(own.shows.map((x) => x.chapter)));
+    pushShows();
+    const url = listener.url(chapter);
+    let opened = false;
+    if (opts.openShow && url) {
+      try {
+        opts.openShow(url);
+        opened = true;
+      } catch (e) {
+        log(`could not open what the build of "${chapter}" shows: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    // Opened once: never again, not at the next start either.
+    if (opened) own.addShow({ ...kept, opened: true });
+    const text = opened ? SHOW_OPENED : SHOW_WAITS;
+    const r = board.post([{ type: 'feed.add', chapter, kind: 'update', text }], 'system');
+    if (!r.ok) log(`build: the feed refused an update (${r.rule}: ${r.reason})`);
+  };
+
+  /**
+   * At start: serve again what the builds showed before, on this start's listener with its
+   * new key, while it still holds. Its chapter is still built, and its folder and page still
+   * pass the checks. The others are dropped. Nothing is opened.
+   */
+  const restoreShows = async (): Promise<void> => {
+    const again: Array<{ chapter: Id; checked: CheckedShow }> = [];
+    try {
+      own.dropShows((kept) => {
+        if (!current(kept)) return false;
+        const checked = checkShow(own.place.builderDir, kept.dir, kept.page);
+        if ('refused' in checked) return false;
+        again.push({ chapter: kept.chapter, checked });
+        return true;
+      });
+    } catch (e) {
+      log(`could not write the board's private file: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (again.length === 0) return;
+    const listener = await showListener();
+    for (const { chapter, checked } of again) listener.put(chapter, checked);
+  };
+
   /** What the pill says when the agent is not in a wake and nothing builds. */
   const rest = (): PresenceUpdate => (link ? { state: 'listening' } : { state: 'away', note: NO_AGENT });
   const runner = new BuildRunner({
@@ -813,9 +957,19 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     presence,
     inWake: () => scheduler?.busy ?? false,
     rest,
+    show: (chapter, given) => {
+      takeShow(chapter, given).catch((e: unknown) => log(`could not show the build of "${chapter}": ${e instanceof Error ? e.message : String(e)}`));
+    },
     log: (m) => log(`build: ${m}`),
   });
   builds = runner;
+  try {
+    await restoreShows();
+  } catch (e) {
+    log(`could not serve what the builds showed before: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  // A page that connected while the server started hears what is served again. Later ones get it with their init.
+  pushShows();
 
   if (link) {
     linkName = link.name;
@@ -861,6 +1015,8 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     scheduler,
     builderName,
     builds: runner,
+    shows: showsNow,
+    showOrigin: () => showServer?.origin,
     close,
     closed,
     releaseSync: release,

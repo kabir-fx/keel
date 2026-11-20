@@ -8,10 +8,16 @@ import { fileURLToPath } from 'node:url';
 
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 export const BIN = here('../server/bin/keel-board.mjs');
-export const APP = here('../app/dist');
+/**
+ * The app the server serves: this run's own build, which `playwright.config.ts` makes into
+ * `KEEL_E2E_DIST`, so a live test runs the code under test; else the tree's `app/dist`.
+ */
+export const APP = process.env.KEEL_E2E_DIST && existsSync(join(process.env.KEEL_E2E_DIST, 'index.html')) ? process.env.KEEL_E2E_DIST : here('../app/dist');
 export const ECHO = here('./agents/echo.mjs');
 /** A stand-in agent that draws a model from a note and reads a solidified idea back as a blueprint. */
 export const PLANNER = here('./agents/planner.mjs');
+/** A stand-in agent that draws a placeholder and finishes it, then draws its picture again on the next note. */
+export const DRAWER = here('./agents/drawer.mjs');
 /** A scripted builder that commits each part in its own git worktree. */
 export const BUILDER = here('./agents/builder.mjs');
 export const HOSTED = here('../plugin/dist/hosted-link.js');

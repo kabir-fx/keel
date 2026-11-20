@@ -6,6 +6,8 @@
 //   $FAKE_SLOW_MS=n   each turn waits n ms before it ends.
 //   $FAKE_FAIL_PART=x the part x gets a file that makes the check fail.
 //   $FAKE_NO_COMMIT=1 no commit is made, so board_check refuses.
+//   $FAKE_FILES={...} the first part also commits these files, by path, with their text.
+//   $FAKE_LINKS={...} and these symbolic links, by path, with their target.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -61,6 +63,7 @@ const git = (...a) => execFileSync('git', a, { cwd: process.cwd(), stdio: ['igno
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let inited = false;
+let extrasDone = false;
 let spent = 0;
 let busy = Promise.resolve();
 const rl = readline.createInterface({ input: process.stdin });
@@ -91,6 +94,21 @@ async function turn(line) {
       fs.writeFileSync(path.join('parts', `${part}.txt`), bad ? 'FAIL\n' : `the ${part} part\n`);
       await tool('board_try', {});
       git('add', 'parts');
+      if (!extrasDone) {
+        extrasDone = true;
+        const files = JSON.parse(process.env.FAKE_FILES ?? '{}');
+        const links = JSON.parse(process.env.FAKE_LINKS ?? '{}');
+        for (const [f, text] of Object.entries(files)) {
+          fs.mkdirSync(path.dirname(f), { recursive: true });
+          fs.writeFileSync(f, text);
+        }
+        for (const [f, target] of Object.entries(links)) {
+          fs.mkdirSync(path.dirname(f), { recursive: true });
+          fs.symlinkSync(target, f);
+        }
+        const extra = [...Object.keys(files), ...Object.keys(links)];
+        if (extra.length) git('add', '-f', '--', ...extra);
+      }
       git('commit', '--quiet', '-m', `${part}: the part`);
     }
     const check = await tool('board_check', { part });

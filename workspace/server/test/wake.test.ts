@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { BoardEvent } from '@keel/protocol';
+import type { BoardEvent, ForeignRange } from '@keel/protocol';
+import { digest } from '@keel/protocol';
 import { Board } from '../src/board';
 import { PresenceHub } from '../src/presence';
-import { QUIET_LONG, QUIET_SHORT, WAKE_TIMEOUT, WakeScheduler, quietAfter } from '../src/wake';
+import { QUIET_LONG, QUIET_SHORT, WAKE_PRESENCE, WAKE_TIMEOUT, WakeScheduler, quietAfter, wakePresence } from '../src/wake';
 import { CH, FakeClock, FakeLink, chapter, flush, ink, note, tempRepo } from './helpers';
 
 const boards: Board[] = [];
@@ -10,14 +11,15 @@ afterEach(() => {
   for (const b of boards.splice(0)) b.close();
 });
 
-function setup() {
+/** A board, its scheduler, and what it needs. `foreign` says which events came with the log from outside. */
+function setup(opts: { foreign?: () => readonly ForeignRange[] | undefined } = {}) {
   const board = Board.open(tempRepo());
   boards.push(board);
   board.post([chapter()], 'owner');
   const clock = new FakeClock();
   const link = new FakeLink();
   const presence = new PresenceHub({ state: 'listening' });
-  const scheduler = new WakeScheduler({ link, state: () => board.state, presence, clock });
+  const scheduler = new WakeScheduler({ link, state: () => board.state, presence, clock, ...opts });
   board.subscribe((events) => scheduler.notify(events));
   const owner = (...drafts: unknown[]) => {
     const r = board.post(drafts, 'owner');
@@ -322,6 +324,79 @@ describe('the presence pill during a wake', () => {
     t.clock.advance(QUIET_SHORT);
     await flush();
     expect(t.presence.get()).toMatchObject({ state: 'away', note: 'the agent did not answer: claude exited[2J with code 1 see the log' });
+  });
+});
+
+describe('where the agent’s cursor is during a wake', () => {
+  it('a note wakes the agent with its cursor on that note, and the pill’s words as before', () => {
+    const t = setup();
+    t.owner(note('m1', 'one engine'));
+    t.clock.advance(QUIET_SHORT);
+    expect(t.presence.get()).toEqual({ ...WAKE_PRESENCE, cursor: { item: 'm1' }, since: expect.any(String) });
+  });
+
+  it('with several fresh marks, the cursor goes to the newest', async () => {
+    const t = setup();
+    t.owner(ink('m1'));
+    t.clock.advance(1000);
+    t.owner(ink('m2'));
+    t.clock.advance(1000);
+    t.owner(note('m3', 'and this'));
+    t.clock.advance(QUIET_SHORT);
+    expect(t.presence.get().cursor).toEqual({ item: 'm3' });
+
+    // The next wake: m1 to m3 are still open but not fresh, and the newest fresh one is m4.
+    t.owner(ink('m4'));
+    t.link.finish();
+    await flush();
+    t.clock.advance(QUIET_LONG);
+    expect(t.link.wakes).toHaveLength(2);
+    expect(t.presence.get().cursor).toEqual({ item: 'm4' });
+  });
+
+  it('an act is not on the board: a wake for an act alone gives the cursor no place', () => {
+    const t = setup();
+    t.owner({ type: 'solidify', chapter: CH, picks: [], parts: [] });
+    t.clock.advance(QUIET_SHORT);
+    expect(t.link.wakes[0]!.reason).toBe('act');
+    expect(t.presence.get()).toEqual({ ...WAKE_PRESENCE, since: expect.any(String) });
+  });
+
+  it('a mark and an act in one pause: the cursor goes to the mark, though the act came after it', () => {
+    const t = setup();
+    t.owner(note('m1', 'this one'));
+    t.owner({ type: 'solidify', chapter: CH, picks: [], parts: [] });
+    t.clock.advance(QUIET_SHORT);
+    expect(t.link.wakes[0]!.reason).toBe('act');
+    expect(t.presence.get()).toEqual({ ...WAKE_PRESENCE, cursor: { item: 'm1' }, since: expect.any(String) });
+  });
+
+  it('a mark that came with the log from outside is not where the agent reads: the cursor goes to the owner\'s, or nowhere', () => {
+    let outside: ForeignRange[] | undefined;
+    const t = setup({ foreign: () => outside });
+    t.owner(note('m1', 'mine'));
+    const [x] = t.owner(note('x1', 'from another machine'));
+    const n = Number(x!.id.slice(1));
+    outside = [{ from: n, to: n }];
+    t.clock.advance(QUIET_SHORT);
+    expect(t.link.wakes).toHaveLength(1);
+    expect(t.presence.get()).toEqual({ ...WAKE_PRESENCE, cursor: { item: 'm1' }, since: expect.any(String) });
+
+    // Fresh, open and newest, but only the one from outside: no place.
+    const lone = setup();
+    const [y] = lone.owner(note('x2', 'from another machine'));
+    const m = Number(y!.id.slice(1));
+    const state = lone.board.state;
+    expect(wakePresence(digest(state, { foreign: [{ from: m, to: m }] }), state)).toEqual(WAKE_PRESENCE);
+  });
+
+  it('when the wake ends, the pill goes back to listening as before, naming no place', async () => {
+    const t = setup();
+    t.owner(note('m1', 'one engine'));
+    t.clock.advance(QUIET_SHORT);
+    t.link.finish();
+    await flush();
+    expect(t.presence.get()).toEqual({ state: 'listening', since: expect.any(String) });
   });
 });
 

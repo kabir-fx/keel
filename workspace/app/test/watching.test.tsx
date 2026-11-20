@@ -252,6 +252,98 @@ describe('the build panel', () => {
   });
 });
 
+/** The same board, built: every part on the track built by the system, so the chapter is built. */
+function built() {
+  const b = building();
+  for (const part of ['door', 'queue', 'loop']) {
+    b.must('system', { type: 'part.state', part, state: 'building' } as never);
+    b.must('system', { type: 'part.state', part, state: 'built', commit: 'abc1234', check: { cmd: 'make check', passed: true } } as never);
+  }
+  return b;
+}
+
+const SHOW = 'http://127.0.0.1:4791/?key=k1';
+
+describe('seeing what was built', () => {
+  it('a built chapter with a page to show: "See it" in the head, a link to a tab of its own', () => {
+    const src = localSource({ events: built().events });
+    src.setShows({ c1: SHOW });
+    render(<App source={src} />);
+    expect(screen.getByTestId('watch').dataset.state).toBe('built');
+    const link = screen.getByTestId('watch-show');
+    expect(link.tagName).toBe('A');
+    expect(link.textContent).toBe('See it');
+    expect(link.getAttribute('href')).toBe(SHOW);
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(link.className).toBe('watch__btn watch__btn--go');
+    expect(link.closest('.watch__head')).toBeTruthy();
+    // A link is reached by Tab like the buttons: nothing takes it out of the order.
+    expect(link.getAttribute('tabindex')).toBeNull();
+  });
+
+  it('is there when the panel is folded too', () => {
+    const src = localSource({ events: built().events });
+    src.setShows({ c1: SHOW });
+    render(<App source={src} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Fold the build away' }));
+    expect(screen.queryByTestId('feed')).toBeNull();
+    expect(screen.getByTestId('watch-show').getAttribute('href')).toBe(SHOW);
+    fireEvent.click(screen.getByRole('button', { name: 'Show the build' }));
+    expect(screen.getByTestId('watch-show').getAttribute('href')).toBe(SHOW);
+  });
+
+  it('comes when the server says there is something to show, and goes when it says there is nothing', () => {
+    const src = localSource({ events: built().events });
+    render(<App source={src} />);
+    expect(screen.queryByTestId('watch-show')).toBeNull();
+    act(() => src.setShows({ c1: SHOW }));
+    expect(screen.getByTestId('watch-show')).toBeTruthy();
+    act(() => src.setShows({}));
+    expect(screen.queryByTestId('watch-show')).toBeNull();
+  });
+
+  it('none while the chapter builds, even with an address for it: Pause stays as it was', () => {
+    const src = localSource({ events: building().events });
+    src.setShows({ c1: SHOW });
+    render(<App source={src} />);
+    expect(screen.getByTestId('watch').dataset.state).toBe('running');
+    expect(screen.queryByTestId('watch-show')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
+  });
+
+  it('none for a built chapter with no address, or an address for another chapter only', () => {
+    const src = localSource({ events: built().events });
+    render(<App source={src} />);
+    expect(screen.getByTestId('watch').dataset.state).toBe('built');
+    expect(screen.queryByTestId('watch-show')).toBeNull();
+    act(() => src.setShows({ c2: SHOW }));
+    expect(screen.queryByTestId('watch-show')).toBeNull();
+  });
+
+  it('never a link to an address the check drops', () => {
+    const src = localSource({ events: built().events });
+    render(<App source={src} />);
+    for (const bad of ['javascript:alert(1)', 'https://example.com/', 'file:///etc/hosts', 'not a url']) {
+      act(() => src.setShows({ c1: bad }));
+      expect(screen.queryByTestId('watch-show')).toBeNull();
+    }
+    expect(document.querySelector('a[href^="javascript"]')).toBeNull();
+  });
+
+  it('opens nothing by itself', () => {
+    const open = vi.fn();
+    vi.stubGlobal('open', open);
+    const src = localSource({ events: built().events });
+    src.setShows({ c1: SHOW });
+    render(<App source={src} />);
+    act(() => src.setShows({ c1: 'http://localhost:4792/' }));
+    expect(screen.getByTestId('watch-show').getAttribute('href')).toBe('http://localhost:4792/');
+    expect(open).not.toHaveBeenCalled();
+    expect(document.querySelector('iframe')).toBeNull();
+  });
+});
+
 describe('the desktop notification', () => {
   class FakeNotification {
     static permission: NotificationPermission = 'granted';

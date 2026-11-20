@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 /**
@@ -79,6 +80,11 @@ export async function gitOk(cwd: string, args: readonly string[], env: NodeJS.Pr
   const r = await git(cwd, args, env);
   if (r.code !== 0) throw new GitError(`git ${args.join(' ')} failed: ${(r.stderr || r.stdout).trim().slice(0, 400)}`);
   return r.stdout.trim();
+}
+
+/** True when there is a git to run. Asked in the temporary folder, which is there, so a missing folder is not taken for a missing git. */
+export async function gitInstalled(): Promise<boolean> {
+  return (await git(os.tmpdir(), ['--version'])).code === 0;
 }
 
 /** The top of the repository `dir` is in, or undefined when it is not a git repository. */
@@ -184,35 +190,132 @@ function linkIntact(dir: string, gitDir: string): boolean {
   }
 }
 
+/** What an operating system leaves in a folder by itself. It is nobody's work. */
+const SYSTEM_FILES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
+
+/**
+ * The files of the owner's in a repository with no commit: what git would put in a first
+ * commit, staged or not. Ignored files are not theirs to build on, and are left out by git.
+ * The board's own `.keel/` folder (at `board`, the board's folder inside the repository) and
+ * what an operating system drops are left out too.
+ */
+export async function ownerFiles(top: string, board = ''): Promise<string[]> {
+  const out = await gitOk(top, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  const keel = `${board ? `${board.split(path.sep).join('/')}/` : ''}.keel/`;
+  const entries = out.split('\0');
+  const files: string[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i]!;
+    if (e.length < 4) continue;
+    // A rename or a copy is followed by the name it came from, which is not a file of its own.
+    if (/^[RC]/.test(e)) i++;
+    const file = e.slice(3);
+    if (file.startsWith(keel) || SYSTEM_FILES.has(path.posix.basename(file))) continue;
+    files.push(file);
+  }
+  return files;
+}
+
+/**
+ * The owner's files in a folder that is no git repository: its entries other than the board's
+ * `.keel`, a `.git`, and what an operating system drops. A folder is one entry, written with a
+ * `/`. It stops after `few` names, and counts the rest up to a bound: `more` is how many past
+ * the names, or undefined when there were more than it counted.
+ */
+export function folderFiles(dir: string, few = 3, bound = 1000): { names: string[]; more: number | undefined } {
+  const names: string[] = [];
+  let more = 0;
+  let seen = 0;
+  const d = fs.opendirSync(dir);
+  try {
+    for (let e = d.readSync(); e !== null; e = d.readSync()) {
+      if (e.name === '.keel' || e.name === '.git' || SYSTEM_FILES.has(e.name)) continue;
+      if (++seen > bound) return { names, more: undefined };
+      if (names.length < few) names.push(e.isDirectory() ? `${e.name}/` : e.name);
+      else more++;
+    }
+  } finally {
+    d.closeSync();
+  }
+  return { names, more };
+}
+
+/**
+ * A repository with no commit that holds files of the owner's. The builder's copy is made from
+ * commits, so it would not have them, and committing them for the owner is not the builder's
+ * to do: a file could hold a secret, and a commit keeps it.
+ */
+export class OwnerFilesError extends GitError {
+  override name = 'OwnerFilesError';
+  constructor(readonly files: string[]) {
+    super(`The repository has no commit yet, and it holds files of the owner's: ${files.slice(0, 3).join(', ')}${files.length > 3 ? `, and ${files.length - 3} more` : ''}.`);
+  }
+}
+
+/**
+ * The first commit of a branch that starts from nothing: an empty tree, made by plumbing in the
+ * owner's repository. Nothing of the owner's moves: not their HEAD, not their index, not a file.
+ * No hook runs and nothing is signed. The owner is the author when git knows them; the committer
+ * is always the builder.
+ */
+async function rootCommit(repo: string, branch: string): Promise<string> {
+  const quiet = ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false'];
+  const who: NodeJS.ProcessEnv = (await hasIdentity(repo))
+    ? { GIT_COMMITTER_NAME: BUILDER_IDENTITY.GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL: BUILDER_IDENTITY.GIT_COMMITTER_EMAIL }
+    : { ...BUILDER_IDENTITY };
+  // `git mktree` reads the tree from its input, which is empty: so the tree is.
+  const tree = await gitOk(repo, [...quiet, 'mktree']);
+  const subject = `The start of ${branch}, from an empty folder`;
+  const body = 'The folder had no commit to build on, so this build\'s branch starts here, from nothing. The build\'s own commits follow.';
+  return gitOk(repo, [...quiet, 'commit-tree', '--no-gpg-sign', tree, '-m', subject, '-m', body], who);
+}
+
+/** Is the worktree at `dir` on `branch`, at a commit? An unborn HEAD is not a worktree to go on in. */
+async function onBranch(dir: string, gitDir: string, branch: string): Promise<boolean> {
+  const pin = pinEnv(gitDir, dir);
+  const ref = await git(dir, ['symbolic-ref', '--quiet', 'HEAD'], pin);
+  return ref.code === 0 && ref.stdout.trim() === `refs/heads/${branch}` && (await headOf(dir, pin)) !== undefined;
+}
+
 /**
  * The builder's worktree for one chapter, on its own branch, made from the owner's HEAD the
  * first time and reused after. `dir` is the builder's private folder: anything there that is
  * not this worktree is the builder's own leftover, and is cleared. So is a worktree whose
  * `.git` was changed: its commits are on the branch, and it is made again from there.
  * `gitDir` is the worktree's own git folder: run every git in the worktree with `pinEnv`.
+ *
+ * A repository with no commit gets a branch that starts from nothing (`fromNothing`), when it
+ * holds nothing of the owner's; `board` is where the board's folder is inside it. When it does
+ * hold files, this throws `OwnerFilesError`.
  */
-export async function ensureWorktree(repo: string, dir: string, branch: string): Promise<{ created: boolean; base?: string; gitDir: string }> {
+export async function ensureWorktree(repo: string, dir: string, branch: string, o: { board?: string } = {}): Promise<{ created: boolean; base?: string; gitDir: string; fromNothing?: boolean }> {
   if (fs.existsSync(dir)) {
     const known = await worktreeGitDir(repo, dir);
-    if (known !== undefined && linkIntact(dir, known) && (await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'], pinEnv(known, dir))).stdout.trim() === branch) {
+    if (known !== undefined && linkIntact(dir, known) && (await onBranch(dir, known, branch))) {
       return { created: false, gitDir: known };
     }
     fs.rmSync(dir, { recursive: true, force: true });
   }
   await git(repo, ['worktree', 'prune']);
   fs.mkdirSync(path.dirname(dir), { recursive: true, mode: 0o700 });
-  const made = async (created: boolean, base?: string) => {
+  const made = async (created: boolean, base?: string, fromNothing = false) => {
     const gitDir = await worktreeGitDir(repo, dir);
     if (gitDir === undefined) throw new GitError(`git made a worktree at ${dir}, but the repository does not list it.`);
-    return { created, ...(base !== undefined ? { base } : {}), gitDir };
+    return { created, ...(base !== undefined ? { base } : {}), gitDir, ...(fromNothing ? { fromNothing } : {}) };
   };
   if (await branchExists(repo, branch)) {
     await gitOk(repo, ['worktree', 'add', '--quiet', dir, branch]);
     return made(false);
   }
   const head = await headOf(repo);
-  // What is missing, and no more: how to try again is said by who reports this, which knows what the page offers.
-  if (!head) throw new GitError('The repository has no commit yet, so there is nothing to build on. Make a first commit.');
+  if (!head) {
+    const theirs = await ownerFiles(repo, o.board);
+    if (theirs.length > 0) throw new OwnerFilesError(theirs);
+    // Never a commit on the owner's branch, and not `worktree add --orphan`, which needs git 2.42.
+    const root = await rootCommit(repo, branch);
+    await gitOk(repo, ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--quiet', '-b', branch, dir, root]);
+    return made(true, root, true);
+  }
   // From the commit, not the owner's branch name: the owner's branch never moves.
   await gitOk(repo, ['worktree', 'add', '--quiet', '-b', branch, dir, head]);
   return made(true, head);

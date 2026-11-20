@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -13,6 +13,12 @@ import { join } from 'node:path';
  *
  * `--link-opt builder-step-ms=<ms>` sets how long each part takes (default 700), so a test can
  * watch the parts fill in one by one. `pause()` ends the run after the current part.
+ *
+ * `--link-opt builder-show=1` makes a finished run show something, as a real builder may: a
+ * small page that stands alone (a heading, a count and a button, with its own script and style
+ * sheet), written as plain files into `show-<chapter>` inside the builder's private folder, and
+ * returned as `show: { dir, page: 'index.html' }`. Off by default. With no private folder,
+ * nothing is shown.
  *
  * Every builder the server creates is kept in `builders`, newest last.
  */
@@ -56,6 +62,58 @@ export function createBuilder(ctx) {
     return dir;
   };
 
+  /** The page a finished run shows: plain files, written fresh, in a folder of the builder's own. */
+  const showPage = (job) => {
+    if (!ctx.stateDir) return undefined;
+    const dir = join(ctx.stateDir, `show-${job.chapter}`);
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'index.html'),
+      [
+        '<!doctype html>',
+        '<html lang="en">',
+        '<head>',
+        '<meta charset="utf-8">',
+        '<title>What was built</title>',
+        // An icon of its own: else the browser asks for /favicon.ico, which has no key, and gets a 404.
+        '<link rel="icon" href="data:,">',
+        '<link rel="stylesheet" href="style.css">',
+        '<script type="module" src="app.js"></script>',
+        '</head>',
+        '<body>',
+        '<h1>The engine is built</h1>',
+        '<p>Requests taken: <output data-testid="count">0</output></p>',
+        '<button type="button">Send a request</button>',
+        '</body>',
+        '</html>',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(dir, 'app.js'),
+      [
+        "const count = document.querySelector('[data-testid=\"count\"]');",
+        "document.querySelector('button').addEventListener('click', () => {",
+        '  count.textContent = String(Number(count.textContent) + 1);',
+        '});',
+        "document.documentElement.dataset.opener = window.opener ? 'yes' : 'no';",
+        "document.documentElement.dataset.ready = '1';",
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(dir, 'style.css'),
+      [
+        'body { font-family: system-ui, sans-serif; margin: 48px; background: rgb(250, 248, 240); }',
+        'h1 { color: rgb(32, 64, 128); }',
+        'button { padding: 8px 16px; border-radius: 6px; }',
+        '',
+      ].join('\n'),
+    );
+    return { dir, page: 'index.html' };
+  };
+
   const check = (cmd, cwd) => {
     try {
       execFileSync('sh', ['-c', cmd], { cwd, stdio: 'ignore', timeout: 20_000 });
@@ -93,7 +151,9 @@ export function createBuilder(ctx) {
           await post({ type: 'part.state', part: part.id, state: 'built', commit, check: { cmd, passed: true } });
           await post({ type: 'feed.add', chapter: job.chapter, kind: 'commit', part: part.id, commit, check: { cmd, passed: true }, text: `${part.name} is built. One line in parts.txt.` });
         }
-        return { outcome: state.pausing ? 'paused' : 'done' };
+        if (state.pausing) return { outcome: 'paused' };
+        const show = ctx.options['builder-show'] === '1' ? showPage(job) : undefined;
+        return show ? { outcome: 'done', show } : { outcome: 'done' };
       } finally {
         state.running = false;
       }

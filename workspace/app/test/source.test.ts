@@ -1,7 +1,7 @@
 import type { BoardEvent, ServerMessage } from '@keel/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import type { Probe, SocketLike } from '../src/source';
-import { BACKOFF, forgetToken, localSource, probeBoard, REOPEN, serverSource, socketUrl, takeCode, takeToken, tradeCode } from '../src/source';
+import { BACKOFF, forgetToken, localSource, probeBoard, REOPEN, safeShowUrl, serverSource, socketUrl, takeCode, takeToken, tradeCode } from '../src/source';
 import { openBoard } from './helpers';
 
 describe('the local source', () => {
@@ -25,6 +25,19 @@ describe('the local source', () => {
     const r = await src.post({ type: 'item.add', chapter: 'nope', item: { id: 'm1', kind: 'note', box: [0, 0, 1, 1], text: 'x' } });
     expect(r).toEqual({ ok: false, rule: 'R7', reason: 'There is no chapter "nope".' });
     expect(src.state).toBe(before);
+  });
+
+  it('has nothing to show until a test says so, keeps only safe addresses, and tells its listeners', () => {
+    const src = localSource({ events: openBoard().events });
+    expect(src.shows.size).toBe(0);
+    const heard = vi.fn();
+    src.subscribe(heard);
+    src.setShows({ 'engine-loop': 'http://127.0.0.1:4791/', other: 'javascript:alert(1)' });
+    expect([...src.shows]).toEqual([['engine-loop', 'http://127.0.0.1:4791/']]);
+    expect(heard).toHaveBeenCalledTimes(1);
+    src.setShows(undefined);
+    expect(src.shows.size).toBe(0);
+    expect(heard).toHaveBeenCalledTimes(2);
   });
 
   it('never dates an event before the last one in the log', async () => {
@@ -259,6 +272,64 @@ describe('the server source', () => {
     expect(h.timers.filter((x) => x.live && x.ms !== 25_000)).toHaveLength(0);
   });
 
+  it('takes what there is to show from init, follows each shows message, and an empty map clears it', () => {
+    const h = harness();
+    const heard = vi.fn();
+    h.src.subscribe(heard);
+    h.sock().open();
+    h.sock().receive({ t: 'init', name: 'uLLM', role: 'owner', events: openBoard().events, presence: h.presence, shows: { 'engine-loop': 'http://127.0.0.1:4791/?key=k1' } });
+    expect(h.src.shows.get('engine-loop')).toBe('http://127.0.0.1:4791/?key=k1');
+    heard.mockClear();
+    h.sock().receive({ t: 'shows', shows: { 'engine-loop': 'http://127.0.0.1:4791/?key=k1', next: 'http://localhost:4792/' } });
+    expect([...h.src.shows]).toEqual([
+      ['engine-loop', 'http://127.0.0.1:4791/?key=k1'],
+      ['next', 'http://localhost:4792/'],
+    ]);
+    expect(heard).toHaveBeenCalledTimes(1);
+    h.sock().receive({ t: 'shows', shows: {} });
+    expect(h.src.shows.size).toBe(0);
+    expect(heard).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops an address it may not link to, and keeps the rest of the map', () => {
+    const h = harness();
+    h.init();
+    h.sock().receive({
+      t: 'shows',
+      shows: { a: 'javascript:alert(1)', b: 'https://example.com/', c: 'file:///etc/passwd', d: 'not a url', e: 'http://127.0.0.1:4791/' },
+    });
+    expect([...h.src.shows]).toEqual([['e', 'http://127.0.0.1:4791/']]);
+  });
+
+  it('an init with no shows means nothing to show, and a chapter named like an object key finds nothing', () => {
+    const h = harness();
+    h.init();
+    h.sock().receive({ t: 'shows', shows: { 'engine-loop': 'http://127.0.0.1:4791/' } });
+    expect(h.src.shows.size).toBe(1);
+    h.sock().close();
+    h.timers.filter((x) => x.live && x.ms !== 25_000).pop()!.fn();
+    h.init();
+    expect(h.src.shows.size).toBe(0);
+    expect(h.src.shows.get('constructor')).toBeUndefined();
+  });
+
+  it('a lost connection takes the addresses away at once: the server that served them may be gone', () => {
+    const h = harness();
+    h.init();
+    h.sock().receive({ t: 'shows', shows: { 'engine-loop': 'http://127.0.0.1:4791/k1/engine-loop/index.html' } });
+    expect(h.src.shows.size).toBe(1);
+    const heard = vi.fn();
+    h.src.subscribe(heard);
+    h.sock().close();
+    expect(h.src.shows.size).toBe(0);
+    expect(heard).toHaveBeenCalled();
+    // The server is back, on a new port and with a new key: the page links to that one.
+    h.timers.filter((x) => x.live && x.ms !== 25_000).pop()!.fn();
+    h.sock().open();
+    h.sock().receive({ t: 'init', name: 'uLLM', role: 'owner', events: openBoard().events, presence: h.presence, shows: { 'engine-loop': 'http://127.0.0.1:4802/k2/engine-loop/index.html' } });
+    expect(h.src.shows.get('engine-loop')).toBe('http://127.0.0.1:4802/k2/engine-loop/index.html');
+  });
+
   it('a page that reconnects gets the build again in init, and an init with none means none goes', () => {
     const h = harness();
     const stopped = { chapter: 'engine-loop', title: 'The engine loop', state: 'stopped' as const, built: 1, total: 3 };
@@ -416,5 +487,40 @@ describe('what came with the log from outside', () => {
     expect(await src.keep()).toBe(false);
     expect(src.foreign).toEqual([{ from: 1, to: 2 }]);
     src.close();
+  });
+});
+
+describe('the address of a page to show', () => {
+  it('keeps plain http on this machine', () => {
+    expect(safeShowUrl('http://127.0.0.1:4791/?key=k1')).toBe('http://127.0.0.1:4791/?key=k1');
+    expect(safeShowUrl('http://localhost:4791/index.html')).toBe('http://localhost:4791/index.html');
+    // Written as the browser reads it, so the link is exactly what was checked.
+    expect(safeShowUrl('http://LOCALHOST:4791')).toBe('http://localhost:4791/');
+  });
+
+  it('drops every other kind', () => {
+    for (const bad of [
+      'javascript:alert(1)',
+      'JavaScript:alert(1)',
+      ' javascript:alert(1)',
+      'data:text/html,<script>alert(1)</script>',
+      'https://example.com/',
+      'http://example.com/',
+      'https://127.0.0.1:4791/',
+      'file:///etc/passwd',
+      'ws://127.0.0.1:4791/',
+      'http://127.0.0.2:4791/',
+      'http://localhost.example.com/',
+      'http://[::1]:4791/',
+      '//127.0.0.1:4791/',
+      '/relative',
+      'not a url',
+      '',
+      undefined,
+      42,
+      { href: 'http://127.0.0.1/' },
+    ]) {
+      expect(safeShowUrl(bad)).toBeUndefined();
+    }
   });
 });

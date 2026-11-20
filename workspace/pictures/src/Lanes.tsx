@@ -1,4 +1,5 @@
 import type { LanesBody, LanesFlow, LanesPicture, LanesStep, Markings } from '@keel/protocol';
+import { asPart, drawingOrder } from './build';
 import type { Grid, PlacedLabel, Rect, Route } from './grid';
 import { cellRect, gutterX, placeLabels, route } from './grid';
 import { measure, widest, wrap } from './measure';
@@ -289,17 +290,25 @@ export function LanesSvg({ body, compact, item, markings, stepSub, laneSub, blue
   const tap = svgTapper(item, onAct);
   const nameSize = compact ? 11.5 : 12.5;
   const noteSize = compact ? 10.5 : 11;
+  // Drawn on in reading order: the lanes, the steps by column, the arrows, then the divider.
+  const boxOf = new Map(L.boxes.map((b, i) => [b.step.id, i]));
+  const order = drawingOrder(
+    L.lanes.length,
+    L.boxes,
+    L.arrows.map((a) => ({ from: boxOf.get(a.flow.from)!, to: boxOf.get(a.flow.to)! })),
+  );
+  const dividerOrder = L.arrows.length;
   return (
     <svg className="kp-svg" width={L.width} height={L.height} viewBox={`0 0 ${L.width} ${L.height}`} role="img" aria-label="lanes">
       <Defs ids={ids} />
-      {L.lanes.map((lane) => {
+      {L.lanes.map((lane, i) => {
         const isBlue = blue.lanes.has(lane.id);
         const sub = laneSub?.(lane.id);
         const crossed = sub !== undefined && markings.crossed.includes(sub);
         const circled = sub !== undefined && !crossed && markings.circled.includes(sub);
         const nameY = lane.top + (compact ? 17 : 22);
         return (
-          <g key={lane.id} {...(sub ? tap(sub) : {})} data-lane={lane.id} data-blue={isBlue ? '' : undefined} opacity={crossed ? 0.42 : undefined}>
+          <g key={lane.id} {...(sub ? tap(sub) : {})} {...asPart('shape', order.bands[i])} data-lane={lane.id} data-blue={isBlue ? '' : undefined} opacity={crossed ? 0.42 : undefined}>
             <rect
               x={0}
               y={lane.top}
@@ -325,27 +334,27 @@ export function LanesSvg({ body, compact, item, markings, stepSub, laneSub, blue
       })}
       {L.dividerX !== undefined && (
         <g>
-          <line x1={L.dividerX} x2={L.dividerX} y1={4} y2={L.height} stroke={T.text2} strokeWidth={2} strokeDasharray="8 6" />
+          <line {...asPart('line', dividerOrder)} data-dashed="" x1={L.dividerX} x2={L.dividerX} y1={4} y2={L.height} stroke={T.text2} strokeWidth={2} strokeDasharray="8 6" />
           {L.dividerLabel && (
-            <text x={L.dividerX + 8} y={15} fontFamily="Inter, system-ui, sans-serif" fontSize={11.5} fontWeight={600} fill={T.text2}>
+            <text {...asPart('label', dividerOrder)} x={L.dividerX + 8} y={15} fontFamily="Inter, system-ui, sans-serif" fontSize={11.5} fontWeight={600} fill={T.text2}>
               {L.dividerLabel}
             </text>
           )}
         </g>
       )}
-      {L.arrows.map((a) => (
+      {L.arrows.map((a, j) => (
         <g key={a.index} data-flow={`${a.flow.from}>${a.flow.to}`} data-blue={blue.flows.has(a.index) ? '' : undefined}>
-          <ArrowPath ids={ids} r={a.r} tone={blue.flows.has(a.index) ? 'blue' : 'teal'} dashed={a.flow.wait === true} />
+          <ArrowPath ids={ids} r={a.r} tone={blue.flows.has(a.index) ? 'blue' : 'teal'} dashed={a.flow.wait === true} order={order.arrows[j]} />
         </g>
       ))}
-      {L.boxes.map(({ step, rect: r, lines }) => {
+      {L.boxes.map(({ step, rect: r, lines }, i) => {
         const isBlue = blue.steps.has(step.id);
         const sub = stepSub(step.id);
         const crossed = markings.crossed.includes(sub);
         const circled = !crossed && markings.circled.includes(sub);
         const textTop = r.y + (r.h - lines.length * STEP_LH) / 2 + 12;
         return (
-          <g key={step.id} {...tap(sub)} data-blue={isBlue ? '' : undefined} opacity={crossed ? 0.42 : undefined}>
+          <g key={step.id} {...tap(sub)} {...asPart('shape', order.boxes[i])} data-blue={isBlue ? '' : undefined} opacity={crossed ? 0.42 : undefined}>
             {circled && <rect x={r.x - 4} y={r.y - 4} width={r.w + 8} height={r.h + 8} rx={11} fill="none" stroke={T.owner} strokeWidth={2} />}
             <rect
               x={r.x}
@@ -366,7 +375,7 @@ export function LanesSvg({ body, compact, item, markings, stepSub, laneSub, blue
         );
       })}
       {/* Labels last, so they sit above every line. */}
-      {L.arrows.map((a) => (a.at ? <LabelView key={`l${a.index}`} l={a.at} tone={blue.flows.has(a.index) ? 'blue' : 'teal'} /> : null))}
+      {L.arrows.map((a, j) => (a.at ? <LabelView key={`l${a.index}`} l={a.at} tone={blue.flows.has(a.index) ? 'blue' : 'teal'} order={order.arrows[j]} /> : null))}
     </svg>
   );
 }
@@ -378,10 +387,10 @@ export function LanesCard({ item, markings, onAct }: PictureProps & { item: { pi
   const L = layoutLanes(p, false);
   const width = Math.max(420, L.width + 40, Math.ceil(measure(p.title, 'head600', 19)) + 40);
   return (
-    <article className={`kp kp-sheet kp-lanes${wholeClass(m)}`} data-kind="lanes" style={{ width }}>
-      <h3 className="kp-title">{p.title}</h3>
+    <article className={`kp kp-sheet kp-lanes${wholeClass(m)}`} {...asPart('frame')} data-kind="lanes" style={{ width }}>
+      <h3 className="kp-title" {...asPart('head')}>{p.title}</h3>
       <LanesSvg body={p} compact={false} item={item.id} markings={m} stepSub={(id) => `step:${id}`} laneSub={(id) => `lane:${id}`} onAct={onAct} />
-      {p.caption && <p className="kp-caption">{p.caption}</p>}
+      {p.caption && <p className="kp-caption" {...asPart('block')}>{p.caption}</p>}
       {p.risk && <Risk>{p.risk}</Risk>}
       <Gaps gaps={p.gaps} />
     </article>

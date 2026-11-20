@@ -1,6 +1,7 @@
 import type { PictureKind, PictureSpec } from '@keel/protocol';
 import { pictureTitle } from '@keel/protocol';
 import { BlueprintCard } from './Blueprint';
+import { asPart } from './build';
 import { ChoiceCard } from './Choice';
 import { FocusCard } from './Focus';
 import { FreeCard } from './Free';
@@ -31,7 +32,8 @@ export const DRAWN_KINDS: readonly PictureKind[] = [
 
 /**
  * One picture, drawn by its kind. A renderer draws at its own natural size and holds no
- * position: the board places it. Everything a mark can point at carries `data-sub`.
+ * position: the board places it. Everything a mark can point at carries `data-sub`, and every
+ * part it is made of carries `data-build`, for the order it is drawn on in (see `build.ts`).
  */
 export function Picture(props: PictureProps) {
   const { item } = props;
@@ -68,17 +70,17 @@ export function Picture(props: PictureProps) {
 /** The placeholder the owner sees at once, while the agent draws. */
 export function Drawing({ spec }: { spec: PictureSpec }) {
   return (
-    <article className="kp kp-card kp-drawing" data-kind={spec.kind} data-status="drawing" aria-busy="true" style={{ width: 360 }}>
-      <h3 className="kp-card__head">
+    <article className="kp kp-card kp-drawing" {...asPart('frame')} data-kind={spec.kind} data-status="drawing" aria-busy="true" style={{ width: 360 }}>
+      <h3 className="kp-card__head" {...asPart('head')}>
         <Star />
         <span>{pictureTitle(spec)}</span>
       </h3>
-      <div className="kp-drawing__bars" aria-hidden="true">
+      <div className="kp-drawing__bars" aria-hidden="true" {...asPart('block')}>
         <div className="kp-drawing__bar" style={{ width: '92%' }} />
         <div className="kp-drawing__bar" style={{ width: '68%' }} />
         <div className="kp-drawing__bar" style={{ width: '80%' }} />
       </div>
-      <p className="kp-drawing__note">The agent is drawing this.</p>
+      <p className="kp-drawing__note" {...asPart('block')}>The agent is drawing this.</p>
     </article>
   );
 }
@@ -103,13 +105,13 @@ export function Plain({ item, markings }: PictureProps) {
   const m = markings ?? { crossed: [], circled: [] };
   const caption = 'caption' in p ? p.caption : 'summary' in p ? p.summary : undefined;
   return (
-    <article className={`kp kp-plain${wholeClass(m)}`} data-kind={p.kind}>
-      <h3 className="kp-plain__head">
+    <article className={`kp kp-plain${wholeClass(m)}`} {...asPart('frame')} data-kind={p.kind}>
+      <h3 className="kp-plain__head" {...asPart('head')}>
         <span>{pictureTitle(p)}</span>
         <span className="kp-plain__kind">{KIND_WORDS[p.kind]}</span>
       </h3>
-      {caption && <p className="kp-plain__note">{caption}</p>}
-      <p className="kp-plain__note">This kind of picture is not drawn on the board yet.</p>
+      {caption && <p className="kp-plain__note" {...asPart('block')}>{caption}</p>}
+      <p className="kp-plain__note" {...asPart('block')}>This kind of picture is not drawn on the board yet.</p>
     </article>
   );
 }

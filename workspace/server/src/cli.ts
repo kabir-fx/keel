@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -18,7 +19,7 @@ import { oneLine, plain } from './text';
 /**
  * keel-board: one command per board.
  *
- *   open [dir] [--port n] [--link x] [--link-opt k=v] [--builder x] [--no-browser] [--app-dir d] [--dev-origin o]
+ *   [open] [dir] [--port n] [--link x] [--link-opt k=v] [--builder x] [--no-browser] [--app-dir d] [--dev-origin o]
  *   status [dir] · stop [dir] · read [dir] [--since n] · tail [dir]
  *   post --as agent|system <json | @file | ->   (the board is found from --dir, else from here)
  */
@@ -28,6 +29,19 @@ export interface Io {
   err(line: string): void;
   /** Standard input, for `post -`. */
   stdin?(): Promise<string>;
+}
+
+/** What the command reaches outside itself, so a test can stand in for it. */
+export interface RunDeps {
+  /**
+   * Open an address in the owner's browser. `background`: leave it behind what the owner is
+   * doing, where the system allows. Default: the system's opener.
+   */
+  browse?: (url: string, background: boolean) => void;
+  /** The owner's home folder, where `open` refuses to start. Default: `os.homedir()`. */
+  home?: string;
+  /** The `PATH` to look for Claude Code on. Default: `$PATH`. */
+  searchPath?: string;
 }
 
 export interface RunResult {
@@ -52,14 +66,55 @@ const consoleIo: Io = {
  */
 export function defaultLink(env: NodeJS.ProcessEnv = process.env): string {
   if (env.KEEL_BOARD_LINK) return env.KEEL_BOARD_LINK;
-  const bundled = fileURLToPath(new URL('../../plugin/dist/hosted-link.js', import.meta.url));
+  const bundled = hostedLink();
   return fs.existsSync(bundled) ? bundled : 'none';
 }
 
-const USAGE = `keel-board: the board server for one repository.
+/** The hosted agent that ships beside this server when it is built. */
+function hostedLink(): string {
+  return fileURLToPath(new URL('../../plugin/dist/hosted-link.js', import.meta.url));
+}
 
-  keel-board open [dir] [--port n] [--link none|script:<module>|<module>] [--link-opt key=value]
-                  [--builder none|<module>] [--no-browser] [--app-dir <folder>] [--dev-origin <origin>]
+/**
+ * The first executable file called `name` in a `PATH` string, or undefined. A plain scan of
+ * the folders: no process is started. An empty entry is skipped.
+ */
+export function findOnPath(name: string, searchPath: string | undefined): string | undefined {
+  for (const dir of (searchPath ?? '').split(path.delimiter)) {
+    if (!dir) continue;
+    const file = path.join(dir, name);
+    try {
+      if (!fs.statSync(file).isFile()) continue;
+      fs.accessSync(file, fs.constants.X_OK);
+      return file;
+    } catch {
+      // Not here.
+    }
+  }
+  return undefined;
+}
+
+export const NO_CLAUDE =
+  'keel-board: Claude Code was not found on your PATH. The board opens, but the agent will not answer until Claude Code is installed and signed in. Get it from https://claude.com/claude-code';
+
+/** Why a board cannot be opened in this folder, or undefined when it can. */
+function tooWide(realDir: string, home: string): string | undefined {
+  let realHome = path.resolve(home);
+  try {
+    realHome = fs.realpathSync(home);
+  } catch {
+    // A home that is not there matches nothing.
+  }
+  const what = realDir === realHome ? 'your home folder' : path.parse(realDir).root === realDir ? 'the root of the file system' : undefined;
+  if (!what) return undefined;
+  return `keel-board: this is ${what}. The agent can read every file in the folder a board is opened in, so open the board in a folder for the idea: mkdir my-idea && cd my-idea && keel-board`;
+}
+
+const USAGE = `keel-board: the board server for one repository.
+With no command, keel-board opens a board for the folder you are in, like "keel-board open".
+
+  keel-board [open] [dir] [--port n] [--link none|script:<module>|<module>] [--link-opt key=value]
+                    [--builder none|<module>] [--no-browser] [--app-dir <folder>] [--dev-origin <origin>]
   keel-board status [dir]
   keel-board link [dir]
   keel-board stop [dir]
@@ -74,12 +129,14 @@ With no --link, the agent is the one that ships with keel (a headless Claude Cod
 your own sign-in), or $KEEL_BOARD_LINK when that is set. --link none runs no agent.
 The builder writes the code when the owner presses "Build this": the --link module's
 createBuilder, or the module --builder names. --builder none runs no builder.
+A finished build with a page to show opens it in your browser, from an address of its own;
+with --no-browser, nothing opens by itself.
 The tokens and the port stay outside the repository, in ~/.keel/boards/ (or
 $KEEL_STATE_DIR/boards/). The tokens are new for each start. Without --port, the board
 takes the port it had last time. A build runs only after you press "Build this" or Resume
 on this machine: a log that came with the repository starts nothing.`;
 
-export async function run(argv: readonly string[], raw: Io = consoleIo): Promise<RunResult> {
+export async function run(argv: readonly string[], raw: Io = consoleIo, deps: RunDeps = {}): Promise<RunResult> {
   // What the command prints can come from a board, a folder name or the agent: no control characters.
   const io: Io = { out: (l) => raw.out(plain(l)), err: (l) => raw.err(plain(l)), ...(raw.stdin ? { stdin: raw.stdin } : {}) };
   let parsed: ReturnType<typeof parse>;
@@ -90,15 +147,16 @@ export async function run(argv: readonly string[], raw: Io = consoleIo): Promise
     return { code: 2 };
   }
   const { values, positionals } = parsed;
-  const [command, ...rest] = positionals;
-  if (values.help || !command || command === 'help') {
+  // No command word means "open": `keel-board` alone opens the folder it runs in.
+  const [command = 'open', ...rest] = positionals;
+  if (values.help || command === 'help') {
     io.out(USAGE);
-    return { code: command || values.help ? 0 : 2 };
+    return { code: 0 };
   }
   try {
     switch (command) {
       case 'open':
-        return await open(rest[0] ?? values.dir ?? '.', values, io);
+        return await open(rest[0] ?? values.dir ?? '.', values, io, deps);
       case 'status':
         return { code: await status(boardDirOf(rest[0] ?? values.dir), io) };
       case 'link':
@@ -186,11 +244,18 @@ async function link(boardDir: string, io: Io): Promise<number> {
   return 0;
 }
 
-async function open(dir: string, values: Values, io: Io): Promise<RunResult> {
+async function open(dir: string, values: Values, io: Io, deps: RunDeps): Promise<RunResult> {
+  const browse = deps.browse ?? openBrowser;
   const repoDir = path.resolve(dir);
   if (!fs.statSync(repoDir, { throwIfNoEntry: false })?.isDirectory()) {
     io.err(`keel-board open: ${oneLine(repoDir)} is not a folder.`);
     return { code: 1 };
+  }
+  // The agent reads the whole folder: never the home folder or the root.
+  const wide = tooWide(fs.realpathSync(repoDir), deps.home ?? os.homedir());
+  if (wide) {
+    io.err(wide);
+    return { code: 2 };
   }
   const running = await findServer(path.join(repoDir, BOARD_DIR));
   if (running) return alreadyRuns(repoDir, running.port, io, running);
@@ -201,17 +266,26 @@ async function open(dir: string, values: Values, io: Io): Promise<RunResult> {
     return { code: 2 };
   }
 
+  const linkSpec = values.link ?? defaultLink();
+  const linkOptions = parseLinkOptions(values['link-opt'] ?? []);
+  // The hosted agent runs `claude`. Without it the board still opens: say so once, before the address.
+  if (path.resolve(linkSpec) === hostedLink() && linkOptions.bin === undefined && !findOnPath('claude', deps.searchPath ?? process.env.PATH)) {
+    io.err(NO_CLAUDE);
+  }
+
   let server: RunningServer;
   try {
     server = await startServer({
       repoDir,
       port,
-      link: values.link ?? defaultLink(),
-      linkOptions: parseLinkOptions(values['link-opt'] ?? []),
+      link: linkSpec,
+      linkOptions,
       builder: values.builder,
       appDir: values['app-dir'],
       devOrigin: values['dev-origin'],
       log: (m) => io.err(`keel-board: ${m}`),
+      // A finished build's page opens by itself, behind what the owner is doing. Not with --no-browser.
+      ...(values['no-browser'] ? {} : { openShow: (url: string) => browse(url, true) }),
     });
   } catch (e) {
     if (e instanceof BoardBusyError) return alreadyRuns(repoDir, e.port, io);
@@ -221,14 +295,15 @@ async function open(dir: string, values: Values, io: Io): Promise<RunResult> {
   const s = server.board.state;
   io.err(`Board "${oneLine(s.name)}" · e${s.seq} · agent: ${oneLine(server.linkName)} · builder: ${oneLine(server.builderName)} · ${oneLine(server.board.dir)}`);
   io.out(server.url);
-  if (!values['no-browser']) openBrowser(server.url);
+  if (!values['no-browser']) browse(server.url, false);
   return { code: 0, server };
 }
 
-function openBrowser(url: string): void {
+/** Open an address with the system's opener. On macOS, `background` keeps the browser from coming to the front (`open -g`). */
+function openBrowser(url: string, background = false): void {
   const [cmd, args] =
     process.platform === 'darwin'
-      ? ['open', [url]]
+      ? ['open', background ? ['-g', url] : [url]]
       : process.platform === 'win32'
         ? ['cmd', ['/c', 'start', '""', url]]
         : ['xdg-open', [url]];

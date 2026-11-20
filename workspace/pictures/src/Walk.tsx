@@ -1,5 +1,6 @@
 import type { WalkPicture } from '@keel/protocol';
 import { useEffect, useRef, useState } from 'react';
+import { asPart } from './build';
 import { Star, tapper, wholeClass } from './parts';
 import type { PictureProps } from './types';
 import { NO_MARKINGS } from './types';
@@ -61,24 +62,24 @@ export function WalkCard({ item, state, markings, view, onAct }: PictureProps & 
   const tap = tapper(item.id, m, onAct);
   if (!walk) {
     return (
-      <article className={`kp kp-sheet kp-walk${wholeClass(m)}`} data-kind="walk" style={{ width: 400 }}>
-        <h3 className="kp-card__head">
+      <article className={`kp kp-sheet kp-walk${wholeClass(m)}`} {...asPart('frame')} data-kind="walk" style={{ width: 400 }}>
+        <h3 className="kp-card__head" {...asPart('head')}>
           <Star />
           <span>{p.title ?? p.walk}</span>
         </h3>
-        <p className="kp-caption">This walk is not in the model any more.</p>
+        <p className="kp-caption" {...asPart('block')}>This walk is not in the model any more.</p>
       </article>
     );
   }
   const atEnd = at === ns.length - 1;
   return (
-    <article className={`kp kp-sheet kp-walk${wholeClass(m)}`} data-kind="walk" data-step={step || undefined} style={{ width: 420 }}>
-      <h3 className="kp-card__head">
+    <article className={`kp kp-sheet kp-walk${wholeClass(m)}`} {...asPart('frame')} data-kind="walk" data-step={step || undefined} style={{ width: 420 }}>
+      <h3 className="kp-card__head" {...asPart('head')}>
         <Star />
         <span>{p.title ?? walk.name}</span>
         <span className="kp-walk__id">{walk.id}</span>
       </h3>
-      <div className="kp-walk__controls">
+      <div className="kp-walk__controls" {...asPart('block')}>
         <button type="button" className="kp-btn kp-btn--icon" aria-label="Back one step" disabled={at <= 0} onClick={(e) => (e.stopPropagation(), go(ns[at - 1]!))}>
           <Chevron back />
         </button>
@@ -116,7 +117,12 @@ export function WalkCard({ item, state, markings, view, onAct }: PictureProps & 
             const now = s.n === step;
             const ahead = at >= 0 && s.n > step;
             return (
-              <li key={s.n} {...tap(sub, `kp-walk__step${now ? ' kp-walk__step--now' : ''}${ahead ? ' kp-walk__step--ahead' : ''}`)} aria-current={now ? 'step' : undefined}>
+              <li
+                key={s.n}
+                {...tap(sub, `kp-walk__step${now ? ' kp-walk__step--now' : ''}${ahead ? ' kp-walk__step--ahead' : ''}`)}
+                {...asPart('block')}
+                aria-current={now ? 'step' : undefined}
+              >
                 <span className="kp-dot">{s.n}</span>
                 <span>{s.text}</span>
               </li>

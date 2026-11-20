@@ -22,7 +22,9 @@
     "build": "npm run build --workspaces --if-present",
     "e2e": "npm run build && npm run test -w @keel/board-e2e",
     "check": "npm run typecheck && npm run test && npm run e2e",
-    "fixture": "tsx protocol/fixtures/engine-loop/build.ts"
+    "fixture": "tsx protocol/fixtures/engine-loop/build.ts",
+    "release:pack": "node release/pack.mjs",
+    "release:test": "node release/test.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.3",

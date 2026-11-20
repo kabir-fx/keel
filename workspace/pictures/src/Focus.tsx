@@ -1,6 +1,7 @@
 import type { BoardState, FocusPicture, Id, Markings } from '@keel/protocol';
 import type { ReactNode } from 'react';
 import { liveParts } from '@keel/protocol';
+import { asPart } from './build';
 import { wrap } from './measure';
 import { Gaps, LeanChip, StateChip, Star, isCrossed, tapper, wholeClass } from './parts';
 import type { PipeModel } from './pipemodel';
@@ -38,7 +39,7 @@ export function WhereItSits({ pm, part, lane }: { pm: PipeModel; part?: Id; lane
         const lit = l.id === lane || pm.parts.some((p) => p.id === part && p.lane === l.id);
         const name = wrap(l.name, width - nameX, lit ? 'ui600' : 'ui400', 12, 2);
         return (
-          <g key={l.id}>
+          <g key={l.id} {...asPart('shape')}>
             <polygon points={`0,${y + 12} ${slabW},${y + 12} ${slabW + 18},${y} 18,${y}`} fill={lit && lane ? T.tealMid : T.white} stroke={lit && lane ? T.teal : T.grey2} strokeWidth={1.2} />
             <polygon points={`0,${y + 12} ${slabW},${y + 12} ${slabW},${y + 16} 0,${y + 16}`} fill={lit && lane ? T.teal : T.light2} stroke={lit && lane ? T.teal : T.grey2} strokeWidth={1} />
             {pm.parts
@@ -72,8 +73,8 @@ export function WhereItSits({ pm, part, lane }: { pm: PipeModel; part?: Id; lane
 
 function Panel({ head, children, agent }: { head: string; children: ReactNode; agent?: boolean }) {
   return (
-    <section className={agent ? 'kp-card kp-focus__panel' : 'kp-sheet kp-focus__panel'}>
-      <h4 className={agent ? 'kp-card__head' : 'kp-panel__head'}>
+    <section className={agent ? 'kp-card kp-focus__panel' : 'kp-sheet kp-focus__panel'} {...asPart('frame')}>
+      <h4 className={agent ? 'kp-card__head' : 'kp-panel__head'} {...asPart('head')}>
         {agent && <Star />}
         <span>{head}</span>
       </h4>
@@ -99,12 +100,12 @@ function Crossings({ p, state }: { p: FocusPicture; state: BoardState }) {
         if (rows.length === 0) return null;
         return (
           <div key={g.dir} className="kp-cross">
-            <span className="kp-cross__head">{g.head}</span>
+            <span className="kp-cross__head" {...asPart('block')}>{g.head}</span>
             <ul>
               {rows.map((c, i) => {
                 const other = partName(state, c.part);
                 return (
-                  <li key={i}>
+                  <li key={i} {...asPart('block')}>
                     <code className="kp-mono">{c.what}</code>
                     <span>
                       {c.note}
@@ -133,7 +134,7 @@ function Cutaway({ p }: { p: FocusPicture }) {
   return (
     <div className="kp-cutaway" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
       {inside.map((x, i) => (
-        <div key={i} className={`kp-inside kp-inside--${x.tone ?? 'plain'}`}>
+        <div key={i} className={`kp-inside kp-inside--${x.tone ?? 'plain'}`} {...asPart('block')}>
           <b>{x.name}</b>
           {x.plain && <span className="kp-muted">{x.plain}</span>}
           {x.holds && x.holds.length > 0 && (
@@ -156,8 +157,8 @@ function Options({ p, item, m, onAct }: { p: FocusPicture; item: Id; m: Markings
   if (!o) return null;
   const tap = tapper(item, m, onAct);
   return (
-    <section className="kp-card kp-focus__options">
-      <h4 className="kp-card__head">
+    <section className="kp-card kp-focus__options" {...asPart('frame')}>
+      <h4 className="kp-card__head" {...asPart('head')}>
         <Star />
         <span>{o.title}</span>
       </h4>
@@ -165,16 +166,16 @@ function Options({ p, item, m, onAct }: { p: FocusPicture; item: Id; m: Markings
         {o.items.map((x, i) => {
           const sub = `option:${x.id}`;
           return (
-            <div key={x.id} {...tap(sub, 'kp-option')}>
-              <div className="kp-option__head">
+            <div key={x.id} {...tap(sub, 'kp-option')} {...asPart('frame')}>
+              <div className="kp-option__head" {...asPart('head')}>
                 <b>
                   {i + 1} · {x.name}
                 </b>
                 {o.lean === x.id && <LeanChip />}
               </div>
-              {x.body && <p>{x.body}</p>}
+              {x.body && <p {...asPart('block')}>{x.body}</p>}
               {x.risk && (
-                <p className="kp-option__risk">
+                <p className="kp-option__risk" {...asPart('block')}>
                   <b>Risk:</b> {x.risk}
                 </p>
               )}
@@ -184,7 +185,7 @@ function Options({ p, item, m, onAct }: { p: FocusPicture; item: Id; m: Markings
         })}
       </div>
       {p.lean && (
-        <p className="kp-text__lean">
+        <p className="kp-text__lean" {...asPart('block')}>
           <b>My lean:</b> {p.lean}
         </p>
       )}
@@ -207,8 +208,8 @@ export function FocusCard({ item, state, markings, view, onAct }: PictureProps &
   const width = LEFT + GAP + CENTER + (right ? GAP + RIGHT : 0);
   const columns = right ? `${LEFT}px ${CENTER}px ${RIGHT}px` : `${LEFT}px ${CENTER}px`;
   return (
-    <article className={`kp kp-focus${wholeClass(m)}`} data-kind="focus" style={{ width }}>
-      <header className="kp-focus__head">
+    <article className={`kp kp-focus${wholeClass(m)}`} {...asPart('frame')} data-kind="focus" style={{ width }}>
+      <header className="kp-focus__head" {...asPart('head')}>
         {/* Shown large, the app's crumb already names it. */}
         {view?.focus !== item.id && <h3 className="kp-title">{title}</h3>}
         {part && <StateChip state={lookOf(part)} />}
@@ -239,18 +240,18 @@ export function FocusCard({ item, state, markings, view, onAct }: PictureProps &
         </div>
         <div className="kp-focus__col">
           {(p.summary || p.inside?.length) && (
-            <section className="kp-sheet kp-focus__panel">
-              <h4 className="kp-card__head">
+            <section className="kp-sheet kp-focus__panel" {...asPart('frame')}>
+              <h4 className="kp-card__head" {...asPart('head')}>
                 <Star />
                 <span>{p.title ? 'Inside' : `${title}, opened`}</span>
               </h4>
               <Cutaway p={p} />
-              {p.summary && <p className="kp-caption">{p.summary}</p>}
+              {p.summary && <p className="kp-caption" {...asPart('block')}>{p.summary}</p>}
             </section>
           )}
           <Options p={p} item={item.id} m={m} onAct={onAct} />
           {p.lean && !p.options && (
-            <p className="kp-text__lean">
+            <p className="kp-text__lean" {...asPart('block')}>
               <b>My lean:</b> {p.lean}
             </p>
           )}
@@ -259,17 +260,17 @@ export function FocusCard({ item, state, markings, view, onAct }: PictureProps &
           <div className="kp-focus__col">
             {p.promise && (
               <Panel head="Its one promise" agent>
-                <p className="kp-text__body">{p.promise}</p>
+                <p className="kp-text__body" {...asPart('block')}>{p.promise}</p>
               </Panel>
             )}
             {p.cost && (
               <Panel head="What it costs" agent>
-                <p className="kp-text__body">{p.cost}</p>
+                <p className="kp-text__body" {...asPart('block')}>{p.cost}</p>
               </Panel>
             )}
             {p.made && (
               <Panel head="A decision I made" agent>
-                <p className="kp-text__body">
+                <p className="kp-text__body" {...asPart('block')}>
                   <b>{p.made.title}</b>
                   {p.made.body && <> {p.made.body}</>}
                 </p>
@@ -279,7 +280,7 @@ export function FocusCard({ item, state, markings, view, onAct }: PictureProps &
               <Panel head="Lines to read yourself">
                 <ul className="kp-code">
                   {p.code.map((c, i) => (
-                    <li key={i}>
+                    <li key={i} {...asPart('block')}>
                       <code className="kp-mono">
                         {c.path}
                         {c.lines ? `:${c.lines}` : ''}

@@ -3,6 +3,7 @@ import { Star, StateChip } from '@keel/pictures';
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { Draft } from './drafts';
 import type { PostResult } from './source';
+import { safeShowUrl } from './source';
 import type { FeedLine, ServerBuild } from './watch';
 import { buildStatus, feedOf, goesOn, reopenedParts, trackOf } from './watch';
 
@@ -28,9 +29,11 @@ export interface WatchProps {
   notifies?: boolean;
   /** Show a part on the board. */
   onPart?: (part: Id) => void;
+  /** The address of what the build made, when the server serves it: the chapter's entry in `BoardSource.shows`. */
+  showUrl?: string | undefined;
 }
 
-export function Watch({ state, chapter, server, isOwner, folded, onFold, post, notifies = false, onPart }: WatchProps) {
+export function Watch({ state, chapter, server, isOwner, folded, onFold, post, notifies = false, onPart, showUrl }: WatchProps) {
   const c = state.chapters[chapter];
   const track = trackOf(state, chapter);
   const status = buildStatus(state, chapter, server);
@@ -96,6 +99,14 @@ export function Watch({ state, chapter, server, isOwner, folded, onFold, post, n
       )
     ) : null;
 
+  // What was built opens only on a press, in a tab of its own: never in this page, never by itself.
+  const shown = c.state === 'built' ? safeShowUrl(showUrl) : undefined;
+  const seeIt = shown ? (
+    <a className="watch__btn watch__btn--go" href={shown} target="_blank" rel="noopener noreferrer" data-testid="watch-show">
+      See it
+    </a>
+  ) : null;
+
   return (
     <aside className={`chrome watch${folded ? ' watch--folded' : ''}`} data-testid="watch" data-viewport-ui={folded ? 'top' : 'side'} data-state={status.state} data-chapter={chapter} aria-label={`The build of ${c.title}`}>
       <header className="watch__head">
@@ -108,6 +119,7 @@ export function Watch({ state, chapter, server, isOwner, folded, onFold, post, n
         )}
         <span className="watch__grow" />
         {pause}
+        {seeIt}
         <button
           type="button"
           className="watch__fold"

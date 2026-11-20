@@ -1,4 +1,5 @@
 import { useId } from 'react';
+import { asPart } from './build';
 import type { Face } from './measure';
 import { FAMILY, WEIGHT, widest, wrap } from './measure';
 import type { LabelSize, PlacedLabel, Route } from './grid';
@@ -42,9 +43,12 @@ export function Defs({ ids }: { ids: string }) {
   );
 }
 
-export function ArrowPath({ ids, r, tone, dashed, width }: { ids: string; r: Route; tone: ArrowTone; dashed?: boolean; width?: number }) {
+/** An arrow: a line of the drawing. `order` is its place among the drawing's lines (see `build.ts`). */
+export function ArrowPath({ ids, r, tone, dashed, width, order }: { ids: string; r: Route; tone: ArrowTone; dashed?: boolean; width?: number; order?: number }) {
   return (
     <path
+      {...asPart('line', order)}
+      data-dashed={dashed ? '' : undefined}
       d={roundedPath(r.pts)}
       fill="none"
       stroke={STROKE[tone]}
@@ -65,10 +69,13 @@ export function labelSize(text: string, maxW: number): LabelSize {
   return { lines, w: widest(lines, LABEL_FACE, LABEL_SIZE) + 10, h: lines.length * LABEL_LH + 6 };
 }
 
-/** A label centred on its point, on a pale plate so the line underneath stays readable. */
-export function LabelView({ l, tone }: { l: PlacedLabel; tone: ArrowTone }) {
+/**
+ * A label centred on its point, on a pale plate so the line underneath stays readable. `order`
+ * is its line's, so a label comes in after the line it names.
+ */
+export function LabelView({ l, tone, order }: { l: PlacedLabel; tone: ArrowTone; order?: number }) {
   return (
-    <g>
+    <g {...asPart('label', order)}>
       <rect x={l.x - l.w / 2} y={l.y - l.h / 2} width={l.w} height={l.h} rx={5} fill={T.white} fillOpacity={0.94} />
       {l.lines.map((s, i) => (
         <text
@@ -139,7 +146,7 @@ export function Lines({
 export function CrossOver() {
   return (
     <svg className="kp-crossover" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-      <path d="M3,3 L97,97 M97,3 L3,97" stroke={T.grey} strokeWidth={2} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+      <path {...asPart('line')} d="M3,3 L97,97 M97,3 L3,97" stroke={T.grey} strokeWidth={2} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
     </svg>
   );
 }

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { dirtyFiles, ensureWorktree, gitEnv, gitOk, headOf, pinEnv, samePath, worktreeGitDir } from '../src/git';
+import { OwnerFilesError, dirtyFiles, ensureWorktree, folderFiles, gitEnv, gitOk, headOf, ownerFiles, pinEnv, samePath, worktreeGitDir } from '../src/git';
 import { makeRepo, sh } from './build-board';
 
 /**
@@ -45,12 +45,93 @@ describe('the worktree\'s own git folder', () => {
     expect(await ensureWorktree(repo, tree, 'board/x')).toEqual({ created: false, gitDir: wt.gitDir });
   });
 
-  it('is not made in a repository with no commit: the reason says what is missing, and how to try again is left to who reports it', async () => {
+  it('in a repository with no commit, starts its branch from nothing and leaves the owner\'s HEAD, index and files alone', async () => {
+    const empty = path.join(tmp, 'empty');
+    fs.mkdirSync(path.join(empty, '.keel', 'board'), { recursive: true });
+    fs.writeFileSync(path.join(empty, '.keel', 'board', 'events.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(empty, '.DS_Store'), 'x');
+    sh(empty, 'git', 'init', '--quiet');
+    const statusBefore = sh(empty, 'git', 'status', '--porcelain');
+
+    const wt = await ensureWorktree(empty, tree, 'board/x');
+    expect(wt).toMatchObject({ created: true, fromNothing: true });
+    // The branch's first commit: an empty tree, no parent, by the builder, saying what it is.
+    expect(sh(empty, 'git', 'rev-parse', 'board/x')).toBe(wt.base);
+    expect(sh(empty, 'git', 'log', '--format=%P|%cn|%s', 'board/x')).toBe('|Keel builder|The start of board/x, from an empty folder');
+    expect(sh(empty, 'git', 'ls-tree', 'board/x')).toBe('');
+    expect(await headOf(tree, pinEnv(wt.gitDir, tree))).toBe(wt.base);
+    // The owner's side: HEAD still unborn, nothing staged, the files as they were.
+    expect(await headOf(empty)).toBeUndefined();
+    expect(sh(empty, 'git', 'ls-files')).toBe('');
+    expect(sh(empty, 'git', 'status', '--porcelain')).toBe(statusBefore);
+    expect(fs.readdirSync(empty).sort()).toEqual(['.DS_Store', '.git', '.keel']);
+
+    // Used again as it is, and not started from nothing again.
+    expect(await ensureWorktree(empty, tree, 'board/x')).toEqual({ created: false, gitDir: wt.gitDir });
+    // Its commits come into the owner's unborn branch with a merge.
+    fs.writeFileSync(path.join(tree, 'part.txt'), 'the part\n');
+    const pin = { ...pinEnv(wt.gitDir, tree), GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x.invalid', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x.invalid' };
+    await gitOk(tree, ['add', '--', 'part.txt'], pin);
+    await gitOk(tree, ['commit', '--quiet', '-m', 'the part'], pin);
+    sh(empty, 'git', 'merge', '--quiet', 'board/x');
+    expect(fs.readFileSync(path.join(empty, 'part.txt'), 'utf8')).toBe('the part\n');
+  });
+
+  it('refuses a repository with no commit that holds files of the owner\'s, staged or not, and makes nothing', async () => {
     const empty = path.join(tmp, 'empty');
     fs.mkdirSync(empty);
     sh(empty, 'git', 'init', '--quiet');
-    await expect(ensureWorktree(empty, tree, 'board/x')).rejects.toThrow(/^The repository has no commit yet, so there is nothing to build on\. Make a first commit\.$/);
+    fs.writeFileSync(path.join(empty, 'notes.txt'), 'mine\n');
+    fs.writeFileSync(path.join(empty, 'staged.txt'), 'mine\n');
+    sh(empty, 'git', 'add', 'staged.txt');
+    const err = await ensureWorktree(empty, tree, 'board/x').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(OwnerFilesError);
+    expect((err as OwnerFilesError).files.sort()).toEqual(['notes.txt', 'staged.txt']);
     expect(fs.existsSync(tree)).toBe(false);
+    expect(sh(empty, 'git', 'branch', '--list')).toBe('');
+    expect(sh(empty, 'git', 'ls-files')).toBe('staged.txt');
+  });
+
+  it('counts what git would commit: not an ignored file, not the board\'s .keel where the board is, not what a system drops', async () => {
+    const empty = path.join(tmp, 'empty');
+    fs.mkdirSync(path.join(empty, 'app', '.keel', 'board'), { recursive: true });
+    sh(empty, 'git', 'init', '--quiet');
+    fs.writeFileSync(path.join(empty, 'app', '.keel', 'board', 'events.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(empty, 'app', 'Thumbs.db'), 'x');
+    fs.writeFileSync(path.join(empty, 'desktop.ini'), 'x');
+    fs.writeFileSync(path.join(empty, 'secret.log'), 'x');
+    fs.appendFileSync(path.join(empty, '.git', 'info', 'exclude'), 'secret.log\n');
+    expect(await ownerFiles(empty, 'app')).toEqual([]);
+    // The board's .keel is the one in its own folder: another is the owner's.
+    expect(await ownerFiles(empty)).toEqual(['app/.keel/board/events.jsonl']);
+    fs.writeFileSync(path.join(empty, 'app', 'na me "x".txt'), 'x');
+    expect(await ownerFiles(empty, 'app')).toEqual(['app/na me "x".txt']);
+  });
+
+  it('looks in a plain folder only so far: a few names, and how many more', () => {
+    const dir = path.join(tmp, 'plain');
+    fs.mkdirSync(path.join(dir, '.keel'), { recursive: true });
+    fs.mkdirSync(path.join(dir, '.git'));
+    fs.writeFileSync(path.join(dir, '.DS_Store'), 'x');
+    expect(folderFiles(dir)).toEqual({ names: [], more: 0 });
+    fs.mkdirSync(path.join(dir, 'src'));
+    for (const n of ['a', 'b', 'c', 'd']) fs.writeFileSync(path.join(dir, `${n}.txt`), 'x');
+    const r = folderFiles(dir);
+    expect(r.names).toHaveLength(3);
+    expect(r.more).toBe(2);
+    for (const n of r.names) expect(['src/', 'a.txt', 'b.txt', 'c.txt', 'd.txt']).toContain(n);
+    // Past the bound, it stops counting.
+    expect(folderFiles(dir, 3, 4).more).toBeUndefined();
+  });
+
+  it('does not go on in a worktree whose HEAD has no commit: it is made again', async () => {
+    const wt = await ensureWorktree(repo, tree, 'board/x');
+    // The branch is gone under the worktree: its HEAD names a branch with no commit.
+    sh(repo, 'git', 'update-ref', '-d', 'refs/heads/board/x');
+    expect(await headOf(tree, pinEnv(wt.gitDir, tree))).toBeUndefined();
+    const again = await ensureWorktree(repo, tree, 'board/x');
+    expect(again.created).toBe(true);
+    expect(await headOf(tree, pinEnv(again.gitDir, tree))).toBe(sh(repo, 'git', 'rev-parse', 'main'));
   });
 
   it('pins git to it: a `.git` put in the worktree, with a config that names programs, is never read', async () => {

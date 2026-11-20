@@ -30,7 +30,26 @@ export function between(a: Camera, b: Camera, f: number): Camera {
   return { z, x: a.x + (b.x - a.x) * m, y: a.y + (b.y - a.y) * m };
 }
 
+/** The media query the page asks whether it should move less with. */
+const REDUCED = '(prefers-reduced-motion: reduce)';
+
 /** True when the page asks for reduced motion: the camera then jumps where it would glide. */
 export function prefersReducedMotion(): boolean {
-  return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  return typeof matchMedia === 'function' && matchMedia(REDUCED).matches;
+}
+
+/**
+ * Call `listener` each time the page starts to ask for reduced motion: the owner turned it on
+ * while the board is open. Answers how to stop listening. A page with no `matchMedia` never
+ * asks, and is never listened to.
+ */
+export function onReducedMotion(listener: () => void): () => void {
+  if (typeof matchMedia !== 'function') return () => undefined;
+  const query = matchMedia(REDUCED);
+  if (typeof query.addEventListener !== 'function') return () => undefined;
+  const changed = (e: MediaQueryListEvent) => {
+    if (e.matches) listener();
+  };
+  query.addEventListener('change', changed);
+  return () => query.removeEventListener('change', changed);
 }

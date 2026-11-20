@@ -5,8 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AgentLink, CreateLink, LinkContext, Wake, WakeResult } from '@keel/protocol';
-import { toolPresence } from './presence';
+import type { AgentLink, CreateLink, LinkContext, PresenceUpdate, Wake, WakeResult } from '@keel/protocol';
+import { bareToolName, toolPresence, writingPresence } from './presence';
 
 /**
  * The hosted agent link (ADR 0003). The board server owns one long-lived headless Claude
@@ -75,7 +75,10 @@ export interface HostedOptions {
   skill: string;
   /** The picture grammar. It follows the skill in the system prompt, so no wake spends a call reading it. */
   grammar: string;
-  /** A file to append every stream line to, with the time it came: for the recorded boards. */
+  /**
+   * A file to append the stream's lines to, with the time each came: for the recorded boards.
+   * Of the partial stream, only the line that starts each block.
+   */
   transcript: string | undefined;
   /** A turn that runs longer than this is stopped. */
   timeoutMs: number;
@@ -142,6 +145,9 @@ export function agentArgs(o: {
     '--input-format', 'stream-json',
     '--output-format', 'stream-json',
     '--verbose',
+    // The stream also says when the model begins each block, so the pill can say "drawing" while
+    // the model writes a picture, not only once the picture is written.
+    '--include-partial-messages',
     '--model', o.model,
     '--effort', o.effort,
     // No user, project or local settings: the repository's hooks, env and permissions never load.
@@ -265,8 +271,73 @@ type StreamLine = {
   duration_ms?: number;
   total_cost_usd?: number;
   mcp_servers?: Array<{ name?: string; status?: string }>;
-  message?: { content?: Array<{ type?: string; name?: string; input?: unknown }> };
+  message?: { content?: Array<{ type?: string; id?: string; name?: string; input?: unknown }> };
+  /** On a `stream_event` line: one event of the model's message as it is written. Read with care: nothing in it is checked. */
+  event?: unknown;
 };
+
+/** A tool call the model is writing: its block in the message, its id, the tool, and the note last reported for it. */
+export interface Writing {
+  index: number;
+  id: string | undefined;
+  tool: string;
+  note: string | undefined;
+  /** True while the input may still make the note more exact: a `board_post` whose first picture's kind is not read yet, and not looked for past `KIND_READ_MAX`. */
+  refining: boolean;
+  /** The input written so far, kept only while `refining`. */
+  input: string;
+}
+
+/**
+ * How much of a `board_post`'s input is read for the kind of its first picture, in characters.
+ * The kind is the first thing a model writes of a picture, so it comes well inside this; past
+ * it, the note waits for the whole call, and the input is neither kept nor read again.
+ */
+export const KIND_READ_MAX = 4096;
+
+const asObject = (v: unknown): Record<string, unknown> | undefined =>
+  typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+
+/**
+ * One event of the partial stream, for the tool call being written: the call as it is now, and
+ * a presence to report, if any. A tool call that begins reports what the tool does. While a
+ * `board_post`'s input comes in, the note is reported once more if it becomes more exact. A
+ * block that is not a tool call reports nothing. An event that is malformed changes nothing.
+ */
+export function followCall(w: Writing | undefined, event: unknown): { writing: Writing | undefined; report?: PresenceUpdate } {
+  const e = asObject(event);
+  switch (e?.type) {
+    case 'content_block_start': {
+      const block = asObject(e.content_block);
+      if (typeof e.index !== 'number' || typeof block?.type !== 'string') return { writing: w };
+      // A new block ends the one before, whatever it is.
+      if (block.type !== 'tool_use') return { writing: undefined };
+      if (typeof block.name !== 'string') return { writing: w };
+      const report = writingPresence(block.name, '');
+      const id = typeof block.id === 'string' ? block.id : undefined;
+      const refining = bareToolName(block.name) === 'board_post';
+      return { writing: { index: e.index, id, tool: block.name, note: report.note, refining, input: '' }, report };
+    }
+    case 'content_block_delta': {
+      const delta = asObject(e.delta);
+      if (!w?.refining || e.index !== w.index || delta?.type !== 'input_json_delta' || typeof delta.partial_json !== 'string') return { writing: w };
+      const input = w.input + delta.partial_json;
+      const report = writingPresence(w.tool, input.slice(0, KIND_READ_MAX));
+      // The note is as exact as it gets: no more reading of this call.
+      if (report.note !== w.note) return { writing: { ...w, note: report.note, refining: false, input: '' }, report };
+      // Read as far as the kind is looked for, and it was not there.
+      if (input.length > KIND_READ_MAX) return { writing: { ...w, refining: false, input: '' } };
+      return { writing: { ...w, input } };
+    }
+    case 'content_block_stop':
+      return { writing: e.index === w?.index ? undefined : w };
+    case 'message_start':
+    case 'message_stop':
+      return { writing: undefined };
+    default:
+      return { writing: w };
+  }
+}
 
 export class HostedLink implements AgentLink {
   readonly name: string;
@@ -279,6 +350,8 @@ export class HostedLink implements AgentLink {
   private sessionId: string | undefined;
   private resumed = false;
   private sawOutput = false;
+  /** The tool call the model is writing now, read from the partial stream. */
+  private writing: Writing | undefined;
   /** The running total the stream last reported, for this process. */
   private costSoFar = 0;
   /** False for the first turn of a resumed session whose earlier total was not saved: its own cost cannot be told. */
@@ -378,6 +451,7 @@ export class HostedLink implements AgentLink {
     this.sessionId = sessionId;
     this.resumed = resume;
     this.sawOutput = false;
+    this.writing = undefined;
     this.stderrTail = '';
     // A resumed session carries its running total on: start from what it had cost before.
     const before = resume ? readSessionCost(this.stateDir, sessionId) : 0;
@@ -431,6 +505,10 @@ export class HostedLink implements AgentLink {
 
   private onLine(e: StreamLine): void {
     this.sawOutput = true;
+    if (e.type === 'stream_event') {
+      this.onPartial(e);
+      return;
+    }
     this.record(e);
     if (e.type === 'system' && e.subtype === 'init') {
       if (e.session_id && UUID.test(e.session_id) && e.session_id !== this.sessionId) {
@@ -444,6 +522,8 @@ export class HostedLink implements AgentLink {
     if (e.type === 'assistant') {
       for (const c of e.message?.content ?? []) {
         if (c.type !== 'tool_use' || typeof c.name !== 'string') continue;
+        // The call is whole: nothing read while it was written may report after this.
+        if (this.writing && c.id === this.writing.id) this.writing = undefined;
         const p = toolPresence(c.name, c.input);
         if (this.opts.debug) this.ctx.log(`tool ${c.name} (input ${typeof c.input}: ${clip(JSON.stringify(c.input) ?? '', 120)}) → ${JSON.stringify(p)}`);
         this.ctx.presence(p);
@@ -482,6 +562,24 @@ export class HostedLink implements AgentLink {
         this.turn?.done({ ok: true });
       }
     }
+  }
+
+  /**
+   * One line of the partial stream: the model's message as it is written. Only the start of a
+   * block goes into the transcript and the debug log. That says when the model began each block,
+   * without the many lines of its words, which the whole `assistant` line holds anyway.
+   */
+  private onPartial(e: StreamLine): void {
+    const event = asObject(e.event);
+    if (event?.type === 'content_block_start') {
+      this.record(e);
+      if (this.opts.debug) this.ctx.log(`stream block ${String(asObject(event.content_block)?.type)} begins`);
+    }
+    const { writing, report } = followCall(this.writing, e.event);
+    this.writing = writing;
+    if (!report) return;
+    if (this.opts.debug) this.ctx.log(`tool ${writing?.tool ?? '?'} being written → ${JSON.stringify(report)}`);
+    this.ctx.presence(report);
   }
 
   private onClose(proc: ChildProcessWithoutNullStreams, code: number | null, signal: NodeJS.Signals | null): void {

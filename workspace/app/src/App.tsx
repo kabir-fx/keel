@@ -3,6 +3,8 @@ import type { PictureView } from '@keel/pictures';
 import { Picture } from '@keel/pictures';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { flushSync } from 'react-dom';
+import { landFirst } from './arrival/land';
+import { useArrivals } from './arrival/useArrivals';
 import { usePictureActs } from './board/acts';
 import { useAhead } from './board/ahead';
 import { useChapterInView, useFollowChapter } from './board/chapterInView';
@@ -26,7 +28,7 @@ import { AgentPill } from './board/presence';
 import { useShown } from './board/shown';
 import { snapshotInk } from './board/snapshot';
 import { useStoryNav } from './board/storyNav';
-import { useSubRects } from './board/subRects';
+import { hangsOnSubs, useSubRects } from './board/subRects';
 import { useTalk } from './board/talk';
 import { useToast } from './board/toast';
 import { partPicture, useWatching, watchedChapter } from './board/watching';
@@ -42,6 +44,7 @@ import { ZoomControl } from './camera/ZoomControl';
 import type { ToolId, ViewMode } from './chrome';
 import { BoardPill, TalkCaption, Toast, Toolbar, ViewSwitch } from './chrome';
 import { FocusCrumb, OpeningNotice } from './focus';
+import type { Clock } from './frame';
 import { FrameLoop } from './frame';
 import { foreignWords } from './foreign';
 import { HintLine } from './HintLine';
@@ -57,6 +60,7 @@ import { openLasso, picksOf, solidifyDraft } from './marks';
 import { ConnectionNotice, ForeignNotice, ForeignTags, Nudge } from './notices';
 import { canNotify } from './notify';
 import { AgentCursor } from './overlay/cursor';
+import { AgentCursorStore } from './overlay/cursorStore';
 import { Overlay } from './overlay/Overlay';
 import { SelectionLayer } from './overlay/selection';
 import { TrailsSvg } from './overlay/TrailsSvg';
@@ -96,6 +100,11 @@ export interface AppProps {
    * per board, and come back to it on a reload. Off for fixtures: a checkpoint says the view.
    */
   remember?: boolean | undefined;
+  /**
+   * The clock the board's one frame loop runs on. A fixture played for a test or a review hands
+   * in a manual one, so a moment asked for twice shows the same frame. Left out, the page's own.
+   */
+  clock?: Clock | undefined;
 }
 
 /**
@@ -110,13 +119,14 @@ export interface AppProps {
  * camera is written to the page before anything is measured, pictures are placed before the
  * subs are measured, and the first view is fitted after both.
  */
-export function App({ source, show, view: firstView = {}, focus: firstFocus, mode: firstMode = 'board', remember = false }: AppProps) {
+export function App({ source, show, view: firstView = {}, focus: firstFocus, mode: firstMode = 'board', remember = false, clock }: AppProps) {
   /* ------------------------------------------------------------ the source */
 
   const state = useSyncExternalStore(source.subscribe, () => source.state);
   const connection = useSyncExternalStore(source.subscribe, () => source.connection);
   const build = useSyncExternalStore(source.subscribe, () => source.build);
   const foreign = useSyncExternalStore(source.subscribe, () => source.foreign);
+  const shows = useSyncExternalStore(source.subscribe, () => source.shows);
   const canPlace = source.role !== 'agent';
   const isOwner = source.role === 'owner';
   const fontsReady = useFontsReady();
@@ -146,14 +156,18 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
   const [watchFolded, setWatchFolded] = useState(false);
   /** Where each anchored sub is now, measured from the DOM, in world units. */
   const [subRects, setSubRects] = useState<ReadonlyMap<string, Box>>(() => new Map());
+  /** Draws the board again, so what was skipped while a picture was drawn on is measured. */
+  const [, measureAgain] = useState(0);
   const hover = useHover();
 
   /* ------------------------------------------------------------ the page */
 
   /** The one frame loop of this board: the camera's glide runs on it, and so does whatever else moves by itself. */
-  const frames = useMemo(() => new FrameLoop(), []);
+  const frames = useMemo(() => (clock ? new FrameLoop(clock, () => clock.now()) : new FrameLoop()), [clock]);
   const camera = useMemo(() => new CameraStore({ x: 0, y: 0, z: 1 }, { loop: frames }), [frames]);
   const hand = useMemo(() => new LiveStore(), []);
+  /** Where the agent's cursor is: it goes where presence says, or where an arrival leads it. */
+  const agentCursor = useMemo(() => new AgentCursorStore(frames, camera), [frames, camera]);
   const moving = useMemo(() => new MovingStore(), []);
   const appRef = useRef<HTMLDivElement>(null);
   const boardRef = useRef<HTMLDivElement>(null);
@@ -245,7 +259,30 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
     if (selection.some((id) => !state.items[id] || state.items[id]!.removed)) setSelection((sel) => sel.filter((id) => state.items[id] && !state.items[id]!.removed));
   }, [state, selection]);
   useCursor(boardRef, board, tool, spaceHeld);
-  const news = useNews({ board, source, camera, boxes, fit, focus, lastMark: log.lastMark, known });
+  const news = useNews({ board, source, camera, boxes, fit, focus, lastMark: log.lastMark, known, spots: ahead.provisional });
+  // After the news: where the camera is going is set when an arrival asks what will be in view.
+  const arrivals = useArrivals({
+    frames,
+    camera,
+    cursor: agentCursor,
+    state,
+    boxes,
+    spots: ahead.provisional,
+    chips: shown.chips,
+    connection,
+    edges: shown.edges,
+    fit,
+    known,
+    mode,
+    focusOpen: !!focusView,
+    board: boardRef,
+    layer: layerRef,
+    world: worldRef,
+    // The subs a mark hangs on are not measured on a picture being drawn on: measure them once it is whole.
+    ended: (id) => {
+      if (hangsOnSubs(shown.live, id)) measureAgain((n) => n + 1);
+    },
+  });
   useFollowChapter(camera, boxes, chapters.look);
   useWatching(state, chapters.chapter, connection);
   const story = useStoryNav({ board, camera, mode, boxes, fit, focus, pinView: chapters.pin });
@@ -315,7 +352,8 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
   };
 
   fillBoard({
-    ...measuringOf({ board: boardRef, layer: layerRef, camera, source, rect }, shown, raised),
+    // What the board measures for a gesture, and the image a stroke sends, is the board at rest.
+    ...landFirst(measuringOf({ board: boardRef, layer: layerRef, camera, source, rect }, shown, raised), arrivals.landAll),
     state: () => source.state,
     boxes: () => boxes,
     where: () => shown.where,
@@ -343,7 +381,10 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
     openNote: notes.open,
     showPending: (items) => flushSync(() => setPendingInk((list) => [...list, ...items])),
     hidePending: (id) => setPendingInk((list) => list.filter((x) => x.id !== id)),
-    snapshot: (item, rects) => snapshotInk(worldRef.current, source, item, rects),
+    snapshot: (item, rects) => {
+      arrivals.landAll();
+      return snapshotInk(worldRef.current, source, item, rects);
+    },
     mode: () => mode,
     view: () => view,
     viewport: () => viewport,
@@ -503,7 +544,7 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
         <Overlay>
           <SelectionLayer board={board} selection={selection} state={state} boxes={boxes} ends={ends} />
           <TrailsSvg layer={hand.trails} />
-          <AgentCursor source={source} boxOf={boxOf} titles={chapterTitles} camera={camera} frames={frames} rect={rect} />
+          <AgentCursor source={source} cursor={agentCursor} state={state} boxOf={boxOf} titles={chapterTitles} camera={camera} rect={rect} />
         </Overlay>
         {drop.dropping && (
           <div className="drop-hint" data-testid="drop-hint">
@@ -550,7 +591,7 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
           setMode(m);
         }}
       />
-      <AgentPill source={source} boxOf={boxOf} titles={chapterTitles} />
+      <AgentPill source={source} cursor={agentCursor} boxOf={boxOf} titles={chapterTitles} />
       {mode === 'board' && focusView && crumb && <FocusCrumb crumb={crumb} onBack={focus.close} />}
       {mode === 'board' && opening && !focusView && <OpeningNotice name={opening.name} onStop={focus.stopOpening} />}
       {watchChapter && (
@@ -564,6 +605,7 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
           post={log.send}
           notifies={canNotify()}
           onPart={showPart}
+          showUrl={shows.get(watchChapter)}
         />
       )}
       <div className="notices">

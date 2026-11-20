@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BuildJob, Builder, BuilderContext, PresenceUpdate } from '@keel/protocol';
 import { renderBrief } from '@keel/protocol';
-import { BUILDER_BUILTINS, GIT_ALLOWED, GIT_DENIED_FLAGS, GIT_DENIED_LEADS, allowList, bashRules, buildPlaces, builderSettings, createBuilder, grammarSection, secretNames } from '../src/hosted-builder';
+import { BUILDER_BUILTINS, GIT_ALLOWED, GIT_DENIED_FLAGS, GIT_DENIED_LEADS, allowList, bashRules, buildPlaces, builderSettings, createBuilder, filesNote, grammarSection, secretNames } from '../src/hosted-builder';
 import { createBuilder as fromLinkModule, DENIED_FILES } from '../src/hosted-link';
 import { RecordPathError, keelBlock, nextRecordNumber, recordPlaces, safeDir, safeRelative, writeNew, writeRecords } from '../src/records';
 import { BCH, buildBoard, makeRepo, sh } from './build-board';
@@ -87,6 +87,24 @@ function ownerView() {
     status: sh(repo, 'git', 'status', '--porcelain'),
     files: fs.readdirSync(repo).sort(),
   };
+}
+
+/** A folder with nothing in it but the board's own `.keel`. */
+function boardFolder(dir: string): string {
+  fs.mkdirSync(path.join(dir, '.keel', 'board'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.keel', 'board', 'events.jsonl'), '{}\n');
+  return dir;
+}
+
+/** The owner's side of a build from nothing: HEAD still unborn, nothing staged, and what git sees. */
+function fromNothingOwner() {
+  let unborn = false;
+  try {
+    sh(repo, 'git', 'rev-parse', '--verify', '--quiet', 'HEAD');
+  } catch {
+    unborn = true;
+  }
+  return { unborn, status: sh(repo, 'git', 'status', '--porcelain'), staged: sh(repo, 'git', 'ls-files') };
 }
 
 const CHECK = '! grep -rqs FAIL parts';
@@ -395,31 +413,163 @@ describe('a build, end to end against a fake claude', () => {
     expect(board.state.model.parts.cli?.state).toBe('built');
   }, 60_000);
 
-  it('a folder that is not a git repository gets a clear failure, on the board too', async () => {
+  it('builds in a plain empty folder: makes it a repository, starts the branch from nothing, and the owner merges it in', async () => {
     board = await buildBoard({ check: CHECK });
-    repo = path.join(tmp, 'plain');
-    fs.mkdirSync(repo);
+    repo = boardFolder(path.join(tmp, 'plain'));
+    const r = await (await builder()).run(job());
+    expect(r.outcome, r.note).toBe('done');
+    expect(fs.realpathSync(sh(repo, 'git', 'rev-parse', '--show-toplevel'))).toBe(fs.realpathSync(repo));
+    expect(fromNothingOwner()).toEqual({ unborn: true, status: '?? .keel/', staged: '' });
+    // The branch: the empty first commit, then the build as anywhere else.
+    const log = sh(repo, 'git', 'log', '--format=%s', `board/${BCH}`).split('\n').reverse();
+    expect(log).toEqual([`The start of board/${BCH}, from an empty folder`, 'An adder: the brief and the decision record', 'sum: the part', 'cli: the part', 'docs: the part', 'An adder: the brief, with the result']);
+    const said = board.state.feed.filter((f) => f.text.includes('starts from nothing'));
+    expect(said.map((f) => f.text)).toEqual([`This folder was no git repository, so the builder made it one with "git init". It had no commit to build on either, so the branch board/${BCH} starts from nothing: an empty first commit, then the build.`]);
+    expect(board.state.feed.at(-1)?.text).toContain(`git merge board/${BCH}`);
+    sh(repo, 'git', 'merge', '--quiet', `board/${BCH}`);
+    expect(fs.readFileSync(path.join(repo, 'parts', 'sum.txt'), 'utf8')).toBe('the sum part\n');
+    expect(fs.existsSync(path.join(repo, 'docs', 'briefs', `${BCH}.md`))).toBe(true);
+  }, 60_000);
+
+  it('builds in a repository with no commit, beside a .DS_Store, and leaves the owner\'s HEAD unborn', async () => {
+    board = await buildBoard({ check: CHECK });
+    repo = boardFolder(path.join(tmp, 'empty'));
+    fs.writeFileSync(path.join(repo, '.DS_Store'), 'x');
+    sh(repo, 'git', 'init', '--quiet');
+    const r = await (await builder()).run(job());
+    expect(r.outcome, r.note).toBe('done');
+    expect(fromNothingOwner()).toEqual({ unborn: true, status: '?? .DS_Store\n?? .keel/', staged: '' });
+    const said = board.state.feed.filter((f) => f.text.includes('starts from nothing'));
+    expect(said.map((f) => f.text)).toEqual([`This folder has no commit yet, so the branch board/${BCH} starts from nothing: an empty first commit, then the build. Your own branch stays as it is.`]);
+    // It comes before the line that says the build started.
+    expect(board.state.feed.findIndex((f) => f.text.includes('starts from nothing'))).toBeLessThan(board.state.feed.findIndex((f) => f.text.startsWith('The builder started')));
+    expect(sh(repo, 'git', 'log', '--max-parents=0', '--format=%cn|%T', `board/${BCH}`)).toBe(`Keel builder|${sh(repo, 'git', 'mktree')}`);
+    sh(repo, 'git', 'merge', '--quiet', `board/${BCH}`);
+    expect(sh(repo, 'git', 'ls-files')).toContain('parts/docs.txt');
+  }, 60_000);
+
+  it('a resumed build from nothing goes on from its branch, and says the start only once', async () => {
+    board = await buildBoard({ check: CHECK });
+    repo = boardFolder(path.join(tmp, 'empty'));
+    sh(repo, 'git', 'init', '--quiet');
+    process.env.FAKE_SLOW_MS = '400';
     const b = await builder();
-    const r = await b.run(job());
+    const first = b.run(job());
+    for (let i = 0; i < 200 && board.state.model.parts.sum?.state !== 'building'; i++) await new Promise((r) => setTimeout(r, 50));
+    await b.pause();
+    expect((await first).outcome).toBe('paused');
+    delete process.env.FAKE_SLOW_MS;
+    const r = await b.run(job(true));
+    expect(r.outcome, r.note).toBe('done');
+    expect(board.state.feed.filter((f) => f.text.includes('starts from nothing'))).toHaveLength(1);
+    expect(board.state.feed.some((f) => f.text.includes('goes on') && f.text.includes('1 of 3'))).toBe(true);
+    expect(sh(repo, 'git', 'rev-list', '--max-parents=0', `board/${BCH}`).split('\n')).toHaveLength(1);
+    expect(fromNothingOwner()).toEqual({ unborn: true, status: '?? .keel/', staged: '' });
+  }, 60_000);
+
+  it('a repository with no commit that holds the owner\'s files stops, and the note names them', async () => {
+    board = await buildBoard({ check: CHECK });
+    repo = boardFolder(path.join(tmp, 'empty'));
+    sh(repo, 'git', 'init', '--quiet');
+    fs.writeFileSync(path.join(repo, 'notes.txt'), 'mine\n');
+    const r = await (await builder()).run(job());
+    expect(r).toEqual({ outcome: 'failed', note: 'No commit yet: the builder\'s copy is made from commits, so it would lack your files (notes.txt). Commit them first; the builder does not commit them for you.' });
+    expect(r.note!.length).toBeLessThanOrEqual(200);
+    expect(records()).toEqual([]);
+    expect(sh(repo, 'git', 'branch', '--list', '--all')).toBe('');
+    expect(sh(repo, 'git', 'status', '--porcelain')).toBe('?? .keel/\n?? notes.txt');
+  });
+
+  it('a plain folder with the owner\'s files stops, says to run git init and commit them, and is left as it was', async () => {
+    board = await buildBoard({ check: CHECK });
+    repo = boardFolder(path.join(tmp, 'plain'));
+    fs.writeFileSync(path.join(repo, 'notes.txt'), 'mine\n');
+    const r = await (await builder()).run(job());
     expect(r.outcome).toBe('failed');
-    expect(r.note).toContain('is not a git repository');
-    // The note says what is missing. How to try again is the board server's to say: it knows what the page offers.
-    expect(r.note).toMatch(/Run "git init" and make a first commit\.$/);
+    expect(r.note).toBe('No git repository yet: the builder\'s copy is made from commits, so it would lack your files (notes.txt). Run "git init" and commit them; the builder does not commit for you.');
+    expect(r.note!.length).toBeLessThanOrEqual(200);
+    expect(fs.readdirSync(repo).sort()).toEqual(['.keel', 'notes.txt']);
     expect(records()).toEqual([]);
   });
 
-  it('a repository with no commit yet gets a failure that says to make one', async () => {
-    board = await buildBoard({ check: CHECK });
-    repo = path.join(tmp, 'empty');
-    fs.mkdirSync(repo);
-    sh(repo, 'git', 'init', '--quiet');
+  it('the board in a new folder the commit does not hold: the folder is made in the worktree', async () => {
+    board = await buildBoard({ check: CHECK, parts: ['sum'] });
+    const top = makeRepo(path.join(tmp, 'top'));
+    repo = boardFolder(path.join(top, 'app'));
     const r = await (await builder()).run(job());
-    expect(r).toEqual({
-      outcome: 'failed',
-      note: `The builder could not make its own copy on board/${BCH}: The repository has no commit yet, so there is nothing to build on. Make a first commit.`,
-    });
+    expect(r.outcome, r.note).toBe('done');
+    const files = sh(top, 'git', 'ls-tree', '-r', '--name-only', `board/${BCH}`).split('\n');
+    expect(files).toEqual(expect.arrayContaining(['README.md', 'app/parts/sum.txt', `app/docs/briefs/${BCH}.md`, `app/docs/adr/0001-${BCH}.md`]));
+    expect(records().find((x) => x.start)?.cwd).toBe(path.join(fs.realpathSync(stateDir), 'build', BCH, 'tree', 'app'));
+    // The owner is the author, as in any build: git was asked in the worktree, which now has the folder.
+    expect(sh(top, 'git', 'log', '-1', '--format=%an|%cn', `board/${BCH}`)).toBe('Owner|Keel builder');
+    expect(sh(top, 'git', 'status', '--porcelain')).toBe('?? app/');
+  }, 60_000);
+
+  it('the board\'s folder is a link out in the commit: nothing is made outside the worktree', async () => {
+    board = await buildBoard({ check: CHECK, parts: ['sum'] });
+    const outside = path.join(tmp, 'outside');
+    fs.mkdirSync(outside);
+    const top = makeRepo(path.join(tmp, 'top'));
+    fs.symlinkSync(outside, path.join(top, 'app'));
+    sh(top, 'git', 'add', 'app');
+    sh(top, 'git', 'commit', '--quiet', '-m', 'a link');
+    // The owner's checkout has a real folder there now; the commit still has the link.
+    fs.unlinkSync(path.join(top, 'app'));
+    repo = boardFolder(path.join(top, 'app'));
+    const r = await (await builder()).run(job());
+    expect(r.outcome).toBe('failed');
+    expect(r.note).toBe('The board\'s folder, app, would leave the builder\'s copy or pass through a link in it, so nothing is built.');
+    expect(fs.readdirSync(outside)).toEqual([]);
     expect(records()).toEqual([]);
+  }, 60_000);
+
+  it('with no git installed, says so plainly', async () => {
+    board = await buildBoard({ check: CHECK });
+    const empty = path.join(tmp, 'no-bin');
+    fs.mkdirSync(empty);
+    process.env.PATH = empty;
+    const r = await (await builder()).run(job());
+    expect(r).toEqual({ outcome: 'failed', note: 'Git is not installed here, and the builder works in a git copy of the folder. Install git.' });
   });
+
+  it('a finished build that commits a page and its script shows them: a copy, without secrets, dot files or links', async () => {
+    board = await buildBoard({ check: CHECK, parts: ['sum'] });
+    process.env.FAKE_FILES = JSON.stringify({
+      'index.html': '<!doctype html><link rel="stylesheet" href="style.css"><script src="./app.js"></script><script src="https://cdn.example.invalid/x.js"></script>',
+      'app.js': 'console.log(1);\n',
+      'style.css': 'body{}\n',
+      '.env': 'X=1\n',
+      'deploy.pem': 'not a key\n',
+      '.keel/board/x.json': '{}\n',
+      'lib/.hidden': 'x\n',
+    });
+    process.env.FAKE_LINKS = JSON.stringify({ 'up.js': '../../../outside.js' });
+    const r = await (await builder()).run(job());
+    expect(r.outcome, r.note).toBe('done');
+    const show = buildPlaces(stateDir, BCH).show;
+    expect(r.show).toEqual({ dir: show, page: 'index.html' });
+    const listed = (fs.readdirSync(show, { recursive: true }) as string[]).sort();
+    expect(listed).toEqual(['README.md', 'app.js', 'docs', 'docs/adr', `docs/adr/0001-${BCH}.md`, 'docs/briefs', `docs/briefs/${BCH}.md`, 'index.html', 'parts', 'parts/sum.txt', 'style.css']);
+    expect((fs.statSync(show).mode & 0o777).toString(8)).toBe('700');
+    expect((fs.statSync(path.join(show, 'docs')).mode & 0o777).toString(8)).toBe('700');
+    expect(fs.readFileSync(path.join(show, 'app.js'), 'utf8')).toBe('console.log(1);\n');
+    // The worktree is gone; the show stays, beside it, and nothing temporary is left.
+    expect(fs.existsSync(buildPlaces(stateDir, BCH).tree)).toBe(false);
+    expect(fs.readdirSync(path.dirname(show)).sort()).toEqual(['own', 'show']);
+    // The builder's own last line is as it was: the server says the rest.
+    expect(board.state.feed.at(-1)?.text).toMatch(/^Every part is built, on the branch board\/adder.*Merge it when you are ready: git merge board\/adder\.$/);
+  }, 60_000);
+
+  it('a page that needs a build step gives no show, and the build is done all the same', async () => {
+    board = await buildBoard({ check: CHECK, parts: ['sum'] });
+    process.env.FAKE_FILES = JSON.stringify({ 'index.html': '<script type="module" src="/src/main.tsx"></script>', 'src/main.tsx': 'export {};\n' });
+    const r = await (await builder()).run(job());
+    expect(r.outcome, r.note).toBe('done');
+    expect(r.show).toBeUndefined();
+    expect(fs.existsSync(buildPlaces(stateDir, BCH).show)).toBe(false);
+    expect(logs.some((l) => l.includes('no show: index.html does not stand alone: it loads /src/main.tsx'))).toBe(true);
+  }, 60_000);
 
   it('builds nothing with no agreed check, or when switched off', async () => {
     board = await buildBoard({ check: CHECK });
@@ -534,6 +684,23 @@ describe('the fence and the records, as data', () => {
     expect(safeRelative(root, 'out/briefs')).toBeUndefined();
     fs.writeFileSync(path.join(root, 'CLAUDE.md'), '## Keel\n- Briefs: `../escape` · Decisions: `out/adr`\n');
     expect(recordPlaces(root)).toEqual({ briefs: 'docs/briefs', decisions: 'docs/decisions' });
+  });
+
+  it('the note about the owner\'s files names a few, says how many more, and fits in 200 characters', () => {
+    expect(filesNote('repo', ['a.txt', 'src/b.js', 'c.md'], 9)).toBe('No commit yet: the builder\'s copy is made from commits, so it would lack your files (a.txt, src/b.js, c.md and 9 more). Commit them first; the builder does not commit them for you.');
+    expect(filesNote('repo', ['a.txt', 'b.txt'], 0)).toContain('your files (a.txt and b.txt)');
+    expect(filesNote('folder', ['a.txt', 'src/', 'c.md'], undefined)).toContain('your files (a.txt, src/, c.md and more)');
+    const long = ['x'.repeat(90), 'y'.repeat(90), 'z'.repeat(90)];
+    for (const kind of ['repo', 'folder'] as const) {
+      for (const more of [0, 7, 12345, undefined]) {
+        const note = filesNote(kind, long, more);
+        expect(note.length, note).toBeLessThanOrEqual(200);
+        expect(note).toContain('xxxxxxxx');
+        expect(note).toMatch(kind === 'repo' ? /Commit them first; the builder does not commit them for you\.$/ : /Run "git init" and commit them; the builder does not commit for you\.$/);
+      }
+    }
+    // A name that does not fit is dropped and counted, before one is clipped.
+    expect(filesNote('repo', ['x'.repeat(30), 'y'.repeat(30)], 0)).toContain(`${'x'.repeat(30)} and 1 more`);
   });
 
   it('the builder\'s instructions carry only the choice section of the grammar', () => {

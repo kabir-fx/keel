@@ -1,12 +1,15 @@
 /**
  * @keel/pictures: one renderer per picture kind. Plain React components with no canvas
- * dependency. A renderer marks what a mark can point at with `data-sub`, draws at its own
- * natural size, and never knows where it sits on the board.
+ * dependency. A renderer marks what a mark can point at with `data-sub` and what its picture
+ * is made of with `data-build`, draws at its own natural size, and never knows where it sits
+ * on the board.
  *
  * The look lives in `@keel/pictures/styles.css`, which the app imports once.
  */
 export { Picture, Drawing, Plain, DRAWN_KINDS } from './Picture';
 export { TextCard, textWidth } from './text';
+export { PART_KINDS, buildParts } from './build';
+export type { BuildPart, PartKind } from './build';
 export { Star, StateChip, subClass, wholeClass } from './parts';
 export { blueOf } from './blue';
 export { layoutLanes, assignColumns } from './Lanes';

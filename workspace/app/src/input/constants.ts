@@ -343,12 +343,6 @@ export const TOOLTIP_DELAY = 500;
 export const TOOLTIP_WARM = 300;
 
 /**
- * The agent's cursor travels to a new place over this long, in ms, so the owner's eye can follow
- * it. The board's own: the 0.6 s its old CSS transition took. With reduced motion it jumps.
- */
-export const CURSOR_GLIDE_MS = 600;
-
-/**
  * An arrow's end ties to a thing it lands this near, in board units, at 100% and closer. Zoomed
  * out the reach grows, up to twice this, so a thing small on the screen is still easy to hit.
  * Excalidraw's `maxBindingDistance_simple` (packages/element/src/binding.ts).

@@ -1,4 +1,5 @@
 import type { ChoicePicture } from '@keel/protocol';
+import { asPart } from './build';
 import { Star, tapper, wholeClass } from './parts';
 import type { PictureProps } from './types';
 import { NO_MARKINGS } from './types';
@@ -16,19 +17,19 @@ export function ChoiceCard({ item, state, markings, onAct }: PictureProps & { it
   const byOwner = s?.chosenBy === 'owner';
   const part = p.part ? state.model.parts[p.part] : undefined;
   return (
-    <article className={`kp kp-choice${wholeClass(m)}`} data-kind="choice" data-chosen={chosen} style={{ width: 440 }}>
-      <h3 className="kp-card__head">
+    <article className={`kp kp-choice${wholeClass(m)}`} {...asPart('frame')} data-kind="choice" data-chosen={chosen} style={{ width: 440 }}>
+      <h3 className="kp-card__head" {...asPart('head')}>
         <Star />
         <span>{p.title}</span>
         <span className="kp-choice__yours">yours to change</span>
       </h3>
-      {p.body && <p className="kp-text__body">{p.body}</p>}
-      {part && <p className="kp-muted kp-choice__part">In {part.name}</p>}
+      {p.body && <p className="kp-text__body" {...asPart('block')}>{p.body}</p>}
+      {part && <p className="kp-muted kp-choice__part" {...asPart('block')}>In {part.name}</p>}
       <ul className="kp-choice__options">
         {p.options.map((o) => {
           const on = o.id === chosen;
           return (
-            <li key={o.id} {...tap(`option:${o.id}`, `kp-choice__option${on ? ' kp-choice__option--on' : ''}`)}>
+            <li key={o.id} {...tap(`option:${o.id}`, `kp-choice__option${on ? ' kp-choice__option--on' : ''}`)} {...asPart('block')}>
               <span className="kp-choice__label">
                 <b>{o.label}</b>
                 {o.note && <span className="kp-muted">{o.note}</span>}

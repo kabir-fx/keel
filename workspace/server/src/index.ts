@@ -4,7 +4,9 @@
  */
 export { Board } from './board';
 export type { BoardListener, BoardOpenOptions, PostResult } from './board';
-export { startServer, defaultAppDir, shellPolicy, ASSET_POLICY, LIMITS } from './server';
+export { startServer, defaultAppDir, shellPolicy, ASSET_POLICY, LIMITS, SHOW_OPENED, SHOW_WAITS } from './server';
+export { checkShow, startShowServer, showTypeOf } from './show';
+export type { CheckedShow, ShowServer } from './show';
 export type { BoardInfoReply, RunningServer, ServerOptions, Tokens } from './server';
 export { WakeScheduler, hasAgentPicture, quietAfter, systemClock, QUIET_LONG, QUIET_SHORT, RETRY_DELAYS } from './wake';
 export type { Clock, WakeSchedulerOptions } from './wake';
@@ -18,7 +20,7 @@ export type { ScriptAnswer, ScriptPost } from './link';
 export { findServer, readServerFile, findBoardDir } from './serverfile';
 export type { FoundServer } from './serverfile';
 export { BoardBusyError, PrivateBoard, stateRoot, privatePlace, readPrivate } from './private';
-export type { Consent, PrivatePlace } from './private';
+export type { Consent, KeptShow, PrivatePlace } from './private';
 export { gitCommitCheck } from './git';
 export type { CommitCheck } from './git';
 export { LinkRefusedError } from './files';
@@ -26,4 +28,4 @@ export { loadLog } from './board';
 export { oneLine, plain } from './text';
 export { cleanAssetName, assetFile, openAsset } from './assets';
 export { buildLine, run } from './cli';
-export type { Io, RunResult } from './cli';
+export type { Io, RunDeps, RunResult } from './cli';

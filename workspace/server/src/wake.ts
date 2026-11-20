@@ -1,4 +1,4 @@
-import type { AgentLink, BoardEvent, BoardState, ForeignRange, Id, Presence, PresenceState, PresenceUpdate, WakeReason, WakeResult } from '@keel/protocol';
+import type { AgentLink, BoardEvent, BoardState, Digest, ForeignRange, Id, Presence, PresenceState, PresenceUpdate, WakeReason, WakeResult } from '@keel/protocol';
 import { ACT_TYPES, digest, isAct, isForeign, openCount, openThings, renderDigest } from '@keel/protocol';
 import { plain } from './text';
 
@@ -30,6 +30,23 @@ export const RETRY_DELAYS = [2000, 8000, 30000] as const;
 export const WAKE_TIMEOUT = 10 * 60_000;
 /** What the pill says the moment a wake starts, before the agent says anything itself. */
 export const WAKE_PRESENCE = { state: 'drawing', note: 'reading your marks' } as const satisfies PresenceUpdate;
+
+/**
+ * The presence a wake sets: the pill's words, and the agent's cursor on the newest fresh thing
+ * of the owner's that is on the board, so the owner sees where the agent reads. An act (a
+ * solidify, a pick) is not on the board: with only acts fresh, the cursor is given no place.
+ * A mark that came with the log from outside (`foreign` in the digest) is passed over: the
+ * agent is told not to answer it, so the cursor does not go there.
+ */
+export function wakePresence(d: Digest, state: BoardState): PresenceUpdate {
+  // The digest lists what is open newest last.
+  for (let i = d.open.length - 1; i >= 0; i--) {
+    const o = d.open[i]!;
+    const s = state.items[o.id];
+    if (o.fresh && !o.foreign && s && !s.removed) return { ...WAKE_PRESENCE, cursor: { item: o.id } };
+  }
+  return WAKE_PRESENCE;
+}
 
 /**
  * How long to wait for quiet after this event, or undefined when it is not input for the
@@ -190,7 +207,7 @@ export class WakeScheduler {
     const prior = this.presence.get().state;
     // With a resting hook, the build says itself whether it still runs when the wake ends.
     this.before = prior === 'waiting' || (prior === 'building' && !this.resting) ? prior : undefined;
-    this.presence.set(WAKE_PRESENCE);
+    this.presence.set(wakePresence(d, state));
     const firstOfChapter = d.chapter ? !hasAgentPicture(state, d.chapter.id) : false;
     let result: WakeResult;
     try {

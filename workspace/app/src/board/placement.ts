@@ -1,6 +1,6 @@
 import type { BoardState, Box, Id } from '@keel/protocol';
 import type { RefObject } from 'react';
-import { useEffect, useLayoutEffect } from 'react';
+import { useLayoutEffect } from 'react';
 import type { CameraStore } from '../camera/camera';
 import { shownBoxOf } from '../layout';
 import { placeAll } from '../place';
@@ -75,9 +75,11 @@ export function usePlacement({ source, camera, state, fontsReady, canPlace, ahea
   });
 
   // A placeholder that is finished, placed, or gone has no spot of its own here any more: a
-  // finished one waits to be placed at its finished size.
+  // finished one waits to be placed at its finished size. Before the page is painted, so a
+  // finished picture is measured and placed in the frame of the agent's update, and is never
+  // drawn whole on the placeholder's spot.
   const { keepProvisional } = ahead;
-  useEffect(() => {
+  useLayoutEffect(() => {
     keepProvisional((id) => {
       const it = state.items[id];
       return !!it && !it.removed && it.item.kind === 'picture' && it.item.box === undefined && it.item.status === 'drawing';

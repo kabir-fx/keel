@@ -1,7 +1,7 @@
 import type { Id, MarkItem } from '@keel/protocol';
 import { isMark } from '@keel/protocol';
 import type { RefObject } from 'react';
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type { Camera, CameraStore } from '../camera/camera';
 import type { Draft } from '../drafts';
 import { nextMarkId } from '../drafts';
@@ -88,6 +88,9 @@ export function useLog(source: BoardSource, camera: CameraStore, say: (text: str
     },
     [source, steps, say, camera],
   );
+
+  // A mark the source says was made on this page counts as the owner's last mark too.
+  useEffect(() => source.onOwnMark?.((mark) => (lastMark.current = { mark, cam: camera.goal() })), [source, camera]);
 
   const postNew = useCallback((id: Id, drafts: readonly Draft[]): Promise<boolean> => postAsOneStep(send, steps, id, drafts), [send, steps]);
   const postMark = useCallback((item: MarkItem): Promise<boolean> => postNew(item.id, markDrafts(source.state, item)), [source, postNew]);

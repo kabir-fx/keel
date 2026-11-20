@@ -4,6 +4,26 @@ import { CameraStore } from '../src/camera/camera';
 import { between, easeOut } from '../src/camera/motion';
 import type { FrameScheduler } from '../src/frame';
 import { FrameLoop } from '../src/frame';
+import { bezier, EASE } from '../src/motion/ease';
+import { arc, at, distance, lengthOf, polyline } from '../src/motion/path';
+import {
+  ARC_BEND,
+  ARC_BEND_MAX,
+  BLOCK_GAP_MS,
+  BLOCK_IN_MS,
+  BLOCK_RISE_PX,
+  BOX_FROM_SCALE,
+  BOX_GAP_MS,
+  BOX_IN_MS,
+  CAMERA_REVEAL_MS,
+  CURSOR_ENTER_MS,
+  CURSOR_TRAVEL_MAX_MS,
+  CURSOR_TRAVEL_MIN_MS,
+  LABEL_IN_MS,
+  lineMs,
+  STILL_AFTER_MS,
+  travelMs,
+} from '../src/motion/timing';
 
 /** The camera's glide: its in-between cameras, its easing, and the store that runs it on the frame loop. */
 
@@ -133,6 +153,23 @@ describe('a glide', () => {
     expect(run()).toBe(19);
   });
 
+  it('eases out unless told otherwise, and eases as it is told: in and out for a reveal', () => {
+    for (const [given, ease] of [
+      [undefined, easeOut],
+      [EASE.move, EASE.move],
+    ] as const) {
+      const { camera, f } = gliding({ x: 0, y: 0, z: 1 });
+      camera.glide({ x: 1000, y: 0, z: 1 }, 160, given);
+      for (let k = 1; k < 10; k++) {
+        f.step();
+        expect(camera.get().x).toBeCloseTo(1000 * ease((k * 16) / 160), 9);
+      }
+      f.step();
+      expect(camera.get()).toEqual({ x: 1000, y: 0, z: 1 });
+      expect(camera.gliding()).toBe(false);
+    }
+  });
+
   for (const [name, a, b] of MOVES) {
     it(`moves each world point one way on the screen, with no overshoot, for ${name}`, () => {
       const { camera, seen, run } = gliding(a);
@@ -258,5 +295,187 @@ describe('a glide', () => {
     camera.glide({ x: 5, y: 6, z: 1 });
     expect(camera.gliding()).toBe(false);
     expect(f.asked()).toBe(0);
+  });
+});
+
+/* ------------------------------------------------------------------ motion/: easings, paths, timing */
+
+/** The four numbers a CSS `cubic-bezier(...)` string names. */
+const cssPoints = (css: string): [number, number, number, number] => {
+  const m = /^cubic-bezier\(([^)]*)\)$/.exec(css);
+  if (!m) throw new Error(`not a cubic-bezier: "${css}"`);
+  const n = m[1]!.split(',').map(Number);
+  expect(n).toHaveLength(4);
+  return n as [number, number, number, number];
+};
+
+/** The point of the Bézier through (0,0), (x1,y1), (x2,y2), (1,1) at its own parameter `s`. */
+const onCurve = ([x1, y1, x2, y2]: readonly number[], s: number) => {
+  const c = (a: number, b: number) => 3 * (1 - s) ** 2 * s * a + 3 * (1 - s) * s * s * b + s ** 3;
+  return [c(x1!, x2!), c(y1!, y2!)] as const;
+};
+
+const shares = (n: number) => Array.from({ length: n + 1 }, (_, i) => i / n);
+
+describe('the board’s easings', () => {
+  it('a Bézier answers the curve’s own height at each time, to a millionth', () => {
+    const curves: Array<[number, number, number, number]> = [[0.25, 0.1, 0.25, 1], [0.4, 0, 0.2, 1], [0.05, 0.7, 0.1, 1], [0.15, 0.9, 0.3, 1.15], [0, 0, 1, 1]];
+    for (const p of curves) {
+      const f = bezier(...p);
+      for (const s of shares(50)) {
+        const [x, y] = onCurve(p, s);
+        expect(Math.abs(f(x) - y), `${p} at s=${s}`).toBeLessThan(1e-6);
+      }
+    }
+  });
+
+  it('a straight Bézier is no easing at all: the time itself', () => {
+    const f = bezier(1 / 3, 1 / 3, 2 / 3, 2 / 3);
+    for (const t of shares(20)) expect(f(t)).toBeCloseTo(t, 9);
+  });
+
+  it('every easing is exactly 0 at or before the start and exactly 1 at or past the end', () => {
+    for (const [name, e] of Object.entries(EASE)) {
+      for (const t of [-1, -1e-9, 0]) expect(e(t), name).toBe(0);
+      for (const t of [1, 1 + 1e-9, 2]) expect(e(t), name).toBe(1);
+    }
+  });
+
+  it('each easing is the curve its CSS string names, so the page and the frame loop agree', () => {
+    for (const [name, e] of Object.entries(EASE)) {
+      const same = bezier(...cssPoints(e.css));
+      for (const t of shares(100)) expect(e(t), `${name} at ${t}`).toBe(same(t));
+    }
+    expect(EASE.move.css).toBe('cubic-bezier(0.4, 0, 0.2, 1)');
+    expect(EASE.draw.css).toBe('cubic-bezier(0.65, 0, 0.35, 1)');
+    expect(EASE.enter.css).toBe('cubic-bezier(0.05, 0.7, 0.1, 1)');
+    expect(EASE.exit.css).toBe('cubic-bezier(0.3, 0, 1, 1)');
+  });
+
+  it('move, draw, enter and exit go one way, never past the end, and none is linear', () => {
+    for (const name of ['move', 'draw', 'enter', 'exit'] as const) {
+      const ys = shares(200).map((t) => EASE[name](t));
+      expect(oneWay(ys), name).toBe(true);
+      expect(Math.max(...ys), name).toBe(1);
+      expect(Math.min(...ys), name).toBe(0);
+      // Somewhere it is well off the straight line.
+      expect(Math.max(...shares(200).map((t, i) => Math.abs(ys[i]! - t))), name).toBeGreaterThan(0.1);
+    }
+    // In and out: slow at both ends. Enter is fast in; exit is slow away.
+    expect(EASE.move(0.1)).toBeLessThan(0.1);
+    expect(EASE.move(0.9)).toBeGreaterThan(0.9);
+    expect(EASE.enter(0.1)).toBeGreaterThan(0.5);
+    expect(EASE.exit(0.3)).toBeLessThan(0.3);
+  });
+
+  it('pull goes in and out, past the end once by about 1 to 1.5%, late, and comes back to it exactly', () => {
+    const ys = shares(2000).map((t) => EASE.pull(t));
+    const peak = Math.max(...ys);
+    expect(peak).toBeGreaterThan(1.01);
+    expect(peak).toBeLessThan(1.015);
+    // Up to the peak, then down to 1: the way turns once, and late.
+    const top = ys.indexOf(peak);
+    expect(top / ys.length).toBeGreaterThan(0.75);
+    expect(oneWay(ys.slice(0, top + 1))).toBe(true);
+    expect(oneWay(ys.slice(top))).toBe(true);
+    expect(ys[ys.length - 1]).toBe(1);
+    // Slow away, as a hand starts a drag.
+    expect(EASE.pull(0.1)).toBeLessThan(0.1);
+  });
+});
+
+describe('the paths the cursor travels', () => {
+  const cross = (a: readonly number[], b: readonly number[], c: readonly number[]) => (b[0]! - a[0]!) * (c[1]! - a[1]!) - (b[1]! - a[1]!) * (c[0]! - a[0]!);
+
+  it('an arc starts and ends exactly at its two places, also asked before 0 and past 1', () => {
+    const p = arc([10, 20], [610, 420]);
+    expect(at(p, 0)).toEqual([10, 20]);
+    expect(at(p, -3)).toEqual([10, 20]);
+    expect(at(p, 1)).toEqual([610, 420]);
+    expect(at(p, 7)).toEqual([610, 420]);
+  });
+
+  it('an arc bends to the left of the way it goes, by a share of its length, and never more than the cap', () => {
+    // A trip to the right bends up; one to the left bends down.
+    const short = arc([0, 0], [200, 0]);
+    expect(at(short, 0.5)[0]).toBeCloseTo(100, 6);
+    expect(at(short, 0.5)[1]).toBeCloseTo(-200 * ARC_BEND, 6);
+    expect(at(arc([200, 0], [0, 0]), 0.5)[1]).toBeCloseTo(200 * ARC_BEND, 6);
+    const long = arc([0, 0], [5000, 0]);
+    expect(at(long, 0.5)[1]).toBeCloseTo(-ARC_BEND_MAX, 6);
+    // Its length is a little more than the straight line.
+    expect(lengthOf(short)).toBeGreaterThan(200);
+    expect(lengthOf(short)).toBeLessThan(200 * 1.05);
+  });
+
+  it('an arc is a curve, not a straight line, and the same trip is always the same path', () => {
+    const p = arc([0, 0], [300, 300]);
+    expect(Math.abs(cross(at(p, 0.25), at(p, 0.5), at(p, 0.75)))).toBeGreaterThan(100);
+    expect(arc([0, 0], [300, 300])).toEqual(p);
+  });
+
+  it('equal shares of the way are equal distances along it: only the easing says how fast', () => {
+    const p = arc([0, 0], [800, 100]);
+    const steps = shares(20).slice(1).map((f, i) => distance(at(p, i / 20), at(p, f)));
+    const mean = lengthOf(p) / 20;
+    for (const d of steps) expect(Math.abs(d - mean) / mean).toBeLessThan(0.01);
+  });
+
+  it('a trip of no length is a point', () => {
+    const p = arc([5, 6], [5, 6]);
+    expect(lengthOf(p)).toBe(0);
+    for (const f of [-1, 0, 0.5, 1, 2]) expect(at(p, f)).toEqual([5, 6]);
+  });
+
+  it('a polyline is measured along its length: an arrow’s route', () => {
+    const route = polyline([[0, 0], [100, 0], [100, 0], [100, 100]]);
+    expect(lengthOf(route)).toBe(200);
+    expect(at(route, 0.25)).toEqual([50, 0]);
+    expect(at(route, 0.5)).toEqual([100, 0]);
+    expect(at(route, 0.75)).toEqual([100, 50]);
+    expect(at(route, 1)).toEqual([100, 100]);
+    expect(at(polyline([[3, 4]]), 0.5)).toEqual([3, 4]);
+  });
+});
+
+describe('the motion’s numbers', () => {
+  it('a trip takes 320 to 750 ms, longer for a longer trip, by the motion skill’s distance scaling', () => {
+    const times = shares(500).map((f) => travelMs(f * 4000));
+    expect(oneWay(times)).toBe(true);
+    expect(Math.min(...times)).toBe(CURSOR_TRAVEL_MIN_MS);
+    expect(Math.max(...times)).toBe(CURSOR_TRAVEL_MAX_MS);
+    expect([CURSOR_TRAVEL_MIN_MS, CURSOR_TRAVEL_MAX_MS]).toEqual([320, 750]);
+    expect(travelMs(0)).toBe(320);
+    expect(travelMs(100)).toBe(400);
+    expect(travelMs(150)).toBe(460);
+    expect(travelMs(400)).toBe(640);
+    expect(travelMs(1e6)).toBe(750);
+    expect(travelMs(Number.NaN)).toBe(320);
+  });
+
+  it('a line takes 80 to 650 ms by its length: a short stroke is short, a flick shorter', () => {
+    expect(lineMs(0)).toBe(80);
+    expect(lineMs(8)).toBe(80);
+    expect(lineMs(24)).toBe(130);
+    expect(lineMs(40)).toBe(180);
+    expect(lineMs(420)).toBe(415);
+    expect(lineMs(800)).toBe(650);
+    expect(lineMs(1e6)).toBe(650);
+    expect(oneWay(shares(100).map((f) => lineMs(f * 1000)))).toBe(true);
+  });
+
+  it('are the plan’s starting values', () => {
+    expect({ CURSOR_ENTER_MS, BLOCK_IN_MS, BLOCK_GAP_MS, BLOCK_RISE_PX, BOX_IN_MS, BOX_GAP_MS, BOX_FROM_SCALE, LABEL_IN_MS, CAMERA_REVEAL_MS, STILL_AFTER_MS }).toEqual({
+      CURSOR_ENTER_MS: 600,
+      BLOCK_IN_MS: 220,
+      BLOCK_GAP_MS: 60,
+      BLOCK_RISE_PX: 6,
+      BOX_IN_MS: 180,
+      BOX_GAP_MS: 40,
+      BOX_FROM_SCALE: 0.96,
+      LABEL_IN_MS: 160,
+      CAMERA_REVEAL_MS: 560,
+      STILL_AFTER_MS: 150,
+    });
   });
 });

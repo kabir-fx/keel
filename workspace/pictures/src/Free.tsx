@@ -1,4 +1,5 @@
 import type { FreePicture } from '@keel/protocol';
+import { asPart } from './build';
 import { measure } from './measure';
 import { Gaps, wholeClass } from './parts';
 import type { PictureProps } from './types';
@@ -24,7 +25,7 @@ export function svgDataUrl(svg: string): string {
 
 export function FreeImage({ svg, title, maxW }: { svg: string; title: string; maxW: number }) {
   const { w, h } = svgSize(svg, maxW);
-  return <img className="kp-free__img" src={svgDataUrl(svg)} width={w} height={h} alt={title} draggable={false} />;
+  return <img className="kp-free__img" {...asPart('block')} src={svgDataUrl(svg)} width={w} height={h} alt={title} draggable={false} />;
 }
 
 /** A `free` picture: a white sheet, the title, a "free drawing" tag, the image, the caption. No subs. */
@@ -34,13 +35,13 @@ export function FreeCard({ item, markings }: PictureProps & { item: { picture: F
   const { w } = svgSize(p.svg, 860);
   const width = Math.max(360, w + 40, Math.ceil(measure(p.title, 'head600', 19)) + 150);
   return (
-    <article className={`kp kp-sheet kp-free${wholeClass(m)}`} data-kind="free" style={{ width }}>
-      <h3 className="kp-title">
+    <article className={`kp kp-sheet kp-free${wholeClass(m)}`} {...asPart('frame')} data-kind="free" style={{ width }}>
+      <h3 className="kp-title" {...asPart('head')}>
         <span>{p.title}</span>
         <span className="kp-tag">free drawing</span>
       </h3>
       <FreeImage svg={p.svg} title={p.title} maxW={860} />
-      {p.caption && <p className="kp-caption">{p.caption}</p>}
+      {p.caption && <p className="kp-caption" {...asPart('block')}>{p.caption}</p>}
       <Gaps gaps={p.gaps} />
     </article>
   );

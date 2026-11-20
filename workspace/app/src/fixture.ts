@@ -60,6 +60,34 @@ export function cutAt(fx: Fixture, at: number | undefined): { events: BoardEvent
   return { events: i >= 0 ? fx.events.slice(0, i + 1) : fx.events, checkpoint };
 }
 
+/** What a play of a fixture covers: the events from `from` up to, not including, `to`. */
+export interface PlayRange {
+  from: number;
+  to: number;
+  /** The checkpoint the play opens on: the one before the checkpoint it plays to. None for the first. */
+  before?: Checkpoint;
+  /** The checkpoint it plays to. None for the whole log. */
+  checkpoint?: Checkpoint;
+}
+
+/**
+ * The events a play of checkpoint `at` covers: those after the checkpoint before it (all of them
+ * for the first), up to and with its own last event. With no `at`, or one the fixture does not
+ * have, the whole log.
+ */
+export function playRange(fx: Fixture, at: number | undefined): PlayRange {
+  const whole: PlayRange = { from: 0, to: fx.events.length };
+  if (at === undefined) return whole;
+  const n = fx.checkpoints.findIndex((c) => c.screen === at);
+  const k = n >= 0 ? n : at - 1;
+  const checkpoint = fx.checkpoints[k];
+  if (!checkpoint) return whole;
+  const end = (c: Checkpoint) => fx.events.findIndex((e) => e.id === c.after) + 1;
+  const before = k > 0 ? fx.checkpoints[k - 1] : undefined;
+  const to = end(checkpoint) || fx.events.length;
+  return { from: before ? Math.min(end(before), to) : 0, to, ...(before ? { before } : {}), checkpoint };
+}
+
 /** What the app opens with at a checkpoint: what the owner was looking at then. */
 export interface Opening {
   mode: 'board' | 'story';

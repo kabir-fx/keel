@@ -10,7 +10,7 @@ Keel also holds an earlier way of working: rules, skills, review agents and hook
 
 1. **Ideate.** You mark the board: a note, a sketch, a circle, a cross, a dropped file, a spoken remark. There is no send button: when you pause, the agent answers in pictures. It shows how it read you, what the repository already has, and two to four approaches side by side. Each approach names its risk, and the agent gives its lean. You circle what you like and cross out the rest.
 2. **Solidify.** You lasso the pictures you pick and press Solidify. The agent reads the idea back as one picture, the blueprint. It lists your picks, where each came from, and what was left out. It says how you will know it works, and names the parts to build and one check command. Nothing is built before this step.
-3. **Watch.** You press "Build this" on the blueprint. A builder writes the code in its own copy of the repository, one commit per part. A part fills in only when the agreed check passes after its commit. A panel shows the build track, a feed of what the builder did, and a Pause button. You can keep marking, or leave: the board can tell you with a notification when something needs you.
+3. **Watch.** You press "Build this" on the blueprint. A builder writes the code in its own copy of the repository, one commit per part. A part fills in only when the agreed check passes after its commit. A panel shows the build track, a feed of what the builder did, and a Pause button. You can keep marking, or leave: the board can tell you with a notification when something needs you. When every part is built and the result is a page a browser can open by itself, the board opens it in your browser, and the panel keeps a "See it" button for it.
 
 A mark on a decided part reopens that part only. The build waits until you decide that part again, and then it builds the change. Then the loop starts again from step 1.
 
@@ -18,21 +18,34 @@ The Story is the second view of the board. It lists every idea as a chapter, new
 
 ## Quick start
 
-You need Node 22 or newer with npm, `jq`, git, and Claude Code installed and signed in.
+You need Node 22 or newer, git, and Claude Code installed and signed in.
 
 ```sh
-./install.sh            # from this folder
-cd ~/code/any-repo
-keel-board open
+cd ~/code/any-folder    # an empty folder, or a repository you already work in
+npx keel-workspace
+```
+
+That runs the board without installing it. To install it for good, run `npm install -g keel-workspace`. The command is then `keel-board`, in any folder.
+
+**From a clone.** Use a clone when you want to change keel itself, or the skills and instructions it ships. It also needs npm and `jq`.
+
+```sh
+git clone https://github.com/kabir-fx/keel.git && cd keel
+./install.sh
+cd ~/code/any-folder
+keel-board
 ```
 
 `./install.sh` builds the board in `workspace/` and links the `keel-board` command into `~/.local/bin` (or `$KEEL_BIN_DIR`). It says so when that folder is not on your PATH. It also installs the rules and skills below. After a `git pull`, run it again: it rebuilds the board.
 
-`keel-board open` makes `.keel/board/` in the repository, starts the board server, and opens the board in your browser. It prints an address that works once, for five minutes. The page trades it for a key that lasts until the server stops, and keeps that key for the address. For a second tab, or after a restart, `keel-board link` prints a fresh address. The server runs until you press Ctrl-C or run `keel-board stop`. The agent shows as present in the pill at the top right.
+`keel-board` makes `.keel/board/` in the folder, starts the board server, and opens the board in your browser. Open it in a folder for the project, not in your home folder: the agent can read the files in the folder a board is opened in, so the command refuses your home folder. It prints an address that works once, for five minutes. The page trades it for a key that lasts until the server stops, and keeps that key for the address. For a second tab, or after a restart, `keel-board link` prints a fresh address. The server runs until you press Ctrl-C or run `keel-board stop`. The agent shows as present in the pill at the top right.
+
+The folder may be new and empty, and it need not be a git repository. When you press "Build this" there, the builder makes it a repository and starts its branch from nothing ([0011](docs/adr/0011-an-empty-folder-is-built-from-nothing.md)). A folder that holds files of yours and no commit is different: the build stops and asks you to commit them first, because the builder does not commit your files for you.
 
 | Command | What it does |
 |---|---|
-| `keel-board open [dir]` | Start the board for a repository. `--no-browser` only prints the address. `--port n` picks the port. |
+| `keel-board` | Start the board for the current folder |
+| `keel-board open [dir]` | Start the board for a folder. `--no-browser` only prints the address. `--port n` picks the port. |
 | `keel-board status [dir]` | Is a server running, how many marks are open, what the agent and the builder do now |
 | `keel-board link [dir]` | Print a fresh address for the board's page. It works once. |
 | `keel-board stop [dir]` | Stop the server |
@@ -91,6 +104,8 @@ A log read from disk grants nothing ([0009](docs/adr/0009-a-log-read-from-disk-g
 
 When the log file is replaced while the board runs, as a pull or a checkout does, the board stops saving and says why. Stop it and open it again.
 
+A finished build is shown from an address of its own ([0012](docs/adr/0012-a-finished-build-is-shown-from-an-address-of-its-own.md)). The page shown is code a model wrote, so the server never serves it from the board's address, where your token is. It serves a copy of the built files from a second port on 127.0.0.1, at an address that holds a key made new for each start. The board refuses every request that comes from that address. The server runs no command to show a build: a build that is not a page a browser can open by itself is not shown, and the feed names the branch as before. The address is told to your page only, never to the agent, and it is never written to the log. With `--no-browser`, nothing opens by itself, and "See it" on the build panel opens it.
+
 **The board agent.** The server starts one headless Claude Code process and wakes it when you pause ([0003](docs/adr/0003-the-board-server-hosts-the-agent.md)). It runs on your own Claude Code sign-in: keel starts it without `ANTHROPIC_API_KEY`. By default it uses Sonnet at low effort.
 
 - It may read and list files inside the repository, and draw on the board through the board tools. Its only built-in tools are Read and Glob.
@@ -104,12 +119,14 @@ What this does not cover: the deny list is a list of names. A secret under anoth
 **The builder.** It starts only when you press "Build this" ([0007](docs/adr/0007-the-owner-agrees-to-one-check-and-only-it-calls-a-part-built.md)). By default it uses Sonnet at medium effort.
 
 - It works in its own git worktree, on the branch `board/<chapter>`, kept outside the repository. It never touches your checkout.
+- In a folder with no commit and no file of yours, its branch starts from an empty first commit, made on no branch of yours. In a folder that is no git repository it runs `git init` first. Your own branch has no commit until you merge.
 - Its file tools write inside its folder in that worktree, and nowhere else.
 - Its git is told where the worktree's own git folder is, and runs no hook. The code a check runs can write in the worktree, so nothing it leaves there is what git obeys.
 - Its shell runs `git status`, `diff`, `log`, `show`, `add`, `commit`, `rev-parse` and `ls-files`, and the commands you add with `--link-opt builder-allow="npm test;npm run lint"`. Anything else is denied and reported on the board. It reads files with its file tools, not inside `.git/` and not files with secret names.
 - It cannot run the check in its shell, and it cannot say "built". A tool of keel's runs the one check you agreed to, exactly as written, in the worktree. After each commit, when that check passes, the tool marks the part built, with the commit's hash. When it fails, the board shows the end of the output.
 - The check runs code the builder wrote, so it runs in a sandbox: `sandbox-exec` on macOS, `bwrap` on Linux. It has no network. It writes only inside the worktree and a temp folder of its own. It cannot read keel's private folder, `~/.ssh`, `~/.aws`, `~/.claude` and a few more key folders. Its environment is a short allow-list, not yours. Its processes are stopped when the server stops. Where the system has no sandbox, only the allow-list holds, and the feed says so.
 - It commits a brief and a decision record on its branch. It uses the repository's own folders for them, else `docs/briefs/` and `docs/adr/`. Its commits name you as the author and "Keel builder" as the committer.
+- When the build is done and it holds a page that stands alone, the builder copies the committed files into keel's private folder for the server to show. It leaves out files whose names start with a dot, files with secret names, and links.
 - Merging the branch is your act. A part may take 30 minutes, and the check 10 minutes.
 
 By pressing "Build this", you agree to run that one check command in the builder's worktree. The check is the one the blueprint shows, word for word. The server keeps that agreement outside the repository: the chapter, the check and the parts. A build whose check or parts differ from what you agreed to does not run. When the log changes outside the board, every agreement is dropped, and you press Resume to agree again.
@@ -120,6 +137,7 @@ What this does not cover:
 - The Mac sandbox also stops the check from asking the system to open a file, to script another program or to start a job. That is a list, not a wall.
 - On a system with no sandbox, the check runs as you, with only its environment cut down.
 - The builder is a model that reads your repository. The fence limits what it can do, not what it can be told.
+- The page a finished build shows runs in your browser like any page you open. It cannot act on the board, but it can reach the network, and every page the board shows shares one address, so one can read what another kept in the browser.
 
 **Your own Claude Code session.** The installer registers a guard hook. It denies a Write or an Edit inside `.keel/board/`, and a shell command that writes there. It denies any read or write of keel's private folder, `~/.keel/boards/`, which holds the running server's tokens and the builds you agreed to. It reads the words of a command, so it stops mistakes, not an attacker.
 
@@ -130,7 +148,7 @@ What this does not cover:
 | The board log | `.keel/board/log.jsonl` in the repository | Yes. The log is the board's story and memory. Nothing is deleted from it ([0001](docs/adr/0001-the-board-is-an-append-only-log.md)). |
 | Snapshots and dropped files | `.keel/board/assets/` | The log names them. Large files need not be committed. |
 | That a server is up: its process and its port, no token | `.keel/board/server.json` | No. `.keel/board/.gitignore` keeps it out. |
-| The board's key, the running server's tokens, the port, the builds you agreed to, the seal of the log, which lines came from outside, the agent's session, the builder's worktrees | `~/.keel/boards/<key>/`, or `$KEEL_STATE_DIR/boards/` | No. It is outside the repository. |
+| The board's key, the running server's tokens, the port, the builds you agreed to, the seal of the log, which lines came from outside, the agent's session, the builder's worktrees, the copy of each finished build that is shown | `~/.keel/boards/<key>/`, or `$KEEL_STATE_DIR/boards/` | No. It is outside the repository. |
 | A build's brief and decision record | on the branch `board/<chapter>` | They arrive when you merge. |
 
 The port stays the same across restarts. The tokens do not: after a restart, use the tab the command opens, or run `keel-board link`. A tab from before says so.
@@ -148,6 +166,8 @@ These numbers were measured on one machine on 2026-11-17 and 2026-11-18, with a 
 ## What is not there yet
 
 - The board tools in your own Claude Code session. The installer adds only the guard hook. The tools are in `workspace/plugin/`.
+- An install from npm adds nothing to your own Claude Code session: no guard hook, no rules, no skills. Those come only with `./install.sh` from a clone.
+- The package from npm has run on a Mac only. It declares macOS and Linux, and Linux is not tried.
 - Pen and touch input have not been tried on a real pen or touch device ([0004](docs/adr/0004-a-hand-built-canvas.md)). Talk has not been tried with a real voice.
 - Pictures fit a pipeline best. The agent can draw a screen only as one plain drawing. Branches in a walk, state machines and data shapes cannot be drawn yet ([0005](docs/adr/0005-the-agent-draws-from-a-grammar.md)).
 - Your `CLAUDE.md` does not shape what the board agent says.

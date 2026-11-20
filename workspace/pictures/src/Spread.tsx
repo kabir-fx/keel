@@ -1,5 +1,6 @@
 import type { Approach, SpreadPicture } from '@keel/protocol';
 import { APPROACH_LETTERS, approachSub } from '@keel/protocol';
+import { asPart } from './build';
 import { FreeImage, svgSize } from './Free';
 import { LanesSvg, layoutLanes } from './Lanes';
 import { blueOf, isLanes } from './blue';
@@ -32,7 +33,7 @@ export function SpreadCard({ item, markings, onAct }: PictureProps & { item: { p
   const widths = p.approaches.map(approachWidth);
   const width = widths.reduce((a, b) => a + b, 0) + GAP * (widths.length - 1);
   return (
-    <article className={`kp kp-spread${wholeClass(m)}`} data-kind="spread" style={{ width }}>
+    <article className={`kp kp-spread${wholeClass(m)}`} {...asPart('frame')} data-kind="spread" style={{ width }}>
       <Strip head={p.title}>
         {p.caption ?? (
           <>
@@ -47,8 +48,8 @@ export function SpreadCard({ item, markings, onAct }: PictureProps & { item: { p
           const crossed = isCrossed(m, sub);
           const props = tap(sub, 'kp-sheet kp-approach');
           return (
-            <section key={sub} {...props} style={{ width: widths[i] }} aria-label={`Approach ${letter}: ${a.title}`}>
-              <header className="kp-approach__head">
+            <section key={sub} {...props} {...asPart('frame')} style={{ width: widths[i] }} aria-label={`Approach ${letter}: ${a.title}`}>
+              <header className="kp-approach__head" {...asPart('head')}>
                 <Letter>{letter}</Letter>
                 <h4 className="kp-approach__title">{a.title}</h4>
                 {!isLanes(a) && <span className="kp-tag">free drawing</span>}
@@ -67,7 +68,7 @@ export function SpreadCard({ item, markings, onAct }: PictureProps & { item: { p
               ) : (
                 <FreeImage svg={a.svg} title={a.title} maxW={520} />
               )}
-              {a.caption && <p className="kp-caption">{a.caption}</p>}
+              {a.caption && <p className="kp-caption" {...asPart('block')}>{a.caption}</p>}
               <Risk>{a.risk}</Risk>
               <Gaps gaps={a.gaps} />
               {crossed && <CrossOver />}

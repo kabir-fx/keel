@@ -35,6 +35,8 @@
 .watch__btn:disabled { opacity: 0.55; cursor: progress; }
 .watch__btn--dark, .watch__btn--go { background: var(--ink); color: #fff; }
 .watch__btn--dark:hover:not(:disabled), .watch__btn--go:hover:not(:disabled) { background: var(--fill); }
+/* "See it" is a link that looks like the buttons beside it: same height, no underline. */
+a.watch__btn { display: inline-flex; align-items: center; text-decoration: none; }
 .watch__fold { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }
 .watch__fold:hover { background: var(--light); }
 .watch__fold svg { fill: none; stroke: var(--ink); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }

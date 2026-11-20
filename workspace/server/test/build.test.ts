@@ -1,14 +1,16 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import type { Actor, BuildJob, BuildResult, BuilderContext, FeedEntry, Wake } from '@keel/protocol';
+import type { Actor, BuildJob, BuildResult, BuildShow, Builder, BuilderContext, FeedEntry, Wake } from '@keel/protocol';
 import { ROUTES, renderBrief } from '@keel/protocol';
-import { NO_BUILDER } from '../src/build';
-import type { Io } from '../src/cli';
+import { Board } from '../src/board';
+import { BuildRunner, NO_BUILDER } from '../src/build';
+import type { Io, RunDeps } from '../src/cli';
 import { run } from '../src/cli';
 import type { RunningServer, ServerOptions } from '../src/server';
-import { startServer } from '../src/server';
+import { SHOW_OPENED, SHOW_WAITS, startServer } from '../src/server';
 import { CH, Client, call, chapter, ink, note, tempRepo, until } from './helpers';
 
 const FAKE = fileURLToPath(new URL('./fake-builder.mjs', import.meta.url));
@@ -333,6 +335,80 @@ describe('the build', () => {
   });
 });
 
+describe('what a finished build shows', () => {
+  /**
+   * A runner on a board of its own, with no server: its builder ends each run with what the
+   * test gives, and the runner's show option records what it is handed.
+   */
+  async function runOnce(result: unknown, opts: { buildParts?: boolean } = {}): Promise<{ shown: Array<[string, BuildShow]>; board: Board; log: string[] }> {
+    const board = Board.open(tempRepo(), { checkCommits: false });
+    const post = (by: Actor, ...drafts: unknown[]) => {
+      const r = board.post(drafts, by);
+      if (!r.ok) throw new Error(`${r.rule}: ${r.reason}`);
+    };
+    const parts = ['door', 'bridge'];
+    post('owner', { type: 'chapter.open', chapter: CH, title: 'Idea' });
+    post('agent', { type: 'model.patch', chapter: CH, ops: [{ op: 'lane.set', lane: { id: 'main', name: 'Main' } }, ...parts.map((p) => ({ op: 'part.set', part: { id: p, name: p, lane: 'main' } }))] });
+    post('owner', { type: 'solidify', chapter: CH, picks: [], parts });
+    post('owner', { type: 'build.start', chapter: CH, track: parts, check: 'npm test' });
+    let finish: (r: unknown) => void = () => {};
+    const builder: Builder = {
+      name: 'inline',
+      run: () => new Promise<BuildResult>((resolve) => (finish = resolve as (r: unknown) => void)),
+      pause: async () => {},
+      close: async () => {},
+    };
+    const shown: Array<[string, BuildShow]> = [];
+    const log: string[] = [];
+    const runner = new BuildRunner({
+      builder,
+      consent: () => ({ check: 'npm test', track: parts }),
+      state: () => board.state,
+      post: (drafts) => post('system', ...drafts),
+      presence: { get: () => ({ state: 'away', since: '' }), set: () => undefined },
+      inWake: () => false,
+      rest: () => ({ state: 'away' }),
+      show: (chapter, show) => shown.push([chapter, show]),
+      log: (m) => log.push(m),
+    });
+    board.subscribe((events) => runner.notify(events));
+    runner.start();
+    await until(() => runner.busy);
+    if (opts.buildParts !== false) {
+      for (const part of parts) {
+        post('agent', { type: 'part.state', part, state: 'building' });
+        post('system', { type: 'part.state', part, state: 'built', commit: 'abc1234', check: { cmd: 'npm test', passed: true } });
+      }
+    }
+    finish(result);
+    await until(() => !runner.busy);
+    await settle();
+    await runner.close();
+    board.close();
+    return { shown, board, log };
+  }
+
+  it('hands over the folder and the page, and nothing else, when a run ends done and the chapter is built', async () => {
+    const { shown, board } = await runOnce({ outcome: 'done', show: { dir: '/some/where', page: 'index.html', extra: 'left out' } });
+    expect(board.state.chapters[CH]!.state).toBe('built');
+    expect(shown).toEqual([[CH, { dir: '/some/where', page: 'index.html' }]]);
+  });
+
+  it('hands over nothing with no show, a show of the wrong shape, an outcome other than done, or a chapter not built', async () => {
+    expect((await runOnce({ outcome: 'done' })).shown).toEqual([]);
+    const odd = await runOnce({ outcome: 'done', show: { dir: '/some/where', page: 3 } });
+    expect(odd.shown).toEqual([]);
+    expect(odd.log.join('\n')).toMatch(/not a folder and a page/);
+    expect((await runOnce({ outcome: 'done', show: 'index.html' })).shown).toEqual([]);
+    expect((await runOnce({ outcome: 'done', show: null })).shown).toEqual([]);
+    expect((await runOnce({ outcome: 'paused', show: { dir: '/d', page: 'index.html' } })).shown).toEqual([]);
+    expect((await runOnce({ outcome: 'failed', show: { dir: '/d', page: 'index.html' } })).shown).toEqual([]);
+    const unbuilt = await runOnce({ outcome: 'done', show: { dir: '/d', page: 'index.html' } }, { buildParts: false });
+    expect(unbuilt.board.state.chapters[CH]!.state).toBe('building');
+    expect(unbuilt.shown).toEqual([]);
+  });
+});
+
 describe('presence while the build runs', () => {
   it('shows the part in work, gives way to a wake, and comes back after it, with a link module that also exports createBuilder', async () => {
     const repoDir = tempRepo();
@@ -428,13 +504,69 @@ describe('keel-board with a builder', () => {
   });
 
   async function cli(...argv: string[]) {
+    return cliWith({}, ...argv);
+  }
+
+  async function cliWith(deps: RunDeps, ...argv: string[]) {
     const out: string[] = [];
     const err: string[] = [];
     const io: Io = { out: (l) => out.push(l), err: (l) => err.push(l), stdin: async () => '' };
-    const r = await run(argv, io);
+    const r = await run(argv, io, deps);
     if (r.server) servers.push(r.server);
     return { ...r, out, err };
   }
+
+  /** A repository with one commit: the command checks that a built part's commit is there. */
+  function gitRepo(): { repo: string; commit: string } {
+    const repo = tempRepo();
+    const git = (...args: string[]) =>
+      execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args], { cwd: repo, encoding: 'utf8' }).trim();
+    git('init', '-q');
+    git('commit', '-q', '--allow-empty', '-m', 'first');
+    return { repo, commit: git('rev-parse', 'HEAD') };
+  }
+
+  /** Build the chapter to done, and end the run with a page to show from the builder's own folder. */
+  async function buildWithShow(s: RunningServer, fake: Fake, commit: string): Promise<void> {
+    const dir = path.join(fake.ctx.stateDir!, 'show');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'index.html'), '<h1>Built</h1>');
+    solidChapter(s);
+    buildThis(s);
+    await until(() => fake.jobs.length === 1);
+    for (const part of ['door', 'bridge', 'engine']) {
+      await fake.post({ type: 'part.state', part, state: 'building' }, 'agent');
+      await fake.post({ type: 'part.state', part, state: 'built', commit, check: { cmd: 'npm test', passed: true } }, 'system');
+    }
+    fake.finish({ outcome: 'done', show: { dir, page: 'index.html' } });
+    await until(() => said(s).length === 1);
+  }
+
+  it('opens the page, then a finished build\'s page behind what the owner is doing, and neither with --no-browser', async () => {
+    const browsed: Array<[string, boolean]> = [];
+    const browse = (url: string, background: boolean) => browsed.push([url, background]);
+
+    const { repo, commit } = gitRepo();
+    let n = fakes.length;
+    const opened = await cliWith({ browse }, 'open', repo, '--port', '0', '--app-dir', path.join(repo, 'no-app'), '--builder', FAKE);
+    expect(opened.code).toBe(0);
+    const s = opened.server!;
+    expect(browsed).toEqual([[s.url, false]]);
+    await buildWithShow(s, fakes[n]!, commit);
+    expect(said(s).map((f) => f.text)).toEqual([SHOW_OPENED]);
+    expect(browsed).toEqual([
+      [s.url, false],
+      [s.shows()[CH], true],
+    ]);
+
+    const { repo: quiet, commit: other } = gitRepo();
+    n = fakes.length;
+    const q = await cliWith({ browse }, 'open', quiet, '--no-browser', '--port', '0', '--app-dir', path.join(quiet, 'no-app'), '--builder', FAKE);
+    await buildWithShow(q.server!, fakes[n]!, other);
+    expect(said(q.server!).map((f) => f.text)).toEqual([SHOW_WAITS]);
+    expect(q.server!.shows()[CH]).toBeDefined();
+    expect(browsed).toHaveLength(2);
+  });
 
   it('loads --builder, and status says which builder and how far the build is', async () => {
     const repo = tempRepo();
