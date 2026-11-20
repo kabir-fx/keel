@@ -1,0 +1,17 @@
+{
+  "description": "Keep the board's files in the board server's hands: no Write, Edit or shell write into .keel/board/, and no read or write of keel's private folder (~/.keel/boards), which holds the owner's token. It stops mistakes, not an attacker.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-board.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

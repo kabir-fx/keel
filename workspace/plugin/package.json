@@ -1,0 +1,22 @@
+{
+  "name": "@keel/board-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Claude Code plugin: the board tools, the hosted agent link, the board skill, the hooks.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./hosted-link": "./dist/hosted-link.js",
+    "./hosted-builder": "./dist/hosted-builder.js"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "build": "node build.mjs",
+    "live-check": "node scripts/live-check.mjs"
+  },
+  "dependencies": {
+    "@keel/protocol": "*",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  }
+}
