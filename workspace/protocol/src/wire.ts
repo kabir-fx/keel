@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { Digest } from './digest';
 import type { BoardEvent } from './events';
 import { Actor, Id, Point } from './ids';
-import { ShowPlan } from './pictures';
+import { PICTURE_KINDS, ShowPlan } from './pictures';
 import type { RuleId } from './rules';
 
 /**
@@ -14,10 +14,32 @@ import type { RuleId } from './rules';
 export const PresenceState = z.enum(['listening', 'drawing', 'waiting', 'building', 'away']);
 export type PresenceState = z.infer<typeof PresenceState>;
 
+/**
+ * What the agent is busy with while it works, as its stream says: it reads (the owner's marks,
+ * the board, the code), it thinks, it draws (a picture, the model), or it writes (an answer in
+ * words, an update). The agent's figure on the board shows it. Left out when nobody knows.
+ */
+export const PresenceDoing = z.enum(['reading', 'thinking', 'drawing', 'writing']);
+export type PresenceDoing = z.infer<typeof PresenceDoing>;
+
+/**
+ * The picture the agent is writing now, as far as its call says so far: the first picture of a
+ * post. Its kind as soon as that is written, and its title once that is whole too.
+ */
+export const PresencePicture = z.strictObject({
+  kind: z.enum(PICTURE_KINDS),
+  title: z.string().max(120).optional(),
+});
+export type PresencePicture = z.infer<typeof PresencePicture>;
+
 export const Presence = z.strictObject({
   state: PresenceState,
   /** A few words: "drawing three approaches". */
   note: z.string().max(120).optional(),
+  /** What it is busy with while it works. */
+  doing: PresenceDoing.optional(),
+  /** The picture it is writing now. */
+  picture: PresencePicture.optional(),
   /** Where the agent's cursor is: on an item, or at a point of the board. */
   cursor: z.strictObject({ item: Id.optional(), at: Point.optional() }).optional(),
   /** When this state began, ISO 8601. */

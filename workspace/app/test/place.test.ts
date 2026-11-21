@@ -3,8 +3,8 @@ import { replay } from '@keel/protocol';
 import { describe, expect, it } from 'vitest';
 import { overlaps, padBox } from '../src/geometry';
 import { shownBoxOf } from '../src/layout';
-import { edgeEnds, primarySource } from '../src/lineage';
-import { anchorOf, beside, CLEAR, GAP_BELOW, GAP_RIGHT, isClear, nearestClear, place, placeAll, REACH, SIDES, sidesFrom, STEP, unplaced } from '../src/place';
+import { primarySource } from '../src/lineage';
+import { anchorOf, CLEAR, GAP_BELOW, GAP_RIGHT, isClear, place, placeAll, STEP, unplaced } from '../src/place';
 import { CH, lanes, note, openBoard, placeAt, text } from './helpers';
 
 const fromLog = (state: BoardState) => (id: Id) => {
@@ -88,7 +88,7 @@ describe('placement', () => {
     expect(place(b.state, 'a1', [800, 400], fromLog(b.state))).toEqual([100, 550 + GAP_BELOW, 800, 400]);
   });
 
-  it('a wide picture beside its place.near: the side named, at the nearest clear spot, not below everything', () => {
+  it('a wide picture beside its place.near: the side named, not below everything', () => {
     const b = openBoard();
     b.must('owner', note('m1', [0, 0, 300, 100]));
     b.must('agent', lanes('pipe', { answers: ['m1'] }));
@@ -110,19 +110,40 @@ describe('placement', () => {
     expect(place(b.state, 'a2', [300, 100], boxOf)).toEqual([100 - GAP_RIGHT - 300, 200, 300, 100]);
   });
 
-  it('puts a small picture whose spot is taken on the next side that is clear: below, then left, then above', () => {
+  it('a small picture whose spot is taken slides down the column right of its anchor', () => {
     const b = openBoard();
     b.must('owner', note('m1', [0, 0, 300, 100]));
     // Something already sits where the card would go.
     b.must('owner', note('m2', [348, 0, 300, 90]));
     b.must('agent', text('a1', { answers: ['m1'] }));
-    expect(place(b.state, 'a1', [300, 100], fromLog(b.state))).toEqual([0, 100 + GAP_RIGHT, 300, 100]);
+    expect(place(b.state, 'a1', [300, 100], fromLog(b.state))).toEqual([348, 5 * STEP, 300, 100]);
   });
 
-  it('a reply to a note on a part of a big pipeline lands beside the note, where the note is drawn now, and overlaps nothing', () => {
+  it('a lane named by place.side: left slides down, above slides up', () => {
+    const b = openBoard();
+    b.must('owner', note('m1', [1000, 1000, 300, 100]));
+    b.must('owner', note('l', [600, 1000, 300, 60]));
+    b.must('owner', note('u', [1000, 800, 300, 80]));
+    b.must('agent', text('a1', { answers: ['m1'], place: { near: 'm1', side: 'left' } }));
+    b.must('agent', text('a2', { answers: ['m1'], place: { near: 'm1', side: 'above' } }));
+    const boxOf = fromLog(b.state);
+    expect(place(b.state, 'a1', [300, 100], boxOf)).toEqual([1000 - GAP_RIGHT - 300, 1000 + 4 * STEP, 300, 100]);
+    expect(place(b.state, 'a2', [300, 100], boxOf)).toEqual([1000, 1000 - GAP_RIGHT - 100 - 7 * STEP, 300, 100]);
+  });
+
+  it('a wide picture that belongs to nothing and names the lane above slides up too', () => {
+    const b = openBoard();
+    // Something already sits where the picture would go, above the chapter's last item.
+    b.must('owner', note('taken', [0, -400, 300, 150]));
+    b.must('owner', note('m1', [0, 0, 300, 100]));
+    const solid = b.must('owner', { type: 'solidify', chapter: CH, picks: ['m1'], parts: [] });
+    b.must('agent', lanes('a1', { answers: [solid.id], place: { side: 'above' } }));
+    expect(place(b.state, 'a1', [600, 200], fromLog(b.state))).toEqual([0, 0 - GAP_BELOW - 200 - 15 * STEP, 600, 200]);
+  });
+
+  it('a reply to a note on a part of a big pipeline is in the column right of where the note is drawn now, and overlaps nothing', () => {
     // Screen 6: "only one request at a time here?" is stuck on the scheduler, low in the
-    // pipeline. Right of the note is the pipeline, and under the pipeline's right half is
-    // another picture, so sliding down from the right would land far below the note.
+    // pipeline. Under the pipeline's right half is another picture.
     const b = openBoard();
     b.must('owner', note('seed', [-9000, -9000, 100, 40]));
     b.must('agent', lanes('pipe', { answers: ['seed'] }));
@@ -138,20 +159,16 @@ describe('placement', () => {
     expect(shown).toEqual([400 - 0.4 * 180, 640 + 1.12 * 70, 350, 62]);
 
     const reply = place(b.state, 'reply-one', [380, 98], boxOf);
-    // Right of the note is the pipeline: the nearest clear spot is just below the note.
-    expect(reply).toEqual([Math.round(shown[0]), Math.round(shown[1] + shown[3] + GAP_RIGHT), 380, 98]);
+    // Right of the note is the pipeline, and under it the other picture: the reply slides down the column right of the note until clear of both.
+    expect(reply).toEqual([Math.round(shown[0] + shown[2] + GAP_RIGHT), Math.round(shown[1]) + 22 * STEP, 380, 98]);
     for (const id of ['pipe', 'under', 'note-one']) expect(overlaps(padBox(reply, CLEAR), boxOf(id)!), `the reply overlaps ${id}`).toBe(false);
-    // The old rule (right of the note, then slide down) would have gone below the picture under the pipeline.
-    expect(reply[1]).toBeLessThan(830);
-    // Its one lineage arrow comes from the note, and is short.
+    // Its one lineage arrow comes from the note.
     const placed = new Map<Id, Box>([['reply-one', reply]]);
     const after = (id: Id) => shownBoxOf({ state: b.state, boxes: placed, subs }, id);
     expect(primarySource(b.state, 'reply-one', after)).toEqual({ from: 'note-one', kind: 'near' });
-    const [[x1, y1], [x2, y2]] = edgeEnds(shown, reply);
-    expect(Math.hypot(x2 - x1, y2 - y1)).toBeLessThan(GAP_RIGHT + 1);
   });
 
-  it('in a crowded neighbourhood, takes the nearest clear spot on any side', () => {
+  it('in a crowded neighbourhood, stays in the column right of the mark and slides down it until clear', () => {
     const b = openBoard();
     b.must('owner', note('m', [1000, 1000, 200, 60]));
     // Something sits right, below, left and above the note, each at its own distance.
@@ -162,38 +179,42 @@ describe('placement', () => {
     b.must('agent', text('a1', { answers: ['m'] }));
     const boxOf = fromLog(b.state);
     const box = place(b.state, 'a1', [300, 100], boxOf);
-    // Clear above after 7 steps; right needs 13, below 9, left 16.
-    expect(box).toEqual([1000, 1000 - GAP_RIGHT - 100 - 7 * STEP, 300, 100]);
+    // Clear of the note below (its bottom at 1300) after 14 steps.
+    expect(box).toEqual([1000 + 200 + GAP_RIGHT, 1000 + 14 * STEP, 300, 100]);
     for (const id of ['m', 'right', 'below', 'left', 'above']) expect(overlaps(padBox(box, CLEAR), boxOf(id)!), `overlaps ${id}`).toBe(false);
-    // No spot a step nearer is clear, on any side.
     const others = ['m', 'right', 'below', 'left', 'above'].map((id) => boxOf(id)!);
-    for (const side of SIDES) expect(isClear(beside(boxOf('m')!, side, [300, 100], GAP_RIGHT, 6 * STEP), others)).toBe(false);
-    // The side the agent asks for is tried first at each distance, not at any distance.
-    expect(nearestClear(boxOf('m')!, [300, 100], others, sidesFrom('left'))).toEqual(box);
+    expect(isClear([box[0], box[1] - STEP, 300, 100], others)).toBe(false);
   });
 
-  it('a small picture with no clear spot within reach slides down from beside its anchor', () => {
-    const b = openBoard();
-    b.must('owner', note('seed', [-9000, -9000, 100, 40]));
-    b.must('agent', lanes('big', { answers: ['seed'] }));
-    b.must('owner', placeAt('big', [-3000, -3000, 6000, 6000]));
-    b.must('owner', note('m', [0, 0, 200, 60], { on: { item: 'big' } }));
-    b.must('agent', text('a1', { answers: ['m'] }));
-    const box = place(b.state, 'a1', [300, 100], fromLog(b.state));
-    expect(box[0]).toBe(200 + GAP_RIGHT);
-    expect(box[1]).toBeGreaterThanOrEqual(3000 + CLEAR);
-    expect(box[1] - STEP).toBeLessThan(3000 + CLEAR);
-    expect(REACH).toBeLessThan(3000);
+  it('a reply to a note on a card: just below the card when the note is inside it, level with the note when it reaches past it', () => {
+    const board = (m: Box) => {
+      const b = openBoard();
+      b.must('owner', note('seed', [-9000, -9000, 100, 40]));
+      b.must('agent', lanes('card', { answers: ['seed'] }));
+      b.must('owner', placeAt('card', [0, 0, 1000, 600]));
+      b.must('owner', note('m', m, { on: { item: 'card' } }));
+      b.must('agent', text('a1', { answers: ['m'] }));
+      return { s: b.state, boxOf: fromLog(b.state) };
+    };
+    const inside = board([100, 100, 200, 60]);
+    const below = place(inside.s, 'a1', [300, 100], inside.boxOf);
+    expect(below).toEqual([100 + 200 + GAP_RIGHT, 100 + 22 * STEP, 300, 100]);
+    expect(isClear([below[0], below[1] - STEP, 300, 100], [inside.boxOf('card')!])).toBe(false);
+    for (const id of ['card', 'm']) expect(overlaps(padBox(below, CLEAR), inside.boxOf(id)!), `overlaps ${id}`).toBe(false);
+    expect(primarySource(inside.s, 'a1', (id) => (id === 'a1' ? below : inside.boxOf(id)))).toEqual({ from: 'm', kind: 'answers' });
+
+    const past = board([900, 100, 300, 60]);
+    expect(place(past.s, 'a1', [300, 100], past.boxOf)).toEqual([900 + 300 + GAP_RIGHT, 100, 300, 100]);
   });
 
-  it('a wide picture whose named side is taken goes to the nearest clear side, and overlaps nothing', () => {
+  it('a wide picture whose named side is taken slides further down, and overlaps nothing', () => {
     const b = openBoard();
     b.must('owner', note('m1', [0, 0, 300, 100]));
     // Something already sits where the picture would go.
     b.must('owner', note('m2', [0, 148, 300, 90]));
     b.must('agent', lanes('w1', { answers: ['m1'], place: { near: 'm1', side: 'below' } }));
     const box = place(b.state, 'w1', [600, 200], fromLog(b.state));
-    expect(box).toEqual([300 + GAP_BELOW, 0, 600, 200]);
+    expect(box).toEqual([0, 100 + GAP_BELOW + 4 * STEP, 600, 200]);
     expect(isClear(box, [[0, 0, 300, 100], [0, 148, 300, 90]])).toBe(true);
   });
 
@@ -212,14 +233,12 @@ describe('placement', () => {
     expect([...placed.keys()]).toEqual(['a1', 'a2', 'a3', 'a4']);
     const all: Box[] = [[0, 0, 300, 100], ...placed.values()];
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) expect(overlaps(all[i]!, all[j]!)).toBe(false);
-    // The three replies take the note's right, then its left (the first reply reaches below
-    // the note), then above it.
+    // The three replies stack down the column right of the note.
     expect(placed.get('a1')!.slice(0, 2)).toEqual([300 + GAP_RIGHT, 0]);
-    expect(placed.get('a2')!.slice(0, 2)).toEqual([-GAP_RIGHT - 380, 0]);
-    expect(placed.get('a3')!.slice(0, 2)).toEqual([0, -GAP_RIGHT - 200]);
-    // The wide one grew out of the first reply: it goes below that reply, beside where it belongs.
-    const a1 = placed.get('a1')!;
-    expect(placed.get('a4')!.slice(0, 2)).toEqual([a1[0], a1[1] + a1[3] + GAP_BELOW]);
+    expect(placed.get('a2')!.slice(0, 2)).toEqual([300 + GAP_RIGHT, 9 * STEP]);
+    expect(placed.get('a3')!.slice(0, 2)).toEqual([300 + GAP_RIGHT, 18 * STEP]);
+    // The wide one grew out of the first reply: its lane is below that reply, under the other two.
+    expect(placed.get('a4')!.slice(0, 2)).toEqual([300 + GAP_RIGHT, 27 * STEP]);
   });
 
   it('stops at the first picture not measured yet, so a later one never takes its spot', () => {
@@ -260,6 +279,61 @@ describe('placement', () => {
     const all: Box[] = [[0, 0, 300, 100], [800, 40, 300, 100], ...first.map(([, box]) => box)];
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) expect(overlaps(all[i]!, all[j]!)).toBe(false);
     expect(unplaced(b.state)).toEqual(['a1', 'a2', 'a3', 'c1', 'c2', 'c3', 'c4', 'c5']);
+  });
+
+  it('the answer to a mark lands in the same lane whatever else is near the mark on the other sides', () => {
+    const boxes = (around: Record<string, Box>) => {
+      const b = openBoard();
+      b.must('owner', note('m', [1000, 1000, 200, 60]));
+      b.must('owner', note('r', [1240, 980, 300, 140]));
+      for (const [id, box] of Object.entries(around)) b.must('owner', note(id, box));
+      b.must('agent', text('a1', { answers: ['m'] }));
+      return place(b.state, 'a1', [300, 100], fromLog(b.state));
+    };
+    const alone = boxes({});
+    expect(alone[0]).toBe(1000 + 200 + GAP_RIGHT);
+    expect(boxes({ above: [990, 800, 240, 160] })).toEqual(alone);
+    expect(boxes({ left: [600, 960, 380, 200] })).toEqual(alone);
+    expect(boxes({ left: [600, 960, 380, 200], above: [990, 800, 240, 160], far: [400, 1400, 200, 100] })).toEqual(alone);
+  });
+
+  describe('a placeholder finished as a wide picture holds its place', () => {
+    /** The owner's board of 2026-11-21: a lasso round a pipeline and a walk, solidified, and the agent's placeholder for it. */
+    function solidified() {
+      const b = openBoard();
+      b.must('agent', { type: 'model.patch', ops: [{ op: 'lane.set', lane: { id: 'core', name: 'Core' } }, { op: 'part.set', part: { id: 'sched', name: 'The scheduler', lane: 'core' } }] });
+      b.must('owner', note('first', [-145.5, -14, 269.9, 148]));
+      b.must('agent', text('pipe-3', { answers: ['first'] }));
+      b.must('owner', placeAt('pipe-3', [811, 514, 1276, 352]));
+      b.must('agent', text('a-netagp', { from: ['pipe-3'] }));
+      b.must('owner', placeAt('a-netagp', [2151, 514, 420, 428]));
+      b.must('owner', { type: 'item.add', chapter: CH, item: { id: 'm17', kind: 'lasso', box: [659.6, 422.3, 1930.7, 678.6], path: [0, 0, 1930.7, 0, 1930.7, 678.6, 0, 678.6], targets: [{ item: 'pipe-3' }, { item: 'a-netagp' }] } });
+      const solid = b.must('owner', { type: 'solidify', chapter: CH, picks: ['pipe-3', 'a-netagp'], parts: [], lasso: 'm17' });
+      b.must('agent', { type: 'item.add', chapter: CH, item: { id: 'blueprint-3', kind: 'picture', picture: { kind: 'text', title: 'Reading your idea back', body: 'Preparing the blueprint.' }, answers: [solid.id], status: 'drawing' } });
+      return b;
+    }
+    const finish = (b: ReturnType<typeof openBoard>) =>
+      b.must('agent', { type: 'item.update', item: 'blueprint-3', patch: { status: 'done', picture: { kind: 'blueprint', title: 'One engine', picks: [{ text: 'one engine' }], proof: ['it runs'], parts: ['sched'], check: 'make check' } } });
+
+    it('the finished blueprint has the top left corner its placeholder stood at', () => {
+      const b = solidified();
+      const spot = place(b.state, 'blueprint-3', [320, 140], fromLog(b.state));
+      expect(spot).toEqual([659.6 + 1930.7 + GAP_RIGHT, 422, 320, 140].map(Math.round));
+      finish(b);
+      const box = place(b.state, 'blueprint-3', [1176, 1227], fromLog(b.state), [spot[0], spot[1]]);
+      expect(Math.hypot(box[0] - spot[0], box[1] - spot[1])).toBe(0);
+      expect(box).toEqual([spot[0], spot[1], 1176, 1227]);
+    });
+
+    it('not clear at that corner, it slides down from it, same x', () => {
+      const b = solidified();
+      const spot = place(b.state, 'blueprint-3', [320, 140], fromLog(b.state));
+      b.must('owner', note('below', [2700, 1000, 300, 100]));
+      finish(b);
+      const box = place(b.state, 'blueprint-3', [1176, 1227], fromLog(b.state), [spot[0], spot[1]]);
+      // The first step down whose room clears the note's bottom edge at 1100.
+      expect(box).toEqual([spot[0], spot[1] + 29 * STEP, 1176, 1227]);
+    });
   });
 
   it('leaves removed items out: they are not drawn and take no room', () => {

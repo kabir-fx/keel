@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { EASE } from '../app/src/motion/ease';
-import { APPROACH_MAX_MS, CURSOR_NEAR_PX, CURSOR_NUDGE_MS, lineMs, pullMs, REST_PX, travelMs } from '../app/src/motion/timing';
+import { APPROACH_MAX_MS, CURSOR_NEAR_PX, CURSOR_NUDGE_MS, HAND_STAGGER_MS, lineMs, pullMs, REST_PX, travelMs } from '../app/src/motion/timing';
 import { openReplay, playStatus, renderAt, replayUrl } from './replay';
 
 /**
@@ -32,6 +32,10 @@ interface Seen {
   cursor: [number, number] | null;
   /** The card's rectangle on the page. */
   card: { left: number; top: number; right: number; bottom: number } | null;
+  /** The band the card is dragged out as, while it is seen: its rectangle on the page. */
+  band: { left: number; top: number; right: number; bottom: number } | null;
+  /** What the film sets on the card's root that would move or size it: never anything. */
+  rootMoved: string | null;
 }
 
 /** Read the frame the page shows now. */
@@ -58,8 +62,13 @@ function look(page: Page, ms: number): Promise<Seen> {
     });
     const c = document.querySelector<HTMLElement>('[data-testid="agent-cursor"]');
     const m = c && /translate\(([-\d.e]+)px, ([-\d.e]+)px\)/.exec(c.style.transform);
-    const r = item?.querySelector('[data-build]')?.getBoundingClientRect();
+    const root = item?.querySelector<HTMLElement>('[data-build]');
+    const r = root?.getBoundingClientRect();
     const board = document.querySelector('[data-testid="board"]')!.getBoundingClientRect();
+    const bandEl = item?.querySelector<HTMLElement>('.arrival-band');
+    const b = bandEl && parseFloat(getComputedStyle(bandEl).opacity) > 0.02 ? bandEl.getBoundingClientRect() : null;
+    const rs = root && getComputedStyle(root);
+    const moved = rs && [rs.transform, rs.scale, rs.translate].filter((v) => v !== 'none' && v !== '').join(' ');
     return {
       ms,
       placed: !!item,
@@ -68,6 +77,8 @@ function look(page: Page, ms: number): Promise<Seen> {
       shows,
       cursor: m ? ([Number(m[1]) + board.left, Number(m[2]) + board.top] as [number, number]) : null,
       card: r ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom } : null,
+      band: b ? { left: b.left, top: b.top, right: b.right, bottom: b.bottom } : null,
+      rootMoved: moved || null,
     };
   }, ms);
 }
@@ -182,13 +193,24 @@ test('the first scene: the card is drawn on from the note, in order, under the c
   const bound = Math.max(...legs.map((l) => (l.px * steepest(l.ease) * FRAME) / l.ms)) * 1.05 + 0.5;
   for (let i = 1; i < at.length; i++) expect(dist(at[i]!, at[i - 1]!), `frame ${i}`).toBeLessThanOrEqual(bound);
 
-  // Once the arrow is whole, the cursor's tip rides the card's far corner (here, the arrow coming
-  // from the left, its bottom right) as it is pulled
-  // out: never further from it than it rests, just outside it.
-  for (const f of film.filter((f) => f.head && f.card && f.cursor)) {
-    expect(dist(f.cursor!, [f.card!.right, f.card!.bottom]), `the corner at ${Math.round(f.ms)} ms`).toBeLessThanOrEqual(REST_PX * arrow.zoom * Math.SQRT2 * 1.02 + 1.5);
-    expect(f.cursor![0], `outside the corner at ${Math.round(f.ms)} ms`).toBeGreaterThanOrEqual(f.card!.right - 1);
+  // The card itself is never scaled or moved: a band is dragged out to its rectangle, and the
+  // cursor's tip rides the band's far corner (here, the arrow coming from the left, its bottom
+  // right): never further from it than it rests, just outside it. Once whole, the band is the card.
+  for (const f of film) expect(f.rootMoved, `the card's root at ${Math.round(f.ms)} ms`).toBeNull();
+  const dragged = film.filter((f) => f.band && f.cursor);
+  expect(dragged.length, 'frames of the drag').toBeGreaterThan(8);
+  expect(dragged.some((f) => f.band!.right - f.band!.left < (f.card!.right - f.card!.left) / 2), 'the band seen small').toBe(true);
+  for (const f of dragged) {
+    expect(dist(f.cursor!, [f.band!.right, f.band!.bottom]), `the band's corner at ${Math.round(f.ms)} ms`).toBeLessThanOrEqual(REST_PX * arrow.zoom * Math.SQRT2 * 1.02 + 1.5);
+    // A band of no size is still drawn as its two borders.
+    expect(f.cursor![0], `outside the corner at ${Math.round(f.ms)} ms`).toBeGreaterThanOrEqual(f.band!.right - 1 - 3 * arrow.zoom);
   }
+  const whole = dragged[dragged.length - 1]!;
+  for (const k of ['left', 'top', 'right', 'bottom'] as const) expect(Math.abs(whole.band![k] - whole.card![k]), `the band's ${k} at its end`).toBeLessThan(1.5);
+  // Nothing of the card shows before the band is whole.
+  const firstWords = film.findIndex((f) => f.shows.slice(1).some(Boolean));
+  expect(film.slice(0, firstWords).some((f) => f.band)).toBe(true);
+  expect(film[firstWords - 1]!.band, 'the band is out when the words start').not.toBeNull();
   const last = film[film.length - 1]!;
   expect(last.cursor![0]).toBeGreaterThan(last.card!.right);
   expect(last.cursor![1]).toBeGreaterThan(last.card!.bottom);
@@ -219,6 +241,8 @@ for (const [at, what] of [
   [3, 'a chip of words'],
   [5, 'a placeholder, then finished'],
   [6, 'a redraw'],
+  [7, 'two pictures in one post'],
+  [8, 'a model, a pipeline, a walk and a redraw in one post'],
 ] as const) {
   test(`once ${what} is over (checkpoint ${at}) the board is exactly as a board with reduced motion: the same DOM, the same computed styles, no animation`, async ({ browser }) => {
     test.setTimeout(120_000);
@@ -242,6 +266,8 @@ for (const [at, what] of [
         });
         const { length } = await playStatus(page);
         await renderAt(page, length + 3000);
+        // Without motion a picture the camera brings into view blinks, on the page's own timer.
+        await page.waitForFunction(() => !document.querySelector('.item--flash'));
         return { look: await boardLook(page), drawnOn: await page.evaluate(() => (window as unknown as { __drawnOn: boolean }).__drawnOn) };
       } finally {
         await page.close();
@@ -368,9 +394,17 @@ test('the whole log: the placeholder finished larger than the room shows is pull
     page.evaluate(() => {
       const item = document.querySelector<HTMLElement>('.layer [data-item="plan"]');
       const root = item?.querySelector<HTMLElement>('[data-build]');
-      return { finished: !!item && !item.querySelector('[data-status="drawing"]'), playing: !!root?.hasAttribute('data-arrival'), width: root?.getBoundingClientRect().width ?? 0 };
+      const band = item?.querySelector<HTMLElement>('.arrival-band');
+      const shown = band && parseFloat(getComputedStyle(band).opacity) > 0.02;
+      return {
+        finished: !!item && !item.querySelector('[data-status="drawing"]'),
+        waits: !!item?.hasAttribute('data-arrival-waits'),
+        playing: !!root?.hasAttribute('data-arrival'),
+        width: root?.getBoundingClientRect().width ?? 0,
+        band: shown ? band!.getBoundingClientRect().width : 0,
+      };
     });
-  const seen: Array<{ finished: boolean; playing: boolean; width: number }> = [];
+  const seen: Array<{ finished: boolean; waits: boolean; playing: boolean; width: number; band: number }> = [];
   for (let n = frameFrom(28_800); n <= frameFrom(31_500); n++) {
     await renderAt(page, n * FRAME);
     seen.push(await look());
@@ -396,13 +430,151 @@ test('the whole log: the placeholder finished larger than the room shows is pull
   });
   const first = seen.findIndex((s) => s.finished);
   expect(first, 'it was finished').toBeGreaterThan(0);
-  // From the first frame it is finished, it is being pulled out: never whole at rest before.
-  expect(seen[first]!.playing).toBe(true);
-  expect(seen.slice(first).some((s) => s.playing && s.width < rest.picture.width - 1), 'a frame of the pull, narrower than the picture').toBe(true);
+  // From the first frame it is finished it is held out of sight while the camera brings it into
+  // view, then dragged out: never whole at rest before.
+  const begins = seen.findIndex((s, i) => i >= first && s.playing);
+  expect(begins).toBeGreaterThanOrEqual(first);
+  expect(seen.slice(first, begins).every((s) => s.waits), 'held out of sight until it is drawn on').toBe(true);
+  expect(seen.slice(first).some((s) => s.playing && s.band > 0 && s.band < rest.picture.width - 1), 'a frame of the drag, the band narrower than the picture').toBe(true);
+  expect(seen.slice(first).every((s) => !s.playing || Math.abs(s.width - rest.picture.width) < 1), 'the picture never drawn at another size').toBe(true);
   // Over: at rest, and wholly in the free room.
   expect([rest.playing, rest.animated]).toEqual([false, 0]);
   expect(rest.picture.left).toBeGreaterThanOrEqual(rest.room.left - 1);
   expect(rest.picture.right).toBeLessThanOrEqual(rest.room.right + 1);
   expect(rest.picture.top).toBeGreaterThanOrEqual(rest.room.top - 1);
   expect(rest.picture.bottom).toBeLessThanOrEqual(rest.room.bottom + 1);
+});
+
+/** What one frame shows of a post's pictures, the cursors and the camera. */
+interface PostFrame {
+  ms: number;
+  /** For each picture: whether it is on the board, waits out of sight, is drawn on, and its band's rectangle while the band is seen. */
+  pictures: Record<string, { on: boolean; waits: boolean; plays: boolean; band: [number, number, number, number] | null; card: [number, number, number, number] | null }>;
+  /** Where each cursor's tip is drawn, in page pixels: the agent's own first, then each droplet. */
+  tips: Array<[number, number]>;
+  droplets: number;
+  /** The camera, as the world's transform. */
+  camera: string;
+  /** Anything of a film left on the page: attributes, bands, animations on the board's pictures and arrows. */
+  left: number;
+}
+
+function postFrame(page: Page, ms: number, ids: readonly string[]): Promise<PostFrame> {
+  return page.evaluate(
+    ({ ms, ids }) => {
+      const board = document.querySelector('[data-testid="board"]')!.getBoundingClientRect();
+      const rect = (r: DOMRect): [number, number, number, number] => [r.left, r.top, r.right, r.bottom];
+      const pictures: PostFrame['pictures'] = {};
+      for (const id of ids) {
+        const item = document.querySelector<HTMLElement>(`.layer [data-item="${id}"]`);
+        const root = item?.querySelector<HTMLElement>('[data-build]');
+        const band = item?.querySelector<HTMLElement>('.arrival-band');
+        pictures[id] = {
+          on: !!item,
+          waits: !!item?.hasAttribute('data-arrival-waits'),
+          plays: !!root?.hasAttribute('data-arrival'),
+          band: band && parseFloat(getComputedStyle(band).opacity) > 0.02 ? rect(band.getBoundingClientRect()) : null,
+          card: root ? rect(root.getBoundingClientRect()) : null,
+        };
+      }
+      const tip = (el: HTMLElement): [number, number] | null => {
+        const m = /translate\(([-\d.e]+)px, ([-\d.e]+)px\)/.exec(el.style.transform);
+        return m ? [Number(m[1]) + board.left, Number(m[2]) + board.top] : null;
+      };
+      const cursors = [...document.querySelectorAll<HTMLElement>('[data-testid="agent-cursor"], [data-testid="agent-droplet"]')];
+      const layer = document.querySelector('.layer')!;
+      const lineage = document.querySelector('svg.lineage');
+      const animated = document.getAnimations().filter((a) => {
+        const t = (a.effect as KeyframeEffect | null)?.target;
+        return t instanceof Element && (layer.contains(t) || !!lineage?.contains(t));
+      }).length;
+      return {
+        ms,
+        pictures,
+        tips: cursors.map(tip).filter((t): t is [number, number] => !!t),
+        droplets: document.querySelectorAll('[data-testid="agent-droplet"]').length,
+        camera: document.querySelector<HTMLElement>('.world')!.style.transform,
+        left: document.querySelectorAll('[data-arrival], [data-arrival-waits], .arrival-band').length + animated,
+      };
+    },
+    { ms, ids },
+  );
+}
+
+/** Play checkpoint `at` on the manual clock, a frame at a time from the moment the first of `ids` is on the board, to well after the play ends. */
+async function playPost(page: Page, at: number, ids: readonly string[]): Promise<PostFrame[]> {
+  await openReplay(page, { fixture: 'arrival', at, manual: true });
+  const { length } = await playStatus(page);
+  let n = 0;
+  for (; n * FRAME < length; n += 6) {
+    await renderAt(page, n * FRAME);
+    const f = await postFrame(page, n * FRAME, ids);
+    if (ids.some((id) => f.pictures[id]!.on)) break;
+  }
+  // From the frame before, to see the camera as it was.
+  const film: PostFrame[] = [];
+  for (let k = n; k * FRAME < length + 4000; k++) {
+    await renderAt(page, k * FRAME);
+    film.push(await postFrame(page, k * FRAME, ids));
+  }
+  return film;
+}
+
+const near = (a: readonly number[], b: readonly number[]) => Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!);
+
+test('one post, two pictures (checkpoint 7): two cursors draw them on the same frames, then merge into one where the last finished, and nothing is left', async ({ page }) => {
+  test.setTimeout(240_000);
+  const ids = ['by-text', 'text-cost'];
+  const film = await playPost(page, 7, ids);
+  // The frames both pictures are drawn on: a cursor for each.
+  const together = film.filter((f) => ids.every((id) => f.pictures[id]!.plays));
+  expect(together.length, 'frames both are drawn on').toBeGreaterThan(20);
+  expect(together.every((f) => f.droplets === 1 && f.tips.length === 2), 'two cursors while both are drawn on').toBe(true);
+  // On every frame a band is dragged, a cursor's tip is on its far corner, never further out than
+  // the cursor rests: `REST_PX` on the screen on each axis, the camera being still.
+  for (const id of ids) {
+    const dragged = film.filter((f) => f.pictures[id]!.band);
+    expect(dragged.length, `frames ${id}'s band is dragged`).toBeGreaterThan(8);
+    for (const f of dragged) {
+      const [l, t, r, b] = f.pictures[id]!.band!;
+      const corners = [[r, b], [l, b], [r, t]];
+      const gap = Math.min(...f.tips.flatMap((tip) => corners.map((c) => near(tip, c))));
+      expect(gap, `${id}'s band at ${Math.round(f.ms)} ms`).toBeLessThanOrEqual(REST_PX * Math.SQRT2 * 1.02 + 1.5);
+    }
+  }
+  // The second begins a beat after the first: the stagger, to the frame.
+  const begins = ids.map((id) => film.findIndex((f) => f.pictures[id]!.plays));
+  expect(Math.abs(begins[1]! - begins[0]!) * FRAME, 'from the first under way to the second').toBeLessThan(HAND_STAGGER_MS + 2 * FRAME);
+  // Then one cursor, where the film that ended last rests: just outside its far corner.
+  const ends = ids.map((id) => film.findLastIndex((f) => f.pictures[id]!.plays));
+  const last = ids[ends.indexOf(Math.max(...ends))]!;
+  const end = film[film.length - 1]!;
+  expect(end.droplets).toBe(0);
+  expect(end.tips).toHaveLength(1);
+  const card = end.pictures[last]!.card!;
+  const rest = end.tips[0]!;
+  const off = Math.min(...[[card[2], card[3]], [card[0], card[3]], [card[2], card[1]]].map((c) => near(rest, c)));
+  expect(off, `the cursor rests by ${last}'s corner`).toBeLessThanOrEqual(REST_PX * Math.SQRT2 + 2);
+  expect(end.left, 'nothing of either film is left').toBe(0);
+});
+
+test('one post with a model (checkpoint 8): the camera has stopped before anything is drawn on, and every picture of the post is under way soon after', async ({ page }) => {
+  test.setTimeout(240_000);
+  const ids = ['pipe', 'walk', 'text-cost'];
+  const film = await playPost(page, 8, ids);
+  const moves = film.map((f, i) => i > 0 && f.camera !== film[i - 1]!.camera);
+  expect(moves.some(Boolean), 'the camera moves to show the post').toBe(true);
+  const drawn = (f: PostFrame) => ids.filter((id) => f.pictures[id]!.plays);
+  for (const [i, moved] of moves.entries()) {
+    if (moved) expect([...drawn(film[i - 1]!), ...drawn(film[i]!)], `the camera moves at ${Math.round(film[i]!.ms)} ms`).toEqual([]);
+  }
+  const stopped = moves.lastIndexOf(true);
+  // Every picture of the post is under way within half a second of the camera stopping.
+  for (const id of ids) {
+    const begins = film.findIndex((f) => f.pictures[id]!.plays);
+    expect(begins, `${id} is drawn on`).toBeGreaterThan(stopped);
+    expect(begins - stopped, `${id} under way after the camera stops`).toBeLessThan(30);
+  }
+  const end = film[film.length - 1]!;
+  expect([end.droplets, end.tips.length, end.left]).toEqual([0, 1, 0]);
 });

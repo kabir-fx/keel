@@ -8,6 +8,7 @@ import {
   APPROACH_MAX_MS,
   ARRIVAL_SMALL_MS,
   ARRIVAL_WIDE_MS,
+  BAND_OUT_MS,
   BLOCK_GAP_MS,
   BLOCK_IN_MS,
   BLOCK_RISE_PX,
@@ -19,7 +20,6 @@ import {
   CURSOR_NUDGE_MS,
   CHIP_REST_MS,
   CORNER_TIE_SHARE,
-  FILL_AFTER_SHARE,
   LABEL_IN_MS,
   LABEL_RISE_PX,
   LINE_FADE_FROM_SCALE,
@@ -50,14 +50,16 @@ import {
  *    comes in from the edge of the view.
  * 2. The arrow. The cursor moves along the arrow's route and the line follows its tip, both on
  *    `EASE.draw`; the head shows once the line is whole.
- * 3. The pull. From where the arrow ends, the cursor drags the picture out to its size, as a
- *    rectangle is dragged out: the picture grows from that point, and the cursor's tip rides the
- *    corner a hand would drag (`farCorner`: the farthest from that point, never the top left),
- *    on the same easing (`EASE.pull`) over the same time. With no arrow, the cursor goes to the
- *    picture's top left corner and pulls from there, by its bottom right.
- * 4. The fill. Once the picture is mostly out, what is on it comes in by itself, in the order it
- *    is drawn on: a cascade, a sheet set down and filled before the next. The cursor waits. A
- *    picture with no paper of its own fills from the start of the pull, so something is pulled.
+ * 3. The pull. From where the arrow ends, the cursor drags a band out to the picture's
+ *    rectangle, as a rectangle is dragged out: the band grows from that point, and the cursor's
+ *    tip rides the corner a hand would drag (`farCorner`: the farthest from that point, never the
+ *    top left), on the same easing (`EASE.pull`) over the same time. The picture itself is never
+ *    scaled: when the band is whole, the picture shows in place and the band goes. With no
+ *    arrow, the cursor goes to the picture's top left corner and pulls from there.
+ * 4. The fill. Once the picture shows, what is on it comes in by itself, in the order it is
+ *    drawn on: a cascade, a sheet set down and filled before the next. The cursor waits. A
+ *    picture with no paper of its own shows from the start, and fills from the start of the
+ *    pull, so the band is not dragged over nothing.
  * 5. The rest. The cursor is just outside that corner from the end of the pull, and is let go
  *    when the last part is in.
  *
@@ -82,6 +84,8 @@ export interface PlanPart {
 export interface PlanInput {
   /** The picture's root on the board, at the size it is drawn. */
   card: Box;
+  /** Where the element the picture is drawn in has its top left, in board units: the band is placed from there. */
+  at: Point;
   /**
    * False when the root has no paper of its own (a spread: sheets on the bare board). Nothing of
    * it would show as it is pulled out, so what is on it starts to come in with the pull.
@@ -105,22 +109,22 @@ export interface PlanInput {
 export type Pose =
   /** A line drawn on by its dash, its head held back until it is whole. */
   | { kind: 'draw'; length: number }
-  /** The picture pulled out from `origin` (in its own pixels, from its top left), from nothing to its size, its paper fading in at first. */
-  | { kind: 'pull'; origin: Point }
+  /** The band dragged from one rectangle to another, in the pixels of the element the picture is drawn in, from its top left. */
+  | { kind: 'drag'; from: Box; to: Box }
+  /** The picture's root, shown in place once the band is whole: the band carried the motion, so only its opacity changes. */
+  | { kind: 'appear' }
   /** Words, coming in as they rise by `by` pixels. */
   | { kind: 'rise'; by: number }
   /** A box or a sheet, growing from `from` of its size about its middle as it shows. */
   | { kind: 'grow'; from: number }
   /** A dashed line: it shows as it grows from `from` of its size, its head held back until it is whole. */
   | { kind: 'fade'; from: number }
-  /** A finished placeholder's root, from the rectangle it had: moved by `move` and scaled by `scale` about its top left, to none. */
-  | { kind: 'reshape'; move: Point; scale: Point }
   /** A chip of words, written in from the left. */
   | { kind: 'write' };
 
-/** One part coming in: which (an index into the parts, or the picture's arrow), when, how long, how. */
+/** One part coming in: which (an index into the parts, the picture's arrow, or the band dragged out for it), when, how long, how. */
 export interface Beat {
-  part: number | 'arrow';
+  part: number | 'arrow' | 'band';
   start: number;
   ms: number;
   ease: Curve;
@@ -290,6 +294,23 @@ class Film {
     });
   }
 
+  /**
+   * The band dragged from `from` to `to` (board units) from now, on the pull's easing over `ms`,
+   * and the cursor's tip along `tip` on the same easing, so it stays on the band's corner; then
+   * the picture shows in place, when it has paper of its own. Answers when the fill may start.
+   */
+  drag(at: Point, from: Box, to: Box, ms: number, tip: [Point, Point], paper: boolean): number {
+    const inItem = (b: Box): Box => [b[0] - at[0], b[1] - at[1], b[2], b[3]];
+    const start = this.t;
+    this.beats.push({ part: 'band', start, ms, ease: PULL, pose: { kind: 'drag', from: inItem(from), to: inItem(to) } });
+    this.move(polyline(tip), ms, PULL);
+    this.ends.push(start + ms);
+    if (!paper) return start;
+    this.beats.push({ part: 0, start: start + ms, ms: BAND_OUT_MS / this.rate, ease: ENTER, pose: { kind: 'appear' } });
+    this.ends.push(start + ms + BAND_OUT_MS / this.rate);
+    return start + ms;
+  }
+
   /** The film, at rest at `rest` once the cursor's last leg and the last part are done. */
   done(rest: Point): Arrival {
     const total = Math.max(this.t, ...this.ends, ...this.beats.map((b) => b.start + b.ms));
@@ -377,13 +398,8 @@ export function planArrival(input: PlanInput): Arrival {
       film.move(path, ms, DRAW);
     }
     const penUp = film.t;
-    // The pull: the picture and the cursor's tip on its corner, on one easing over one time.
     const pull = pullMs(film.px(distance(origin, rest))) / rate;
-    film.beats.push({ part: 0, start: penUp, ms: pull, ease: PULL, pose: { kind: 'pull', origin: [origin[0] - card[0], origin[1] - card[1]] } });
-    film.move(polyline([origin, rest]), pull, PULL);
-    film.ends.push(penUp + pull);
-    // The fill, behind the stroke; with no paper to pull, from the start of the pull.
-    const from = penUp + (input.paper === false ? 0 : pull * FILL_AFTER_SHARE);
+    const from = film.drag(input.at, [origin[0], origin[1], 0, 0], card, pull, [origin, rest], input.paper !== false);
     film.fill(parts, from, rate * pace);
     return { arrival: film.done(rest), from, budget: budgetAfter(parts.length, rate, penUp) };
   });
@@ -397,12 +413,10 @@ export interface FinishInput extends Omit<PlanInput, 'route'> {
 
 /**
  * Plan a placeholder finished: the cursor goes to the placeholder's bottom right corner, and
- * pulls the picture from the rectangle the placeholder had to the one it has now, the tip on the
- * corner all the way. The root goes from one rectangle to the other by a move and a scale about
- * its top left, both on the pull's easing, so its corner runs on the straight line between the
- * two corners, and so does the cursor. Then the fill, once the picture is mostly out; for a
- * picture with no paper of its own, from the start of the pull, as at an arrival, so something
- * is pulled. When the rectangle did not change, no pull.
+ * drags the band from the rectangle the placeholder had to the one the picture has now, the tip
+ * on the corner all the way, so both run on the straight line between the two corners. Then the
+ * picture shows in place and fills, as at an arrival. When the rectangle did not change, no
+ * band: only the fill.
  */
 export function planFinish(input: FinishInput): Arrival {
   const { from: was, card, parts, zoom } = input;
@@ -413,15 +427,8 @@ export function planFinish(input: FinishInput): Arrival {
   return withinBudget((pace) => {
     const film = new Film(zoom, rate);
     film.approach(input.cursor, input.entry, changed ? restWas : rest);
-    let from = film.t;
-    if (changed) {
-      const pull = pullMs(film.px(distance(restWas, rest))) / rate;
-      const pose: Pose = { kind: 'reshape', move: [was[0] - card[0], was[1] - card[1]], scale: [was[2] / card[2], was[3] / card[3]] };
-      film.beats.push({ part: 0, start: film.t, ms: pull, ease: PULL, pose });
-      film.ends.push(film.t + pull);
-      from = film.t + (input.paper === false ? 0 : pull * FILL_AFTER_SHARE);
-      film.move(polyline([restWas, rest]), pull, PULL);
-    }
+    const pull = pullMs(film.px(distance(restWas, rest))) / rate;
+    const from = changed ? film.drag(input.at, was, card, pull, [restWas, rest], input.paper !== false) : film.t;
     film.fill(parts, from, rate * pace);
     return { arrival: film.done(rest), from, budget: budgetAfter(parts.length, rate, 0) };
   });
@@ -432,7 +439,7 @@ export function planFinish(input: FinishInput): Arrival {
  * just outside its bottom right corner, and what is on it comes in again, `REDRAW_RATE` times as
  * fast as at its arrival, from when the cursor is there, or a nudge's time at most.
  */
-export function planRedraw(input: Omit<PlanInput, 'route' | 'paper'>): Arrival {
+export function planRedraw(input: Omit<PlanInput, 'route' | 'paper' | 'at'>): Arrival {
   const { card, parts, zoom } = input;
   if (parts.length === 0) throw new Error('A picture with no parts has nothing to draw on.');
   const rate = Math.max(1, input.rate ?? 1);

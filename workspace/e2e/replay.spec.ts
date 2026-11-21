@@ -62,7 +62,7 @@ for (const at of [undefined, 5]) {
     await expect(page.getByTestId('presence')).toHaveAttribute('data-state', 'listening');
     const played = await itemBoxes(page);
 
-    await page.goto(`/?fixture=arrival&at=${at ?? 6}`);
+    await page.goto(`/?fixture=arrival&at=${at ?? 8}`);
     await expect(page.getByTestId('board')).toBeVisible();
     await expect(page.locator('[data-measure]')).toHaveCount(0);
     await expect.poll(() => itemBoxes(page)).toEqual(played);

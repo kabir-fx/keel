@@ -29,12 +29,13 @@ export const RETRY_DELAYS = [2000, 8000, 30000] as const;
 /** A wake that has not returned by now counts as failed, so a hung link cannot stop every later wake. */
 export const WAKE_TIMEOUT = 10 * 60_000;
 /** What the pill says the moment a wake starts, before the agent says anything itself. */
-export const WAKE_PRESENCE = { state: 'drawing', note: 'reading your marks' } as const satisfies PresenceUpdate;
+export const WAKE_PRESENCE = { state: 'drawing', note: 'reading your marks', doing: 'reading' } as const satisfies PresenceUpdate;
 
 /**
  * The presence a wake sets: the pill's words, and the agent's cursor on the newest fresh thing
  * of the owner's that is on the board, so the owner sees where the agent reads. An act (a
- * solidify, a pick) is not on the board: with only acts fresh, the cursor is given no place.
+ * solidify, a pick) is not on the board: a solidify stands for the lasso it was made from, while
+ * that is on the board, and any other act is given no place.
  * A mark that came with the log from outside (`foreign` in the digest) is passed over: the
  * agent is told not to answer it, so the cursor does not go there.
  */
@@ -42,8 +43,10 @@ export function wakePresence(d: Digest, state: BoardState): PresenceUpdate {
   // The digest lists what is open newest last.
   for (let i = d.open.length - 1; i >= 0; i--) {
     const o = d.open[i]!;
-    const s = state.items[o.id];
-    if (o.fresh && !o.foreign && s && !s.removed) return { ...WAKE_PRESENCE, cursor: { item: o.id } };
+    const ev = state.acts[o.id]?.event;
+    const id = ev?.type === 'solidify' ? ev.lasso : o.id;
+    const s = id === undefined ? undefined : state.items[id];
+    if (o.fresh && !o.foreign && s && !s.removed) return { ...WAKE_PRESENCE, cursor: { item: s.item.id } };
   }
   return WAKE_PRESENCE;
 }

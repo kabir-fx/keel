@@ -115,7 +115,10 @@ test('an arrow drawn between two pictures holds on to both when one moves, and a
   // Move the first card: the tail stays on its spot on it; the head stays where it was.
   await page.keyboard.press('Escape');
   n = (await admitted(page)).length;
+  // Cmd held: the card is not pulled onto an edge of the cards placed round it, so it moves exactly as far as the hand.
+  await page.keyboard.down('Meta');
   await drag(page, [a1.x + 40, a1.y + 12], [a1.x + 140, a1.y - 48]);
+  await page.keyboard.up('Meta');
   await postedSince(page, n);
   const moved = await rectOf(page, '[data-item="a1"]');
   expect(moved.x).toBeCloseTo(a1.x + 100, 0);

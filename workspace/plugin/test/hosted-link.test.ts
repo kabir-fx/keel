@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentLink, LinkContext, PresenceUpdate, Wake } from '@keel/protocol';
 import { digest, emptyState } from '@keel/protocol';
 import type { Writing } from '../src/hosted-link';
-import { AGENT_FILE, DENIED_FILES, KIND_READ_MAX, createLink, followCall, hostedSettings, readSessionCost, readSessionId, stateDirOf, stripFrontmatter, turnCost } from '../src/hosted-link';
-import { toolPresence } from '../src/presence';
+import { AGENT_FILE, DENIED_FILES, PICTURE_READ_MAX, createLink, followCall, hostedSettings, readSessionCost, readSessionId, stateDirOf, stripFrontmatter, turnCost } from '../src/hosted-link';
+import { THINKING_PRESENCE, toolPresence } from '../src/presence';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FAKE = path.join(here, 'fake-claude.mjs');
@@ -143,8 +143,8 @@ describe('the hosted link', () => {
     // The wake is one user line holding the digest text.
     expect(records().filter((x) => x.wake !== undefined).map((x) => x.wake)).toEqual(['BOARD demo · e3 · 2 items · 1 open']);
 
-    // Presence from the stream: drawing when the call begins, a card once its kind is written,
-    // the cursor on the note when the call is whole, listening at the result.
+    // Presence from the stream: drawing when the call begins, a card once its kind is written, its
+    // title once that is written, the cursor on the note when the call is whole, listening at the result.
     expect(presence).toEqual(POST_TURN);
   });
 
@@ -257,11 +257,12 @@ const kindOf = (x: Line) => (x.type === 'stream_event' ? `${x.event?.type === 'c
 
 /** The fake's call, as it writes it. */
 const POST = { pictures: [{ picture: { kind: 'text', title: 'How I read your note' }, answers: ['m1'] }] };
-/** What a turn of the fake reports: the call begins, its first picture is a card, the call is whole, the turn ends. */
+/** What a turn of the fake reports: the call begins, its first picture is a card, the card's title is written, the call is whole, the turn ends. */
 const POST_TURN: PresenceUpdate[] = [
-  { state: 'drawing', note: 'drawing' },
-  { state: 'drawing', note: 'drawing a card' },
-  { state: 'drawing', note: 'drawing a card', cursor: { item: 'm1' } },
+  { state: 'drawing', note: 'drawing', doing: 'drawing' },
+  { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text' } },
+  { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text', title: 'How I read your note' } },
+  { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text', title: 'How I read your note' }, cursor: { item: 'm1' } },
   { state: 'listening' },
 ];
 
@@ -277,17 +278,18 @@ describe('presence while the model writes a call', () => {
     expect(presence).toEqual(POST_TURN);
     // The first report comes as the call begins: no part of the call is whole yet.
     expect(seen[0]).toEqual(['system', 'start tool_use']);
-    // The kind comes while the input streams in, still before the whole line.
+    // The kind and then the title come while the input streams in, still before the whole line.
     expect(seen[1]).toEqual(['system', 'start tool_use']);
-    expect(seen[2]).toEqual(['system', 'start tool_use', 'assistant']);
+    expect(seen[2]).toEqual(['system', 'start tool_use']);
+    expect(seen[3]).toEqual(['system', 'start tool_use', 'assistant']);
     // The last word on the call is what the board tool itself reports when it runs.
-    expect(presence[2]).toEqual(toolPresence('mcp__board__board_post', POST));
+    expect(presence[3]).toEqual(toolPresence('mcp__board__board_post', POST));
   });
 
-  it('a thinking block and a text block report nothing', async () => {
+  it('a thinking block reports thinking as it begins, and a text block reports nothing', async () => {
     const l = await link();
     expect(await l.wake(wake('THINK, then answer'))).toEqual({ ok: true });
-    expect(presence).toEqual(POST_TURN);
+    expect(presence).toEqual([...POST_TURN.slice(0, 4), THINKING_PRESENCE, { state: 'listening' }]);
   });
 
   it('an older claude, which writes no stream_event line, reports as before: the whole call, then the end', async () => {
@@ -314,7 +316,7 @@ describe('presence while the model writes a call', () => {
     process.env.FAKE_CLAUDE_STREAM = 'late';
     const l = await link();
     expect(await l.wake(wake('hello'))).toEqual({ ok: true });
-    expect(presence).toEqual([POST_TURN[0], POST_TURN[2], POST_TURN[3]]);
+    expect(presence).toEqual([POST_TURN[0], POST_TURN[3], POST_TURN[4]]);
   });
 
   it('logs in debug only the starts of blocks and what it reported, not each piece', async () => {
@@ -323,9 +325,10 @@ describe('presence while the model writes a call', () => {
     const said = logs.filter((m) => m.startsWith('stream') || m.startsWith('tool'));
     expect(said).toEqual([
       'stream block tool_use begins',
-      'tool mcp__board__board_post being written → {"state":"drawing","note":"drawing"}',
-      'tool mcp__board__board_post being written → {"state":"drawing","note":"drawing a card"}',
-      expect.stringMatching(/^tool mcp__board__board_post \(input object: .*\) → \{"state":"drawing","note":"drawing a card","cursor":\{"item":"m1"\}\}$/),
+      'tool mcp__board__board_post being written → {"state":"drawing","note":"drawing","doing":"drawing"}',
+      'tool mcp__board__board_post being written → {"state":"drawing","note":"drawing a card","doing":"drawing","picture":{"kind":"text"}}',
+      'tool mcp__board__board_post being written → {"state":"drawing","note":"drawing a card","doing":"drawing","picture":{"kind":"text","title":"How I read your note"}}',
+      expect.stringMatching(/^tool mcp__board__board_post \(input object: .*\) → \{"state":"drawing","note":"drawing a card","doing":"drawing","picture":\{"kind":"text","title":"How I read your note"\},"cursor":\{"item":"m1"\}\}$/),
       'stream user',
       'stream block text begins',
       'stream result/success',
@@ -354,48 +357,68 @@ function follow(events: unknown[], from?: Writing): { writing: Writing | undefin
 describe('following a call as it is written', () => {
   it('reports what a tool does as soon as its block begins', () => {
     const r = follow([{ type: 'message_start', message: { content: [] } }, start(0, { type: 'tool_use', id: 'toolu_0177', name: 'Glob', input: {}, caller: { type: 'direct' } })]);
-    expect(r.reports).toEqual([{ state: 'drawing', note: 'reading the code' }]);
+    expect(r.reports).toEqual([{ state: 'drawing', note: 'reading the code', doing: 'reading' }]);
     expect(r.writing).toMatchObject({ index: 0, id: 'toolu_0177', tool: 'Glob', refining: false });
     // The input of any tool but board_post changes nothing.
     expect(follow([delta(0, '{"pattern": "*.none'), delta(0, '"}')], r.writing).reports).toEqual([]);
   });
 
-  it('a board_post: drawing at its start, then its first picture\'s kind once, whatever the pieces', () => {
-    const input = JSON.stringify({ pictures: [{ answers: ['m1'], picture: { kind: 'mini', title: 'x' } }, { picture: { kind: 'text' } }] });
-    for (const size of [1, 3, 7, 64, input.length]) {
+  it('a board_post: drawing at its start, then its first picture\'s kind once, then its title once, whatever the pieces', () => {
+    const input = JSON.stringify({ pictures: [{ answers: ['m1'], picture: { kind: 'mini', title: 'Why two' } }, { picture: { kind: 'text', title: 'Not this' } }] });
+    const begins = { state: 'drawing', note: 'drawing', doing: 'drawing' };
+    const kind = { state: 'drawing', note: 'drawing a small picture', doing: 'drawing', picture: { kind: 'mini' } };
+    const titled = { ...kind, picture: { kind: 'mini', title: 'Why two' } };
+    for (const size of [1, 3, 7, 12, input.length]) {
       const pieces = [delta(0, '')];
       for (let i = 0; i < input.length; i += size) pieces.push(delta(0, input.slice(i, i + size)));
       const r = follow([postStart, ...pieces]);
-      expect(r.reports, `pieces of ${size}`).toEqual([
-        { state: 'drawing', note: 'drawing' },
-        { state: 'drawing', note: 'drawing a small picture' },
-      ]);
-      // Nothing more is kept or read once the note is as exact as it gets.
+      // Pieces small enough to end between the kind and the title report each; one piece with both reports them together.
+      expect(r.reports, `pieces of ${size}`).toEqual(size < input.length ? [begins, kind, titled] : [begins, titled]);
+      // Nothing more is kept or read once the title is read.
       expect(r.writing).toMatchObject({ refining: false, input: '' });
     }
   });
 
-  it('a board_post\'s kind is looked for in its first KIND_READ_MAX characters only: past them nothing is kept or read', () => {
-    /** A post whose model comes first, so the first picture's kind ends `at` characters in. */
+  it('a board_post whose title comes before its kind reports both at once, and one whose picture has no title keeps reading', () => {
+    const first = follow([postStart, delta(0, '{"pictures":[{"picture":{"title":"Why"'), delta(0, ',"kind":"text"')]);
+    expect(first.reports).toEqual([
+      { state: 'drawing', note: 'drawing', doing: 'drawing' },
+      { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text', title: 'Why' } },
+    ]);
+    expect(first.writing).toMatchObject({ refining: false, input: '' });
+    const untitled = '{"pictures":[{"picture":{"kind":"shelf","tiles":[]}},{"picture":{"kind":"text","title":"Not this"}}]}';
+    const r = follow([postStart, delta(0, untitled)]);
+    expect(r.reports).toEqual([{ state: 'drawing', note: 'drawing', doing: 'drawing' }, { state: 'drawing', note: 'drawing a shelf', doing: 'drawing', picture: { kind: 'shelf' } }]);
+    expect(r.writing).toMatchObject({ refining: true, input: untitled });
+  });
+
+  it('a board_post\'s first picture is looked for in its first PICTURE_READ_MAX characters only: past them nothing is kept or read', () => {
+    /** A post whose model comes first, so the first picture's kind ends `at` characters in, and its title right after. */
     const post = (at: number) => {
       const head = '{"model": {"note": "';
       const tail = '"}, "pictures": [{"picture": {"kind": "text"';
       return `${head}${'x'.repeat(at - head.length - tail.length)}${tail}, "title": "t"}}]}`;
     };
+    const titleEnd = (input: string) => input.indexOf('"t"}') + '"t"'.length;
     /** The post in pieces of 12, as the stream gives it, and the call after each. */
     const pieces = (input: string) => {
       const out: unknown[] = [];
       for (let i = 0; i < input.length; i += 12) out.push(delta(0, input.slice(i, i + 12)));
       return out;
     };
-    const inside = post(KIND_READ_MAX);
-    expect(inside.indexOf('"text"') + '"text"'.length).toBe(KIND_READ_MAX);
+    const inside = post(PICTURE_READ_MAX);
+    expect(inside.indexOf('"text"') + '"text"'.length).toBe(PICTURE_READ_MAX);
+    // The kind is inside the bound and its title is past it: the title is never read.
     expect(follow([postStart, ...pieces(inside)]).reports).toEqual([
-      { state: 'drawing', note: 'drawing' },
-      { state: 'drawing', note: 'drawing a card' },
+      { state: 'drawing', note: 'drawing', doing: 'drawing' },
+      { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text' } },
     ]);
+    // A title that ends on the bound is read.
+    const titled = post(PICTURE_READ_MAX - (titleEnd(inside) - PICTURE_READ_MAX));
+    expect(titleEnd(titled)).toBe(PICTURE_READ_MAX);
+    expect(follow([postStart, ...pieces(titled)]).reports.at(-1)).toEqual({ state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text', title: 't' } });
 
-    const past = post(KIND_READ_MAX + 1);
+    const past = post(PICTURE_READ_MAX + 1);
     let writing = followCall(undefined, postStart).writing;
     let read = 0;
     for (const piece of pieces(past)) {
@@ -404,24 +427,28 @@ describe('following a call as it is written', () => {
       read += (piece as { delta: { partial_json: string } }).delta.partial_json.length;
       expect(r.report, `at ${read}`).toBeUndefined();
       // Kept while within the bound; from the piece that crosses it on, neither kept nor read.
-      expect(writing, `at ${read}`).toMatchObject(read > KIND_READ_MAX ? { refining: false, input: '' } : { refining: true, input: past.slice(0, read) });
+      expect(writing, `at ${read}`).toMatchObject(read > PICTURE_READ_MAX ? { refining: false, input: '' } : { refining: true, input: past.slice(0, read) });
     }
-    expect(read).toBeGreaterThan(KIND_READ_MAX);
+    expect(read).toBeGreaterThan(PICTURE_READ_MAX);
   });
 
-  it('a block that is not a tool call reports nothing, and ends the call before it', () => {
+  it('a thinking block reports thinking as it begins, a text block nothing, and either ends the call before it', () => {
     const thinking = start(0, { type: 'thinking', thinking: '', signature: '' });
+    const redacted = start(0, { type: 'redacted_thinking', data: 'x' });
     const text = start(1, { type: 'text', text: '' });
-    expect(follow([thinking, { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '' } }, stop(0), text, { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'done' } }])).toEqual({ writing: undefined, reports: [] });
+    expect(follow([thinking, { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hm' } }, stop(0)])).toEqual({ writing: undefined, reports: [THINKING_PRESENCE] });
+    expect(follow([redacted, stop(0)])).toEqual({ writing: undefined, reports: [THINKING_PRESENCE] });
+    expect(follow([text, { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'done' } }])).toEqual({ writing: undefined, reports: [] });
     expect(follow([postStart, text]).writing).toBeUndefined();
+    expect(follow([postStart, thinking]).writing).toBeUndefined();
   });
 
   it('nothing reports after the block stops, or for another block', () => {
     const late = follow([postStart, delta(0, '{"pictures":[{"picture":{"kind":"te'), stop(0), delta(0, 'xt"')]);
-    expect(late.reports).toEqual([{ state: 'drawing', note: 'drawing' }]);
+    expect(late.reports).toEqual([{ state: 'drawing', note: 'drawing', doing: 'drawing' }]);
     expect(late.writing).toBeUndefined();
-    expect(follow([postStart, delta(1, '{"pictures":[{"picture":{"kind":"text"')]).reports).toEqual([{ state: 'drawing', note: 'drawing' }]);
-    expect(follow([postStart, { type: 'message_stop' }, delta(0, '{"pictures":[{"picture":{"kind":"text"')]).reports).toEqual([{ state: 'drawing', note: 'drawing' }]);
+    expect(follow([postStart, delta(1, '{"pictures":[{"picture":{"kind":"text"')]).reports).toEqual([{ state: 'drawing', note: 'drawing', doing: 'drawing' }]);
+    expect(follow([postStart, { type: 'message_stop' }, delta(0, '{"pictures":[{"picture":{"kind":"text"')]).reports).toEqual([{ state: 'drawing', note: 'drawing', doing: 'drawing' }]);
   });
 
   it('a malformed event changes nothing and never throws', () => {
@@ -448,7 +475,7 @@ describe('following a call as it is written', () => {
     ];
     for (const e of junk) expect(followCall(open, e), JSON.stringify(e) ?? String(e)).toEqual({ writing: open });
     // And the call goes on as if they were not there.
-    expect(follow([...junk, delta(0, '{"kind":"lanes"')], open).reports).toEqual([{ state: 'drawing', note: 'drawing lanes' }]);
+    expect(follow([...junk, delta(0, '{"kind":"lanes"')], open).reports).toEqual([{ state: 'drawing', note: 'drawing lanes', doing: 'drawing', picture: { kind: 'lanes' } }]);
   });
 });
 

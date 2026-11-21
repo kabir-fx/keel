@@ -3,12 +3,32 @@ import type { CSSProperties } from 'react';
 import { useCallback, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { usePresence } from '../board/presence';
 import type { CameraStore } from '../camera/camera';
+import { prefersReducedMotion } from '../camera/motion';
 import { laidOut } from '../camera/fit';
-import { CURSOR_DIM_MS, CURSOR_REST_HOLD_MS } from '../motion/timing';
+import {
+  CURSOR_DIM_MS,
+  CURSOR_REST_HOLD_MS,
+  CURSOR_WORDS_MS,
+  CURSOR_WORDS_RISE_PX,
+  DROP_BOB_MS,
+  DROP_BOB_PX,
+  DROP_DOTS_MS,
+  DROP_LEAN_DEG,
+  DROP_LOOK_PX,
+  DROP_POSE_MS,
+  DROP_READ_MS,
+  DROP_SCRIBBLE_DEG,
+  DROP_SCRIBBLE_MS,
+  DROP_SPLIT_MS,
+  DROP_SPLIT_OVERSHOOT,
+  DROP_SWELL,
+  DROP_SWELL_MS,
+} from '../motion/timing';
 import type { BoardSource } from '../source';
 import type { BoardRect } from '../tools/types';
-import { cursorLook, cursorPoint, cursorSays, markOf, placeCursor, tagWords } from './cursorPlace';
+import { CURSOR_SIZE, cursorPoint, cursorSays, DROPLET_SHARE, dropPose, markOf, placeCursor, tagWords } from './cursorPlace';
 import type { AgentCursorStore } from './cursorStore';
+import { Drop } from './drop';
 
 /** What the agent's cursor needs of the board. */
 export interface AgentCursorProps {
@@ -23,28 +43,51 @@ export interface AgentCursorProps {
   camera: CameraStore;
   /** The board's place on the page, from memory. */
   rect: () => BoardRect;
+  /** A picture of the agent's waits to be drawn: the figure is at work until it is. */
+  waiting: boolean;
 }
 
-/** How long the cursor holds at rest before it dims, and how long it takes to: for the style sheet, from `motion/timing.ts`. */
-const REST_TIMES = { '--cursor-hold': `${CURSOR_REST_HOLD_MS}ms`, '--cursor-dim': `${CURSOR_DIM_MS}ms` } as CSSProperties;
+/** The figure's times and distances, for the style sheet, from `motion/timing.ts`. */
+const FIGURE_TIMES = {
+  '--cursor-hold': `${CURSOR_REST_HOLD_MS}ms`,
+  '--cursor-dim': `${CURSOR_DIM_MS}ms`,
+  '--drop-pose': `${DROP_POSE_MS}ms`,
+  '--drop-lean': `${DROP_LEAN_DEG}deg`,
+  '--drop-read': `${DROP_READ_MS}ms`,
+  '--drop-look': `${DROP_LOOK_PX}px`,
+  '--drop-bob': `${DROP_BOB_MS}ms`,
+  '--drop-bob-px': `${DROP_BOB_PX}px`,
+  '--drop-dots': `${DROP_DOTS_MS}ms`,
+  '--drop-scribble': `${DROP_SCRIBBLE_MS}ms`,
+  '--drop-scribble-deg': `${DROP_SCRIBBLE_DEG}deg`,
+  '--drop-split': `${DROP_SPLIT_MS}ms`,
+  '--drop-overshoot': `${DROP_SPLIT_OVERSHOOT}`,
+  '--words-in': `${CURSOR_WORDS_MS}ms`,
+  '--words-rise': `${CURSOR_WORDS_RISE_PX}px`,
+} as CSSProperties;
 
 /**
- * The agent on the board: a blue pointer with an "agent" tag, drawn in the overlay at one size at
- * any zoom (`cursorPlace.ts` has the rules). It hears the agent for itself and tells the store
- * the place presence names; the store says where it is (`cursorStore.ts`). It is on the board
- * from the first time it has a place, and stays where it last was when presence names none.
+ * The agent on the board: an ink drop with an "agent" tag, drawn in the overlay at one size at
+ * any zoom (`cursorPlace.ts` has the rules), and a smaller droplet for each cursor split off it.
+ * It hears the agent for itself and tells the store the place presence names; the store says
+ * where every cursor is (`cursorStore.ts`). It is on the board from the first time it has a
+ * place, and stays where it last was when presence names none.
  *
- * Its place is a transform written straight to the page, on every camera move and on every frame
- * of a trip: neither draws it again through React. A note too long for the presence pill is said
- * beside it.
+ * Every cursor's place is a transform written straight to the page, on every camera move and on
+ * every frame of a trip: neither draws it again through React. A note too long for the presence
+ * pill is said beside it.
  */
-export function AgentCursor({ source, cursor, state, boxOf, titles, camera, rect }: AgentCursorProps) {
+export function AgentCursor({ source, cursor, state, boxOf, titles, camera, rect, waiting }: AgentCursorProps) {
   const presence = usePresence(source);
-  const { placed, led } = useSyncExternalStore(cursor.subscribe, cursor.shown);
+  const shown = useSyncExternalStore(cursor.subscribe, cursor.shown);
+  const { placed, led, count } = shown;
   const el = useRef<HTMLDivElement>(null);
   const tag = useRef<HTMLSpanElement>(null);
-  /** How wide the tag is drawn, in screen pixels; 0 until it is measured. */
+  const heading = useRef<HTMLSpanElement>(null);
+  const droplets = useRef(new Map<number, HTMLDivElement>());
+  /** How wide the tag, or the title under it, is drawn, in screen pixels; 0 until measured. */
   const tagWidth = useRef(0);
+  const lastCount = useRef(count);
 
   const size = useCallback(() => {
     const r = laidOut(rect());
@@ -52,21 +95,31 @@ export function AgentCursor({ source, cursor, state, boxOf, titles, camera, rect
   }, [rect]);
 
   const draw = useCallback(() => {
+    const [cam, board] = [camera.get(), size()];
     const node = el.current;
     const p = cursor.at();
-    if (!node || !p) return;
-    const [cam, board] = [camera.get(), size()];
-    let at = placeCursor(p, cam, board, tagWidth.current);
-    // The tag is measured the first time it shows after its words changed: off the board it is
-    // put away, and has no width to read.
-    if (!at.off && tagWidth.current === 0 && tag.current) {
-      node.removeAttribute('data-off');
-      tagWidth.current = tag.current.offsetWidth;
-      at = placeCursor(p, cam, board, tagWidth.current);
+    if (node && p) {
+      let at = placeCursor(p, cam, board, tagWidth.current);
+      // The tag is measured the first time it shows after its words changed: off the board it is
+      // put away, and has no width to read.
+      if (!at.off && tagWidth.current === 0 && tag.current) {
+        node.removeAttribute('data-off');
+        tagWidth.current = Math.max(tag.current.offsetWidth, heading.current?.offsetWidth ?? 0);
+        at = placeCursor(p, cam, board, tagWidth.current);
+      }
+      node.style.transform = `translate(${at.x}px, ${at.y}px)`;
+      node.toggleAttribute('data-off', at.off);
+      node.toggleAttribute('data-flip', at.flip);
     }
-    node.style.transform = `translate(${at.x}px, ${at.y}px)`;
-    node.toggleAttribute('data-off', at.off);
-    node.toggleAttribute('data-flip', at.flip);
+    if (droplets.current.size === 0) return;
+    for (const d of cursor.drawnAll()) {
+      const drop = droplets.current.get(d.id);
+      if (!drop) continue;
+      const at = placeCursor(d.at, cam, board);
+      drop.style.transform = d.share < 1 ? `translate(${at.x}px, ${at.y}px) scale(${d.share})` : `translate(${at.x}px, ${at.y}px)`;
+      drop.style.opacity = d.share < 1 ? String(d.share) : '';
+      drop.toggleAttribute('data-off', at.off);
+    }
   }, [camera, cursor, size]);
 
   useLayoutEffect(() => cursor.attach({ size, draw }), [cursor, size, draw]);
@@ -84,52 +137,85 @@ export function AgentCursor({ source, cursor, state, boxOf, titles, camera, rect
   const [px, py] = place ?? [Number.NaN, Number.NaN];
   useLayoutEffect(() => cursor.goTo(Number.isNaN(px) ? undefined : [px, py]), [cursor, px, py]);
 
-  // The element is new: put it where the cursor is before the page is painted.
+  // The element is new: put it where the cursor is before the page is painted. So are droplets.
   useLayoutEffect(() => {
-    if (placed) draw();
-  }, [placed, draw]);
+    if (placed || count > 1) draw();
+  }, [placed, count, draw]);
 
-  const look = cursorLook(presence.state, led);
-  // Led, it is drawing: the tag is its name and the dots, and the pill says the note. Words
-  // beside it would hang over what it draws.
-  const words = look === 'working' && !led ? tagWords(presence, titles) : undefined;
+  // Fewer cursors drawn: split ones went into the drop, and it swells once.
+  useLayoutEffect(() => {
+    if (count < lastCount.current && !prefersReducedMotion()) {
+      el.current?.querySelector('.drop__scale')?.animate([{ transform: 'scale(1)' }, { transform: `scale(${DROP_SWELL})`, offset: 0.4 }, { transform: 'scale(1)' }], { duration: DROP_SWELL_MS, easing: 'ease-in-out' });
+    }
+    lastCount.current = count;
+  }, [count]);
+
+  const pose = dropPose(presence, { led: led || waiting, count });
+  const working = pose !== 'asleep' && pose !== 'away';
+  // Led, it is drawing: the tag is its name, and the pill says the note. Words beside it would
+  // hang over what it draws. That it works, the drop shows: the tag is for words.
+  const words = working && !led ? tagWords(presence, titles) : undefined;
+  const title = working && !led ? presence.picture?.title : undefined;
 
   // The tag has new words, or is new: it is measured again, and hung on the side where it fits.
   useLayoutEffect(() => {
     tagWidth.current = 0;
     draw();
-  }, [placed, look, words, draw]);
+  }, [placed, words, title, draw]);
 
-  if (!placed) return null;
   // The pill leaves a long note to the cursor only while presence names a place and nothing
   // leads the cursor (`AgentPill`).
   const said = place && !led ? cursorSays(presence, titles) : undefined;
   return (
-    <div
-      ref={el}
-      className="agent-cursor"
-      data-testid="agent-cursor"
-      data-at={place ? `${place[0]},${place[1]}` : undefined}
-      data-away={look === 'away' ? '' : undefined}
-      data-rest={look === 'rest' ? '' : undefined}
-      style={REST_TIMES}
-    >
-      <svg className="agent-cursor__arrow" width="22" height="22" viewBox="0 0 20 20" aria-hidden="true">
-        <path className="agent-cursor__halo" d="M4 2 L4 16 L7.8 12.6 L10.4 18 L12.8 16.9 L10.2 11.6 L15.4 11.4 Z" />
-        <path className="agent-cursor__body" d="M4 2 L4 16 L7.8 12.6 L10.4 18 L12.8 16.9 L10.2 11.6 L15.4 11.4 Z" />
-      </svg>
-      <span ref={tag} className="agent-cursor__tag">
-        <span className="agent-cursor__name">agent</span>
-        {words && <span className="agent-cursor__words">{words}</span>}
-        {look === 'working' && (
-          <span className="presence-sign presence-sign--drawing" aria-hidden="true">
-            <i />
-            <i />
-            <i />
+    <>
+      {placed && (
+        <div
+          ref={el}
+          className="agent-cursor"
+          data-testid="agent-cursor"
+          data-pose={pose}
+          data-at={place ? `${place[0]},${place[1]}` : undefined}
+          data-away={pose === 'away' ? '' : undefined}
+          data-rest={pose === 'asleep' ? '' : undefined}
+          style={FIGURE_TIMES}
+        >
+          <Drop size={CURSOR_SIZE} />
+          <span ref={tag} className="agent-cursor__tag">
+            <span className="agent-cursor__name">agent</span>
+            {words && (
+              <span key={words} className="agent-cursor__words">
+                {words}
+              </span>
+            )}
           </span>
-        )}
-      </span>
-      {said && <p className="agent-cursor__said">{said}</p>}
-    </div>
+          {title && (
+            <span ref={heading} key={title} className="agent-cursor__title">
+              {title}
+            </span>
+          )}
+          {said && <p className="agent-cursor__said">{said}</p>}
+        </div>
+      )}
+      {/* Over the drop and its tag: a droplet comes out of it, and goes back into it, in sight. */}
+      {count > 1 &&
+        cursor
+          .drawnAll()
+          .slice(1)
+          .map((d) => (
+            <div
+              key={d.id}
+              ref={(n) => {
+                if (n) droplets.current.set(d.id, n);
+                else droplets.current.delete(d.id);
+              }}
+              className="agent-cursor agent-droplet"
+              data-testid="agent-droplet"
+              data-pose="led"
+              style={FIGURE_TIMES}
+            >
+              <Drop size={CURSOR_SIZE * DROPLET_SHARE} />
+            </div>
+          ))}
+    </>
   );
 }

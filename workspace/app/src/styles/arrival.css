@@ -1,14 +1,25 @@
 /* ---------------------------------------------------------------- arrival */
 
 /* What the agent does, drawn on as it arrives (arrival/player.ts). Its parts are posed by Web
-   Animations, never by styles here: these rules only hold what waits its turn, and let the parts
-   of a drawing grow about their own middle for the time of a film. */
+   Animations, never by styles here: these rules only hold what waits its turn, draw the band a
+   picture is dragged out as, and let the parts of a drawing grow about their own middle for the
+   time of a film. */
 
 /* A picture or a chip waiting its turn is on the board, and pressable, but not seen yet; nor is
-   the picture's arrow. A redrawn picture waiting its turn keeps its paper, not what is on it. */
-.item[data-arrival-waits], .read-chip[data-arrival-waits] { opacity: 0; }
+   the picture's arrow. A redrawn picture waiting its turn keeps its paper, not what is on it. A
+   finished placeholder waiting its turn keeps its frame: the band, where the placeholder was.
+   What is in it goes at once: a picture's own fade (`.kp`) would show it whole for a moment. */
+.item[data-arrival-waits]:not([data-arrival-waits="frame"]), .read-chip[data-arrival-waits] { opacity: 0; }
+.item[data-arrival-waits="frame"] > [data-build] { opacity: 0; transition: none; }
+.item[data-arrival-waits="frame"] > .arrival-band { opacity: 1; }
 .lineage path[data-arrival-waits] { visibility: hidden; }
 [data-arrival-waits="content"] [data-build] { opacity: 0; }
 
 /* An SVG part grows about its own middle, as an HTML one does. */
 [data-arrival] svg [data-build] { transform-box: fill-box; transform-origin: center; }
+
+/* The band a picture is dragged out as: under the picture, in the agent's blue, unseen at rest.
+   Its animations show it while it is dragged and as it goes. A picture with no paper of its own
+   is dragged out as a dashed outline. */
+.arrival-band { position: absolute; z-index: -1; box-sizing: border-box; border: 1.5px solid var(--agent); opacity: 0; pointer-events: none; }
+.arrival-band[data-bare] { border-style: dashed; }

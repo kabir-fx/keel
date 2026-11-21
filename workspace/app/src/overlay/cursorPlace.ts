@@ -18,7 +18,7 @@ import type { Point } from '../motion/path';
 /** How far past a mark's right edge the cursor's point waits, in board units: inside the 48 a picture answering it is placed away (`place.ts`, `GAP_RIGHT`). */
 export const CURSOR_BESIDE = 12;
 
-/** How far down a mark the cursor's point waits, as a share of the mark's height: in its lower half, so the arrow and its tag hang beside the mark's words, not over them. */
+/** How far down a mark the cursor's point waits, as a share of the mark's height: in its lower half, so the drop and its tag hang beside the mark's words, not over them. */
 export const CURSOR_DOWN = 0.6;
 
 /** Whether an item of this board is one of the owner's marks: the cursor waits beside a mark, and inside a picture's corner. */
@@ -49,16 +49,23 @@ export function cursorPoint(presence: Presence, boxOf: (id: Id) => Box | undefin
 }
 
 /**
- * How the cursor looks. Working, at full strength with what it does in its tag: the agent is
- * drawing, or something leads the cursor. At rest, dimmed after a short hold with only its name:
- * listening, waiting or building. Away: faint.
+ * The drop's pose, each a state the board is really in. Led: something leads it, or cursors split
+ * off it still draw or fly back to it; steady. Reading, thinking, drawing: what the agent's stream
+ * says it does while it works; working with no word of what, it thinks, and writing words is drawn
+ * as drawing. Asleep: listening, waiting or building, dimmed after a short hold with its eyes
+ * closed. Away: faint. Every pose but asleep and away is working: at full strength, with what it
+ * does in its tag.
  */
-export type CursorLook = 'working' | 'rest' | 'away';
+export type DropPose = 'led' | 'reading' | 'thinking' | 'drawing' | 'asleep' | 'away';
 
-/** How the cursor looks for this presence, and whether something leads it now. */
-export function cursorLook(state: Presence['state'], led: boolean): CursorLook {
-  if (led || state === 'drawing') return 'working';
-  return state === 'away' ? 'away' : 'rest';
+/** The drop's pose for this presence, whether something leads the cursor now, and how many cursors are drawn. */
+export function dropPose(presence: Presence, shown: { led: boolean; count: number }): DropPose {
+  if (shown.led || shown.count > 1) return 'led';
+  if (presence.state === 'away') return 'away';
+  if (presence.state !== 'drawing') return 'asleep';
+  if (presence.doing === 'reading') return 'reading';
+  if (presence.doing === 'drawing' || presence.doing === 'writing') return 'drawing';
+  return 'thinking';
 }
 
 /**
@@ -80,10 +87,13 @@ export function cursorSays(presence: Presence, titles: readonly string[]): strin
   return leftToCursor(presence, true, titles);
 }
 
-/** How far the cursor's arrow reaches from its point, in screen pixels: it is kept this far inside the board's right and bottom edges, so it is seen whole. */
-export const CURSOR_SIZE = 22;
+/** How far the drop reaches from its tip, in screen pixels: it is kept this far inside the board's right and bottom edges, so it is seen whole. */
+export const CURSOR_SIZE = 30;
 
-/** Where the tag starts, right of the cursor's point, in screen pixels: past the arrow and the gap after it. */
+/** A droplet, a cursor split off the agent's own, is the drop at this share of its size. */
+export const DROPLET_SHARE = 0.72;
+
+/** Where the tag starts, right of the cursor's point, in screen pixels: past the drop and the gap after it. */
 export const CURSOR_TAG_FROM = CURSOR_SIZE + 2;
 
 /** Where the cursor is drawn, in board pixels, whether its own place is off the board, and whether its tag hangs left of the point. */

@@ -410,14 +410,14 @@ describe('finding the board server', () => {
 
 describe('presence for a tool call', () => {
   it('puts the cursor on the item a call answers, never on an act', () => {
-    expect(toolPresence('mcp__board__board_post', { pictures: [{ picture: {}, answers: ['e12', 'm3'] }] })).toEqual({ state: 'drawing', note: 'drawing', cursor: { item: 'm3' } });
+    expect(toolPresence('mcp__board__board_post', { pictures: [{ picture: {}, answers: ['e12', 'm3'] }] })).toEqual({ state: 'drawing', note: 'drawing', doing: 'drawing', cursor: { item: 'm3' } });
     expect(toolPresence('board_post', { pictures: [{ picture: {}, id: 'a-abc123', answers: ['m1'] }] })).toMatchObject({ cursor: { item: 'a-abc123' } });
-    expect(toolPresence('mcp__plugin_keel-board_board__board_answer', { answers: ['e7'] })).toEqual({ state: 'drawing', note: 'answering' });
-    expect(toolPresence('Read', { file_path: 'README.md' })).toEqual({ state: 'drawing', note: 'reading the code' });
+    expect(toolPresence('mcp__plugin_keel-board_board__board_answer', { answers: ['e7'] })).toEqual({ state: 'drawing', note: 'answering', doing: 'writing' });
+    expect(toolPresence('Read', { file_path: 'README.md' })).toEqual({ state: 'drawing', note: 'reading the code', doing: 'reading' });
   });
 
   it('reads an input that arrives as a JSON string', () => {
     expect(toolPresence('board_answer', JSON.stringify({ answers: ['m2'], read: 'x' }))).toMatchObject({ cursor: { item: 'm2' } });
-    expect(toolPresence('board_answer', '{not json')).toEqual({ state: 'drawing', note: 'answering' });
+    expect(toolPresence('board_answer', '{not json')).toEqual({ state: 'drawing', note: 'answering', doing: 'writing' });
   });
 });

@@ -4,7 +4,7 @@ import type { Box } from '@keel/protocol';
 import { budgetFor, cursorAt, DRAW, easeOf, farCorner, movingMax, planArrival, planChip, planFinish, planRedraw, progress, PULL, restBy } from '../src/arrival/plan';
 import type { Point } from '../src/motion/path';
 import { distance, lengthOf } from '../src/motion/path';
-import { APPROACH_MAX_MS, CURSOR_ENTER_MS, CURSOR_NUDGE_MS, FILL_AFTER_SHARE, REDRAW_RATE } from '../src/motion/timing';
+import { APPROACH_MAX_MS, ARRIVAL_SMALL_MS, BAND_OUT_MS, BLOCK_IN_MS, CURSOR_ENTER_MS, CURSOR_NUDGE_MS, REDRAW_RATE } from '../src/motion/timing';
 
 /**
  * The plan of an arrival: pure, from a picture measured on the page. The pictures here are
@@ -18,6 +18,7 @@ const line = (length: number, depth = 1, dashed = false): PlanPart => part('line
 function card(extra: Partial<PlanInput> = {}): PlanInput {
   return {
     card: [400, 0, 380, 152],
+    at: [400, 0],
     route: [
       [326, 60],
       [394, 60],
@@ -33,6 +34,7 @@ function card(extra: Partial<PlanInput> = {}): PlanInput {
 function mini(): PlanInput {
   return {
     card: [400, 400, 540, 100],
+    at: [400, 400],
     route: [
       [326, 450],
       [394, 450],
@@ -48,6 +50,7 @@ function spread(): PlanInput {
   const sheet = (): PlanPart[] => [part('frame'), part('head', 2), part('shape', 2), part('shape', 2), line(60, 2), part('block', 2)];
   return {
     card: [400, 600, 1050, 480],
+    at: [400, 600],
     route: [
       [600, 520],
       [600, 594],
@@ -60,7 +63,32 @@ function spread(): PlanInput {
 
 const ends = (b: { start: number; ms: number }) => b.start + b.ms;
 const partBeats = (a: Arrival) => a.beats.filter((b): b is Beat & { part: number } => typeof b.part === 'number');
-const pullOf = (a: Arrival) => a.beats.find((b) => b.part === 0)!;
+/** The band's drag: what the pull is, now that the picture is never scaled. */
+const pullOf = (a: Arrival) => a.beats.find((b) => b.part === 'band')!;
+const dragOf = (b: Beat) => b.pose as { kind: 'drag'; from: Box; to: Box };
+
+/** The band on the board at time `t`, from its drag beat and the item's top left: each edge eased from one rectangle to the other. */
+function bandAt(b: Beat, at: Point, t: number): Box {
+  const { from, to } = dragOf(b);
+  const s = progress(b, t);
+  return [0, 1, 2, 3].map((i) => from[i]! + s * (to[i]! - from[i]!) + (i < 2 ? at[i]! : 0)) as unknown as Box;
+}
+
+/** Each corner of a box by name. */
+const corners = (b: Box): Record<'tl' | 'tr' | 'bl' | 'br', Point> => ({
+  tl: [b[0], b[1]],
+  tr: [b[0] + b[2], b[1]],
+  bl: [b[0], b[1] + b[3]],
+  br: [b[0] + b[2], b[1] + b[3]],
+});
+
+/** No beat moves the picture's root but to show it in place: nothing of it is scaled or moved. */
+function neverScalesTheRoot(a: Arrival) {
+  for (const b of a.beats) {
+    expect(['pull', 'reshape']).not.toContain(b.pose.kind);
+    if (b.part === 0 && b.pose.kind !== 'write') expect(b.pose).toEqual({ kind: 'appear' });
+  }
+}
 
 /** The most beats moving at any start of one. */
 function mostMoving(a: Arrival): number {
@@ -130,26 +158,31 @@ describe('the plan of an arrival', () => {
         expect(leg.path.points).toEqual(input.route);
       });
 
-      it('pulls the picture out from where the arrow ends once it is whole, with the cursor\'s tip on its far corner all the way', () => {
+      it('drags the band out from where the arrow ends once it is whole, to the picture\'s rectangle, with the cursor\'s tip on its far corner all the way', () => {
         const arrow = a.beats.find((b) => b.part === 'arrow')!;
         expect(pull.start).toBe(ends(arrow));
         expect(pull.ease).toEqual(PULL);
         const route = input.route!;
         const o = route[route.length - 1]!;
-        expect(pull.pose).toEqual({ kind: 'pull', origin: [o[0] - cx, o[1] - cy] });
+        // In the item's own pixels: from a rectangle of no size where the arrow ends, to the root's.
+        expect(pull.pose).toEqual({ kind: 'drag', from: [o[0] - input.at[0], o[1] - input.at[1], 0, 0], to: [cx - input.at[0], cy - input.at[1], cw, ch] });
         const leg = a.legs.find((l) => l.start === pull.start)!;
         expect([leg.ms, leg.ease]).toEqual([pull.ms, pull.ease]);
-        // The corner as the picture grows about `o`, and the cursor: never further apart than the gap at rest, scaled alike.
+        // The band's bottom right corner and the cursor: never further apart than the gap at rest, scaled alike.
         const gap = distance([cx + cw, cy + ch], a.rest);
         for (let t = pull.start; t <= ends(pull); t += 5) {
-          const s = easeOf(PULL)(Math.min(1, (t - pull.start) / pull.ms));
-          const corner: Point = [o[0] + s * (cx + cw - o[0]), o[1] + s * (cy + ch - o[1])];
-          expect(distance(cursorAt(a, t), corner), `at ${t} ms`).toBeCloseTo(s * gap, 6);
+          const s = progress(pull, t);
+          expect(distance(cursorAt(a, t), corners(bandAt(pull, input.at, t)).br), `at ${t} ms`).toBeCloseTo(s * gap, 6);
         }
       });
 
-      it('fills nothing in before the picture is mostly out, and nothing waits on the cursor after it', () => {
-        for (const b of partBeats(a)) if (b.part > 0) expect(b.start).toBeGreaterThanOrEqual(pull.start + pull.ms * FILL_AFTER_SHARE - 1e-9);
+      it('never scales the picture: its root shows in place once the band is whole, and the band goes as it does', () => {
+        neverScalesTheRoot(a);
+        expect(partBeats(a).find((b) => b.part === 0)).toEqual({ part: 0, start: ends(pull), ms: BAND_OUT_MS, ease: expect.any(Array), pose: { kind: 'appear' } });
+      });
+
+      it('fills nothing in before the picture shows, and nothing waits on the cursor after it', () => {
+        for (const b of partBeats(a)) if (b.part > 0) expect(b.start).toBeGreaterThanOrEqual(ends(pull) - 1e-9);
         expect(ends(a.legs[a.legs.length - 1]!)).toBe(ends(pull));
       });
 
@@ -172,12 +205,14 @@ describe('the plan of an arrival', () => {
     });
   }
 
-  it('brings scene 1 to rest in under a second: something moves at once, and the arrow is a short stroke', () => {
+  it('brings scene 1 to rest inside a card\'s budget: something moves at once, the arrow is a short stroke, and the words are in as one cascade after the card shows', () => {
     const a = planArrival(card());
     expect(a.legs[0]!.ms).toBe(CURSOR_NUDGE_MS);
-    expect(a.total).toBeLessThan(1000);
+    expect(a.total).toBeLessThan(ARRIVAL_SMALL_MS);
     const arrow = a.beats.find((b) => b.part === 'arrow')!;
     expect(arrow.ms).toBeLessThan(220);
+    // The head and three blocks from the moment the card shows: three move at once, so the last waits for the head, and is in a block's time after.
+    expect(a.total - ends(pullOf(a))).toBeLessThanOrEqual(2 * BLOCK_IN_MS + 1e-6);
   });
 
   it('builds a spread a sheet at a time, inside about 2.4 s', () => {
@@ -194,12 +229,28 @@ describe('the plan of an arrival', () => {
     }
   });
 
-  it('with no arrow, the cursor goes to the picture\'s top left corner and pulls it out from there', () => {
+  it('with no arrow, the cursor goes to the picture\'s top left corner and drags the band out from there', () => {
     const a = planArrival(card({ route: undefined, cursor: [200, 300] }));
     expect(a.beats.some((b) => b.part === 'arrow')).toBe(false);
     expect(a.legs[0]!.path.points[a.legs[0]!.path.points.length - 1]).toEqual([400, 0]);
-    expect(pullOf(a).pose).toEqual({ kind: 'pull', origin: [0, 0] });
+    expect(pullOf(a).pose).toEqual({ kind: 'drag', from: [0, 0, 0, 0], to: [0, 0, 380, 152] });
     expect(pullOf(a).start).toBe(ends(a.legs[0]!));
+  });
+
+  it('places the band in the pixels of the element the picture is drawn in, counted from its top left', () => {
+    // The root sits 12 by 20 units inside its item.
+    const a = planArrival(card({ at: [388, -20] }));
+    expect(dragOf(pullOf(a))).toEqual({ kind: 'drag', from: [394 - 388, 60 + 20, 0, 0], to: [12, 20, 380, 152] });
+  });
+
+  it('a picture with no paper of its own shows from the start: no appear, and its fill starts with the drag', () => {
+    const input = { ...spread(), paper: false };
+    const a = planArrival(input);
+    keepsTheRules(a, input.parts.length);
+    neverScalesTheRoot(a);
+    const pull = pullOf(a);
+    expect(a.beats.some((b) => b.pose.kind === 'appear')).toBe(false);
+    expect(Math.min(...partBeats(a).map((b) => b.start))).toBeCloseTo(pull.start, 6);
   });
 
   it('a far approach is quick, however far: the picture is there already', () => {
@@ -264,51 +315,47 @@ describe('the plan of a placeholder finished', () => {
   const parts = card().parts;
   const from: Box = [400, 0, 360, 120];
   const to: Box = [400, 0, 380, 152];
-  const input = { card: to, from, cursor: [748, 112] as Point, parts, zoom: 1 };
+  const input = { card: to, at: [400, 0] as Point, from, cursor: [748, 112] as Point, parts, zoom: 1 };
 
-  it('pulls the picture from the rectangle it had to the one it has, the tip on the corner on a straight line', () => {
+  it('drags the band from the rectangle it had to the one it has, the tip on its corner on a straight line, and never scales the picture', () => {
     const a = planFinish(input);
     keepsTheRules(a, parts.length);
-    const pull = a.beats.find((b) => b.part === 0)!;
-    expect(pull.pose).toEqual({ kind: 'reshape', move: [0, 0], scale: [360 / 380, 120 / 152] });
+    neverScalesTheRoot(a);
+    const pull = pullOf(a);
+    expect(pull.pose).toEqual({ kind: 'drag', from: [0, 0, 360, 120], to: [0, 0, 380, 152] });
     expect(pull.ease).toEqual(PULL);
     const leg = a.legs.find((l) => l.start === pull.start)!;
     expect([leg.ms, leg.ease]).toEqual([pull.ms, pull.ease]);
     // The cursor first goes to the placeholder's corner, and pulls from there.
     expect(cursorAt(a, pull.start)).toEqual(restBy(from, 1));
-    for (let t = pull.start; t <= ends(pull); t += 5) {
-      const e = easeOf(PULL)(Math.min(1, (t - pull.start) / pull.ms));
-      // The root's corner, moved and scaled about its top left: `to`'s corner, on the eased share.
-      const { scale } = pull.pose as { scale: Point };
-      const corner: Point = [to[0] + ((1 - e) * scale[0] + e) * to[2], to[1] + ((1 - e) * scale[1] + e) * to[3]];
-      expect(distance(cursorAt(a, t), corner), `at ${t} ms`).toBeCloseTo(Math.SQRT2 * 8, 6);
-    }
-    for (const b of partBeats(a)) if (b.part > 0) expect(b.start).toBeGreaterThanOrEqual(pull.start + pull.ms * FILL_AFTER_SHARE - 1e-9);
+    for (let t = pull.start; t <= ends(pull); t += 5) expect(distance(cursorAt(a, t), corners(bandAt(pull, input.at, t)).br), `at ${t} ms`).toBeCloseTo(Math.SQRT2 * 8, 6);
+    expect(partBeats(a).find((b) => b.part === 0)).toMatchObject({ start: ends(pull), ms: BAND_OUT_MS, pose: { kind: 'appear' } });
+    for (const b of partBeats(a)) if (b.part > 0) expect(b.start).toBeGreaterThanOrEqual(ends(pull) - 1e-9);
     expect(a.total).toBeLessThanOrEqual(budgetFor(parts.length) + 1);
   });
 
-  it('a picture with no paper of its own fills from the start of the pull, so something is pulled; one with paper waits until it is mostly out', () => {
+  it('a picture with no paper of its own shows from the start and fills from the start of the drag; one with paper fills once it shows', () => {
     for (const paper of [false, true]) {
       const a = planFinish({ ...input, paper });
       keepsTheRules(a, parts.length);
-      const pull = a.beats.find((b) => b.part === 0)!;
+      const pull = pullOf(a);
+      expect(a.beats.some((b) => b.pose.kind === 'appear')).toBe(paper);
       const first = Math.min(...partBeats(a).filter((b) => b.part > 0).map((b) => b.start));
-      expect(first, paper ? 'with paper' : 'with no paper').toBeCloseTo(paper ? pull.start + pull.ms * FILL_AFTER_SHARE : pull.start, 6);
+      expect(first, paper ? 'with paper' : 'with no paper').toBeCloseTo(paper ? ends(pull) : pull.start, 6);
     }
   });
 
-  it('a placeholder that moved too: the root is moved back to where it was, and goes on the straight line from there', () => {
+  it('a placeholder that moved too: the band starts where it was, and goes on the straight line from there', () => {
     const a = planFinish({ ...input, from: [100, 300, 360, 120] });
-    const pull = a.beats.find((b) => b.part === 0)!;
-    expect(pull.pose).toEqual({ kind: 'reshape', move: [-300, 300], scale: [360 / 380, 120 / 152] });
-    const leg = a.legs.find((l) => l.start === pull.start)!;
+    expect(pullOf(a).pose).toEqual({ kind: 'drag', from: [-300, 300, 360, 120], to: [0, 0, 380, 152] });
+    const leg = a.legs.find((l) => l.start === pullOf(a).start)!;
     expect(leg.path.points).toEqual([restBy([100, 300, 360, 120], 1), restBy(to, 1)]);
   });
 
-  it('when the rectangle did not change by more than a pixel: no pull, the cursor at the corner, only the fill', () => {
+  it('when the rectangle did not change by more than a pixel: no band, the cursor at the corner, only the fill', () => {
     const a = planFinish({ ...input, from: [400.4, 0, 380.5, 152] });
     keepsTheRules(a, parts.length);
-    expect(a.beats.some((b) => b.part === 0)).toBe(false);
+    expect(a.beats.some((b) => b.part === 0 || b.part === 'band')).toBe(false);
     expect(a.legs.every((l) => l.ease !== PULL)).toBe(true);
     expect(a.rest).toEqual(restBy(to, 1));
   });
@@ -384,10 +431,10 @@ describe('the corner the cursor pulls by', () => {
       expect([away(a.rest[0], corner[0]), away(a.rest[1], corner[1])]).toEqual([corner[0] === r ? 1 : -1, corner[1] === b ? 1 : -1]);
       const pull = pullOf(a);
       const gap = distance(corner, a.rest);
+      const name = (corner[0] === r ? (corner[1] === b ? 'br' : 'tr') : corner[1] === b ? 'bl' : 'tl') as 'br' | 'tr' | 'bl';
       for (let ms = pull.start; ms <= ends(pull); ms += 5) {
-        const s = easeOf(PULL)(Math.min(1, (ms - pull.start) / pull.ms));
-        const at: Point = [o[0] + s * (corner[0] - o[0]), o[1] + s * (corner[1] - o[1])];
-        expect(distance(cursorAt(a, ms), at), `at ${ms} ms`).toBeCloseTo(s * gap, 6);
+        const at = corners(bandAt(pull, [400, 0], ms))[name];
+        expect(distance(cursorAt(a, ms), at), `at ${ms} ms`).toBeCloseTo(progress(pull, ms) * gap, 6);
       }
     });
   }

@@ -14,7 +14,7 @@ You draw by writing a small JSON spec. The board does the layout, the sizes and 
 - `answers`: the ids of the open marks and acts it answers. `from`: the items it grew out of. Every picture names one or the other.
 - `name`: an id you choose for a new picture, unused on the board, such as `spread-2`. Later entries can then name it in `from`, and finish it by `id`.
 - `id`: only to finish or redraw a picture already on the board, never one the owner picked or the blueprint they pressed "Build this" on: for those, post a new picture `from` it.
-- `status: "drawing"` posts a placeholder at once. It answers nothing until you finish it with a later entry that gives its `id` and the whole spec. The finished picture keeps the placeholder's `answers` and may be any kind.
+- `status: "drawing"` posts a placeholder at once. It answers nothing until you finish it with a later entry that gives its `id` and the whole spec. The finished picture keeps the placeholder's `answers` and may be any kind. It stays where the placeholder stood, so give `near` or `side` on the placeholder, not when you finish it.
 - No `box`: the board places every picture.
 - `near` (an item id) and `side` (`right`, `below`, `left`, `above`): only when it belongs beside something other than what it answers.
 - `model`, beside `pictures`: a change to the board's model, made first, so the pictures in the same call can name its parts and walks.

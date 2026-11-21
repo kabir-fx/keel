@@ -6,7 +6,7 @@ import { FrameLoop, ManualClock } from '../src/frame';
 import { frameAt, frameTime } from '../src/replay/page';
 import { Player } from '../src/replay/player';
 import type { PlayStep } from '../src/replay/script';
-import { CALL_BEGINS, CALL_LANDS, KIND_WRITTEN, LEAD, lengthOf, OWNER_GAP, playScript, QUIET_LONG, QUIET_SHORT, TURN_ENDS, WAKE_NOTE, WRITING } from '../src/replay/script';
+import { CALL_BEGINS, CALL_LANDS, KIND_WRITTEN, LEAD, lengthOf, OWNER_GAP, playScript, QUIET_LONG, QUIET_SHORT, TITLE_WRITTEN, TURN_ENDS, WAKE_NOTE, WRITING } from '../src/replay/script';
 import { localSource } from '../src/source';
 
 /** A log made by hand, each event at the second it names, counted from the board's opening. */
@@ -53,10 +53,11 @@ describe('the script of a play', () => {
       // Three seconds in the log is more than the owner's longest gap.
       { at: owner, events: [e2] },
       { at: noted, events: [e3] },
-      { at: wake, presence: { state: 'drawing', note: WAKE_NOTE, cursor: { item: 'n1' } } },
-      { at: wake + CALL_BEGINS, presence: { state: 'drawing', note: 'drawing' } },
-      { at: wake + CALL_BEGINS + KIND_WRITTEN, presence: { state: 'drawing', note: 'drawing a card' } },
-      { at: wake + WRITING, presence: { state: 'drawing', note: 'drawing a card', cursor: { item: 'n1' } } },
+      { at: wake, presence: { state: 'drawing', note: WAKE_NOTE, doing: 'reading', cursor: { item: 'n1' } } },
+      { at: wake + CALL_BEGINS, presence: { state: 'drawing', note: 'drawing', doing: 'drawing' } },
+      { at: wake + CALL_BEGINS + KIND_WRITTEN, presence: { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text' } } },
+      { at: wake + CALL_BEGINS + KIND_WRITTEN + TITLE_WRITTEN, presence: { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text', title: 'card c1' } } },
+      { at: wake + WRITING, presence: { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text', title: 'card c1' }, cursor: { item: 'n1' } } },
       { at: wake + WRITING + CALL_LANDS, events: [e4, e5] },
       { at: wake + WRITING + CALL_LANDS + TURN_ENDS, presence: { state: 'listening' } },
     ]);
@@ -72,16 +73,18 @@ describe('the script of a play', () => {
       .filter((s) => s.presence && s.presence.note !== WAKE_NOTE && s.presence.state !== 'listening')
       .map((s) => s.presence!);
     expect(said).toEqual([
-      { state: 'drawing', note: 'drawing' },
-      { state: 'drawing', note: 'drawing a card' },
-      { state: 'drawing', note: 'drawing a card', cursor: { item: 'n1' } },
+      { state: 'drawing', note: 'drawing', doing: 'drawing' },
+      { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text' } },
+      { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text', title: 'card c1' } },
+      { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text', title: 'card c1' }, cursor: { item: 'n1' } },
       // Another tool: what it does as it begins, and the place once it is whole.
-      { state: 'drawing', note: 'answering' },
-      { state: 'drawing', note: 'answering', cursor: { item: 'n1' } },
-      // A redraw is a post: it names the kind of its new picture, and sits on the picture.
-      { state: 'drawing', note: 'drawing' },
-      { state: 'drawing', note: 'drawing a small picture' },
-      { state: 'drawing', note: 'drawing a small picture', cursor: { item: 'c1' } },
+      { state: 'drawing', note: 'answering', doing: 'writing' },
+      { state: 'drawing', note: 'answering', doing: 'writing', cursor: { item: 'n1' } },
+      // A redraw is a post: it names the kind and title of its new picture, and sits on the picture.
+      { state: 'drawing', note: 'drawing', doing: 'drawing' },
+      { state: 'drawing', note: 'drawing a small picture', doing: 'drawing', picture: { kind: 'mini' } },
+      { state: 'drawing', note: 'drawing a small picture', doing: 'drawing', picture: { kind: 'mini', title: 'now small' } },
+      { state: 'drawing', note: 'drawing a small picture', doing: 'drawing', picture: { kind: 'mini', title: 'now small' }, cursor: { item: 'c1' } },
     ]);
   });
 
@@ -102,18 +105,22 @@ describe('the script of a play', () => {
     const said = playScript(log.events)
       .filter((s) => s.presence && s.presence.note !== WAKE_NOTE && s.presence.state !== 'listening')
       .map((s) => s.presence!);
+    const cardSpec = { kind: 'text', title: 'card c1' };
+    const miniSpec = { kind: 'mini', title: 'now small' };
     expect(said).toEqual([
-      // As `toolPresence` reads `{"model": …, "pictures": [{"picture": {"kind": "text"}, "answers": ["n1"]}]}`.
-      { state: 'drawing', note: 'drawing' },
-      { state: 'drawing', note: 'drawing a card' },
-      { state: 'drawing', note: 'drawing a card', cursor: { item: 'n1' } },
-      { state: 'drawing', note: 'drawing' },
-      { state: 'drawing', note: 'drawing a small picture' },
-      { state: 'drawing', note: 'drawing a small picture', cursor: { item: 'c1' } },
-      { state: 'drawing', note: 'drawing the model' },
-      { state: 'drawing', note: 'drawing the model' },
-      { state: 'drawing', note: 'answering' },
-      { state: 'drawing', note: 'answering', cursor: { item: 'n1' } },
+      // As `toolPresence` reads `{"model": …, "pictures": [{"picture": {"kind": "text", "title": "card c1"}, "answers": ["n1"]}]}`.
+      { state: 'drawing', note: 'drawing', doing: 'drawing' },
+      { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text' } },
+      { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: cardSpec },
+      { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: cardSpec, cursor: { item: 'n1' } },
+      { state: 'drawing', note: 'drawing', doing: 'drawing' },
+      { state: 'drawing', note: 'drawing a small picture', doing: 'drawing', picture: { kind: 'mini' } },
+      { state: 'drawing', note: 'drawing a small picture', doing: 'drawing', picture: miniSpec },
+      { state: 'drawing', note: 'drawing a small picture', doing: 'drawing', picture: miniSpec, cursor: { item: 'c1' } },
+      { state: 'drawing', note: 'drawing the model', doing: 'drawing' },
+      { state: 'drawing', note: 'drawing the model', doing: 'drawing' },
+      { state: 'drawing', note: 'answering', doing: 'writing' },
+      { state: 'drawing', note: 'answering', doing: 'writing', cursor: { item: 'n1' } },
     ]);
   });
 
@@ -133,9 +140,19 @@ describe('the script of a play', () => {
     log.add(12, 'agent', { type: 'answer', answers: ['p1'], read: 'You ask why' });
     const script = playScript(log.events, 3);
     const pinned = script[0]!;
-    expect(script[1]).toEqual({ at: pinned.at + QUIET_LONG, presence: { state: 'drawing', note: WAKE_NOTE, cursor: { item: 'p1' } } });
-    expect(script[2]!.presence).toEqual({ state: 'drawing', note: 'answering' });
-    expect(script[3]!.presence).toEqual({ state: 'drawing', note: 'answering', cursor: { item: 'p1' } });
+    expect(script[1]).toEqual({ at: pinned.at + QUIET_LONG, presence: { state: 'drawing', note: WAKE_NOTE, doing: 'reading', cursor: { item: 'p1' } } });
+    expect(script[2]!.presence).toEqual({ state: 'drawing', note: 'answering', doing: 'writing' });
+    expect(script[3]!.presence).toEqual({ state: 'drawing', note: 'answering', doing: 'writing', cursor: { item: 'p1' } });
+  });
+
+  it('a solidify\'s wake puts the cursor on the lasso it was made from', () => {
+    const log = opened();
+    log.add(6, 'owner', { type: 'item.add', chapter: CH, item: { id: 'l1', kind: 'lasso', box: [0, 0, 400, 100], path: [0, 0, 400, 0, 400, 100], targets: [{ item: 'n1' }] } });
+    const solid = log.add(7, 'owner', { type: 'solidify', chapter: CH, picks: ['n1'], parts: [], lasso: 'l1' });
+    log.add(10, 'agent', card('c1', { answers: [solid.id], status: 'drawing' }));
+    const script = playScript(log.events, 3);
+    const solidified = script[1]!;
+    expect(script[2]).toEqual({ at: solidified.at + QUIET_SHORT, presence: { state: 'drawing', note: WAKE_NOTE, doing: 'reading', cursor: { item: 'l1' } } });
   });
 
   it('a placeholder and its finish are two calls of one turn, the second written after the first', () => {
@@ -151,11 +168,23 @@ describe('the script of a play', () => {
     expect(finish).toEqual({ at: add.at + WRITING + CALL_LANDS, events: [log.events[4], log.events[5]] });
     const between = script.slice(script.indexOf(add) + 1, script.indexOf(finish)).map((s) => s.presence);
     expect(between).toEqual([
-      { state: 'drawing', note: 'drawing' },
-      { state: 'drawing', note: 'drawing a card' },
-      { state: 'drawing', note: 'drawing a card', cursor: { item: 'c1' } },
+      { state: 'drawing', note: 'drawing', doing: 'drawing' },
+      { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text' } },
+      { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text', title: 'done' } },
+      { state: 'drawing', note: 'drawing a card', doing: 'drawing', picture: { kind: 'text', title: 'done' }, cursor: { item: 'c1' } },
     ]);
     expect(script[script.length - 1]).toEqual({ at: finish.at + TURN_ENDS, presence: { state: 'listening' } });
+  });
+
+  it('a post whose first picture has no title says its kind and no title', () => {
+    const log = opened();
+    log.add(9, 'agent', { type: 'item.add', chapter: CH, item: { id: 's1', kind: 'picture', answers: ['n1'], picture: { kind: 'shelf', tiles: [{ id: 't1', name: 'the door' }] } } });
+    const said = playScript(log.events).filter((s) => s.presence?.doing === 'drawing').map((s) => s.presence);
+    expect(said).toEqual([
+      { state: 'drawing', note: 'drawing', doing: 'drawing' },
+      { state: 'drawing', note: 'drawing a shelf', doing: 'drawing', picture: { kind: 'shelf' } },
+      { state: 'drawing', note: 'drawing a shelf', doing: 'drawing', picture: { kind: 'shelf' }, cursor: { item: 'n1' } },
+    ]);
   });
 
   it('events of the agent logged close together are one call', () => {
@@ -175,9 +204,9 @@ describe('the script of a play', () => {
     log.add(9, 'agent', card('c1', { answers: ['n1'] }));
     log.add(9.1, 'owner', place('c1'));
     const script = playScript(log.events, 3);
-    expect(script.map((s) => s.at)).toEqual([LEAD, LEAD + KIND_WRITTEN, LEAD - CALL_BEGINS + WRITING, LEAD - CALL_BEGINS + WRITING + CALL_LANDS, LEAD - CALL_BEGINS + WRITING + CALL_LANDS + TURN_ENDS]);
+    expect(script.map((s) => s.at)).toEqual([LEAD, LEAD + KIND_WRITTEN, LEAD + KIND_WRITTEN + TITLE_WRITTEN, LEAD - CALL_BEGINS + WRITING, LEAD - CALL_BEGINS + WRITING + CALL_LANDS, LEAD - CALL_BEGINS + WRITING + CALL_LANDS + TURN_ENDS]);
     expect(script.some((s) => s.presence?.note === WAKE_NOTE)).toBe(false);
-    expect(script[3]!.events).toEqual([log.events[3], log.events[4]]);
+    expect(script[4]!.events).toEqual([log.events[3], log.events[4]]);
   });
 
   it('plays the system at its own spacing, with no presence of the agent', () => {

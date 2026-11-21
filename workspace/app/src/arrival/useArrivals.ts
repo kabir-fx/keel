@@ -1,6 +1,6 @@
 import type { BoardState, Box, Id, Item } from '@keel/protocol';
 import type { RefObject } from 'react';
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { CameraStore } from '../camera/camera';
 import { screenToWorld } from '../camera/camera';
 import { onReducedMotion } from '../camera/motion';
@@ -14,7 +14,7 @@ import { SEEN_SHARE, shownShare } from '../notices';
 import type { AgentCursorStore } from '../overlay/cursorStore';
 import type { ReadChipAt } from '../reads';
 import type { Connection } from '../source';
-import type { Moment } from './cues';
+import type { Cue, Moment } from './cues';
 import { looking, readCues } from './cues';
 import type { Animate, ArrivalStage } from './player';
 import { ArrivalPlayer } from './player';
@@ -57,6 +57,8 @@ export interface Arrivals {
   has(id: string): boolean;
   /** Land everything at once: before the board is measured or turned into an image. */
   landAll(): void;
+  /** The pictures and reads held out of sight now, waiting to be drawn on: the minimap leaves them out. */
+  held: ReadonlySet<string>;
 }
 
 /**
@@ -65,7 +67,8 @@ export interface Arrivals {
  * in which the state or the boxes changed, before the page is painted, and play what may play.
  *
  * Declared after `useNews` in `App`, so where the camera is going is already set when it asks
- * whether a picture will be in view.
+ * whether a picture will be in view, and a reveal begun in the same commit holds the wave until
+ * the camera stops.
  *
  * Nothing plays, and nothing is made or set on the page, when motion does not play (reduced
  * motion, or no Web Animations), when the page is hidden, outside the board, in the focus view,
@@ -103,6 +106,7 @@ export function useArrivals(n: ArrivalNeeds): Arrivals {
       },
       zoom: () => camera.goal().z,
       drawn: () => camera.get().z,
+      settled: () => !camera.gliding(),
       entry: (to: Point) => cursor.entryFor(to) ?? cursor.entryFor(to, camera.goal()),
     }),
     [camera, cursor],
@@ -142,14 +146,15 @@ export function useArrivals(n: ArrivalNeeds): Arrivals {
     if (cues.length === 0 || !mayPlay(needs.current.mode, needs.current.focusOpen)) return;
     const cam = camera.goal();
     const room = needs.current.fit.roomKept();
+    const wave: Cue[] = [];
     for (const cue of cues) {
       const box = cue.kind === 'read' ? chipBox(cue.id) : boxes.get(cue.id);
       // What will not be in view simply is there, and the news says so.
       if (!box || shownShare(box, cam, room) < SEEN_SHARE) continue;
       started.current.set(cue.id, nowOf(cue.id)!);
-      if (cue.kind === 'settling') player.veil(cue.id);
-      else player.play(cue);
+      wave.push(cue);
     }
+    player.play(wave);
 
     /** Where a chip is drawn, in board units; on a page with no layout, the point it hangs from. */
     function chipBox(id: string): Box | undefined {
@@ -199,7 +204,8 @@ export function useArrivals(n: ArrivalNeeds): Arrivals {
     return () => el.removeEventListener('pointerdown', down, true);
   }, [board, player, stage]);
 
-  return useMemo(() => ({ has: player.has, landAll: player.landAll }), [player]);
+  const held = useSyncExternalStore(player.subscribe, player.held);
+  return useMemo(() => ({ has: player.has, landAll: player.landAll, held }), [player, held]);
 }
 
 /**

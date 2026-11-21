@@ -1,4 +1,4 @@
-import type { BoardState, Box, Id, PictureItem, PictureKind, Place } from '@keel/protocol';
+import type { BoardState, Box, Id, PictureItem, PictureKind, Place, Point } from '@keel/protocol';
 import { isMark, targetsOf } from '@keel/protocol';
 import { overlaps, padBox } from './geometry';
 
@@ -6,18 +6,25 @@ import { overlaps, padBox } from './geometry';
  * Placement: where a picture goes when the agent posts it with no box. Pure, so the same log
  * and the same measured sizes always give the same layout.
  *
- * - A small picture (a text card, a mini, a choice) goes to the nearest clear spot round its
- *   anchor: right, below, left and above it, the side `place.side` names first, at growing
- *   distances. Its anchor is `place.near`, else the first mark it answers, else its first
- *   `from`, else the chapter's last placed item. A mark counts where it is drawn now: a note
- *   stuck on a part of a picture is where that part is, not where the note was first made.
- * - A wide picture with something it belongs to goes beside it too, at the nearest clear spot:
- *   the side `place.side` names first, else below it first. What it belongs to is `place.near`,
- *   else the first `from`, else what the first mark it answers points at, else that mark.
- * - Only a wide picture that belongs to nothing on the board (it answers an act, such as a
- *   solidify) goes below the lowest item of the chapter, left-aligned with its first item.
- * - Nothing overlaps. A picture with no clear spot within `REACH` slides down in steps from
- *   beside its anchor until it is clear of every other item.
+ * Each picture has one lane beside its anchor: one start spot and one direction it slides in
+ * when that spot is taken, so the owner can tell where the next picture will land.
+ *
+ * - A small picture (a text card, a mini, a choice) starts right of its anchor, top edges
+ *   level, and slides down that column. Its anchor is `place.near`, else the first mark it
+ *   answers, else its first `from`, else the chapter's last placed item. A mark counts where it
+ *   is drawn now: a note stuck on a part of a picture is where that part is, not where the note
+ *   was first made.
+ * - A wide picture with something it belongs to starts below it, left edges level, and slides
+ *   down. What it belongs to is `place.near`, else the first `from`, else what the first mark
+ *   it answers points at, else that mark.
+ * - `place.side` names another lane: right, left and below slide down, above slides up.
+ * - A picture with nothing to be placed against starts at `firstSpot` and slides down: a wide
+ *   picture that belongs to nothing on the board (it answers an act, such as a solidify) goes
+ *   below the lowest item of the chapter, left-aligned with its first item.
+ * - The lanes place a picture the first time only. A finished placeholder keeps the top left
+ *   corner it stood at, and slides from there in its lane's direction: a `place` the agent's
+ *   finishing update carries does not move it.
+ * - Nothing overlaps.
  */
 
 export const SMALL_KINDS: readonly PictureKind[] = ['text', 'mini', 'choice'];
@@ -26,13 +33,9 @@ export const GAP_BELOW = 64;
 export const STEP = 24;
 /** Room kept clear round every item, so two items never touch. */
 export const CLEAR = 16;
-/** How much further out than the gap a small picture looks for a clear spot round its anchor. */
-export const REACH = 1200;
 
 export type Size = readonly [w: number, h: number];
 export type Side = NonNullable<Place['side']>;
-/** The order a small picture tries the sides of its anchor in. */
-export const SIDES: readonly Side[] = ['right', 'below', 'left', 'above'];
 
 /** Where each item is drawn now, or undefined for one with no box or not drawn. */
 export type BoxOf = (id: Id) => Box | undefined;
@@ -98,49 +101,27 @@ function chapterBoxes(state: BoardState, chapter: Id, except: Id, boxOf: BoxOf):
 }
 
 /**
- * A box of `size` on one side of `a`: `gap` away, and `d` further out. Beside it, the two top
- * edges line up; above or below it, the two left edges.
+ * A box of `size` on one side of `a`, `gap` away. Beside it, the two top edges line up; above or
+ * below it, the two left edges.
  */
-export function beside(a: Box, side: Side, size: Size, gap: number, d = 0): Box {
+function beside(a: Box, side: Side, size: Size, gap: number): Box {
   const [w, h] = size;
   switch (side) {
     case 'right':
-      return [a[0] + a[2] + gap + d, a[1], w, h];
+      return [a[0] + a[2] + gap, a[1], w, h];
     case 'left':
-      return [a[0] - gap - d - w, a[1], w, h];
+      return [a[0] - gap - w, a[1], w, h];
     case 'below':
-      return [a[0], a[1] + a[3] + gap + d, w, h];
+      return [a[0], a[1] + a[3] + gap, w, h];
     case 'above':
-      return [a[0], a[1] - gap - d - h, w, h];
+      return [a[0], a[1] - gap - h, w, h];
   }
-}
-
-/** The sides to try, the one asked for first. */
-export function sidesFrom(first?: Side): Side[] {
-  return first ? [first, ...SIDES.filter((s) => s !== first)] : [...SIDES];
 }
 
 /** True when `box`, with the room kept round it, touches none of `others`. */
 export function isClear(box: Box, others: readonly Box[]): boolean {
   const padded = padBox(box, CLEAR);
   return !others.some((o) => overlaps(padded, o));
-}
-
-/**
- * The nearest clear spot round `a` for a box of `size`: every side in `sides` at the gap, then
- * every side a step further out, and so on. The first spot that is clear of `others` wins.
- * Undefined when nothing within `REACH` is clear.
- */
-export function nearestClear(a: Box, size: Size, others: readonly Box[], sides: readonly Side[] = SIDES, gap = GAP_RIGHT): Box | undefined {
-  const s: Size = [round(size[0]), round(size[1])];
-  for (let d = 0; d <= REACH; d += STEP) {
-    for (const side of sides) {
-      const b = beside(a, side, s, gap, d);
-      const spot: Box = [round(b[0]), round(b[1]), b[2], b[3]];
-      if (isClear(spot, others)) return spot;
-    }
-  }
-  return undefined;
 }
 
 /** The first spot a picture of `size` tries, before it slides clear of the others. */
@@ -168,20 +149,20 @@ export function firstSpot(state: BoardState, id: Id, size: Size, boxOf: BoxOf): 
   return a ? [a[0], a[1] + a[3] + GAP_BELOW] : [0, 0];
 }
 
-/** Slide a box down in steps until it is clear of every box in `others`. */
-export function slideClear(box: Box, others: readonly Box[]): Box {
+/** Slide a box in steps of `dy` until it is clear of every box in `others`. */
+export function slideClear(box: Box, others: readonly Box[], dy = STEP): Box {
   let [x, y] = box;
   const [, , w, h] = box;
   for (let i = 0; i < 4000; i++) {
     const b: Box = [x, y, w, h];
     if (isClear(b, others)) return b;
-    y += STEP;
+    y += dy;
   }
   return [x, y, w, h];
 }
 
-/** The box for one picture of the measured `size`. */
-export function place(state: BoardState, id: Id, size: Size, boxOf: BoxOf): Box {
+/** The box for one picture of the measured `size`. `stood` is the top left corner it stood at as a placeholder, when it stood somewhere. */
+export function place(state: BoardState, id: Id, size: Size, boxOf: BoxOf, stood?: Point): Box {
   const others: Box[] = [];
   for (const other of state.itemOrder) {
     if (other === id) continue;
@@ -189,22 +170,21 @@ export function place(state: BoardState, id: Id, size: Size, boxOf: BoxOf): Box 
     if (b) others.push(b);
   }
   const s = state.items[id];
+  // Every lane slides down but the one above, which slides up.
+  const dy = s?.item.kind === 'picture' && s.item.place?.side === 'above' ? -STEP : STEP;
+  if (stood) return slideClear([round(stood[0]), round(stood[1]), round(size[0]), round(size[1])], others, dy);
   if (s?.item.kind === 'picture') {
     const small = isSmall(s.item.picture.kind);
     // A small picture always has somewhere to sit; a wide one only when it belongs to something.
     const anchor = anchorOf(state, id, boxOf, small);
     const a = anchor ? boxOf(anchor) : undefined;
     if (a) {
-      const side = s.item.place?.side;
-      const gap = small ? GAP_RIGHT : GAP_BELOW;
-      const spot = nearestClear(a, size, others, sidesFrom(side ?? (small ? undefined : 'below')), gap);
-      if (spot) return spot;
-      const b = beside(a, side ?? (small ? 'right' : 'below'), size, gap);
-      return slideClear([round(b[0]), round(b[1]), round(size[0]), round(size[1])], others);
+      const b = beside(a, s.item.place?.side ?? (small ? 'right' : 'below'), size, small ? GAP_RIGHT : GAP_BELOW);
+      return slideClear([round(b[0]), round(b[1]), round(size[0]), round(size[1])], others, dy);
     }
   }
   const [x, y] = firstSpot(state, id, size, boxOf);
-  return slideClear([round(x), round(y), round(size[0]), round(size[1])], others);
+  return slideClear([round(x), round(y), round(size[0]), round(size[1])], others, dy);
 }
 
 /** The live pictures that wait for a box, in the order they were added. */
@@ -222,12 +202,13 @@ export function unplaced(state: BoardState, boxOf: BoxOf = (id) => state.items[i
  * `boxOfWith(placed)` says where items are drawn once the pictures in `placed` have their boxes,
  * so a mark anchored to a picture placed a moment ago is seen where it will be drawn.
  * It stops at the first picture whose size is not measured yet, so a later picture never takes
- * the spot of an earlier one.
+ * the spot of an earlier one. `stood` holds the corner each finished placeholder stood at.
  */
 export function placeAll(
   state: BoardState,
   sizes: ReadonlyMap<Id, Size>,
   boxOfWith: (placed: ReadonlyMap<Id, Box>) => BoxOf,
+  stood?: ReadonlyMap<Id, Point>,
 ): Map<Id, Box> {
   const placed = new Map<Id, Box>();
   const seen = boxOfWith(placed);
@@ -235,7 +216,7 @@ export function placeAll(
   for (const id of unplaced(state, seen)) {
     const size = sizes.get(id);
     if (!size) break;
-    placed.set(id, place(state, id, size, seen));
+    placed.set(id, place(state, id, size, seen, stood?.get(id)));
   }
   return placed;
 }
