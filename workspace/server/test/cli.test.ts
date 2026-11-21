@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ROUTES } from '@keel/protocol';
 import type { Io, RunDeps, RunResult } from '../src/cli';
-import { NO_CLAUDE, defaultLink, findOnPath, run } from '../src/cli';
+import { defaultLink, run } from '../src/cli';
 import type { RunningServer } from '../src/server';
 import { call, chapter, note, tempRepo, until, own } from './helpers';
 
@@ -192,51 +192,26 @@ describe('the folders a board is not opened in', () => {
   });
 });
 
-describe('looking for Claude Code', () => {
+describe('what is left to set up', () => {
   const hosted = fileURLToPath(new URL('../../plugin/dist/hosted-link.js', import.meta.url));
 
-  it('finds an executable file by its name on a PATH, without starting it', () => {
-    const root = path.dirname(tempRepo());
-    const [none, plainFile, folder, real] = ['none', 'plain', 'folder', 'real'].map((d) => {
-      fs.mkdirSync(path.join(root, d));
-      return path.join(root, d);
-    });
-    fs.writeFileSync(path.join(plainFile!, 'claude'), 'not executable', { mode: 0o644 });
-    fs.mkdirSync(path.join(folder!, 'claude'));
-    fs.writeFileSync(path.join(real!, 'claude'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-
-    expect(findOnPath('claude', undefined)).toBeUndefined();
-    expect(findOnPath('claude', '')).toBeUndefined();
-    expect(findOnPath('claude', [none, plainFile, folder].join(path.delimiter))).toBeUndefined();
-    expect(findOnPath('claude', ['', none, plainFile, folder, real].join(path.delimiter))).toBe(path.join(real!, 'claude'));
-  });
-
   // Only the hosted agent needs Claude Code. An empty board wakes no one, so nothing is started here.
-  it.skipIf(!fs.existsSync(hosted))('warns before the address when the hosted agent cannot find it, and still opens', async () => {
-    const empty = path.dirname(tempRepo());
+  it.skipIf(!fs.existsSync(hosted))('is said once before the address when the hosted agent cannot find Claude Code, and the board still opens', async () => {
+    const NOT_INSTALLED = 'keel-board: Claude Code is not installed. The page that opens installs it and signs you in.';
     const repo = tempRepo();
     const base = ['--no-browser', '--port', '0', '--app-dir', path.join(repo, 'no-app'), '--builder', 'none'];
-    const warned = await cliWith({ searchPath: empty }, 'open', repo, '--link', hosted, ...base);
+    const warned = await cli('open', repo, '--link', hosted, '--link-opt', `bin=${path.join(repo, 'no-claude-here')}`, ...base);
     expect(warned.code).toBe(0);
-    expect(warned.err[0]).toBe(NO_CLAUDE);
-    expect(warned.err.filter((l) => l === NO_CLAUDE)).toHaveLength(1);
+    expect(warned.err.filter((l) => l === NOT_INSTALLED)).toHaveLength(1);
+    expect(warned.err.indexOf(NOT_INSTALLED)).toBeLessThan(warned.err.findIndex((l) => l.startsWith('Board "')));
     expect(warned.out).toEqual([warned.server!.url]);
     await warned.server!.close();
     servers.splice(servers.indexOf(warned.server!), 1);
 
-    // No warning with bin=, or with another link.
-    const named = await cliWith({ searchPath: empty }, 'open', tempRepo(), '--link', hosted, '--link-opt', 'bin=/usr/bin/false', ...base);
-    expect(named.code).toBe(0);
-    expect(named.err).not.toContain(NO_CLAUDE);
-    const other = await cliWith({ searchPath: empty }, 'open', tempRepo(), '--link', 'none', ...base);
+    // Nothing about Claude Code with a link that does not run on it.
+    const other = await cli('open', tempRepo(), '--link', 'none', ...base);
     expect(other.code).toBe(0);
-    expect(other.err).not.toContain(NO_CLAUDE);
-  });
-
-  it('says so in plain words', () => {
-    expect(NO_CLAUDE).toBe(
-      'keel-board: Claude Code was not found on your PATH. The board opens, but the agent will not answer until Claude Code is installed and signed in. Get it from https://claude.com/claude-code',
-    );
+    expect(other.err.join('\n')).not.toMatch(/Claude Code/);
   });
 });
 

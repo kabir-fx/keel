@@ -1,6 +1,6 @@
 import type { Digest } from './digest';
 import type { ShowPlan } from './pictures';
-import type { PresenceUpdate } from './wire';
+import type { AgentSetup, PresenceUpdate } from './wire';
 
 /**
  * The agent link is a seam. The board server knows one call, `wake`, and nothing about how
@@ -43,6 +43,22 @@ export interface AgentLink {
   wake(wake: Wake): Promise<WakeResult>;
   /** Stop the agent and free what the adapter holds. */
   close(): Promise<void>;
+  /** What the agent's harness needs on this machine before it can answer. An adapter that needs nothing leaves it out. */
+  setup?: LinkSetup;
+}
+
+/**
+ * The owner's first page asks this of the adapter: is the harness installed and signed in,
+ * and take the next step for me. Each call answers with how things stand after it.
+ */
+export interface LinkSetup {
+  look(): Promise<AgentSetup>;
+  /** Install the harness. It resolves when the install has ended. */
+  install(): Promise<AgentSetup>;
+  /** Start a sign-in, in place of one that runs. It resolves once the sign-in page has an address, or has ended. */
+  signIn(): Promise<AgentSetup>;
+  /** Hand a running sign-in the code its page showed. It resolves when the sign-in has ended. */
+  code(code: string): Promise<AgentSetup>;
 }
 
 /** What the server gives an adapter when it creates the link. */

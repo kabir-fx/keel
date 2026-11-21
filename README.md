@@ -27,16 +27,24 @@ The Story is the second view of the board. A board has many canvases. A canvas i
 
 ## Quick start
 
-You need Node 22 or newer, git, and Claude Code installed and signed in.
+One command, on macOS or Linux:
 
 ```sh
-cd ~/code/any-folder    # an empty folder, or a repository you already work in
-npx keel-workspace
+curl -fsSL https://raw.githubusercontent.com/kabir-fx/keel/main/get.sh | bash
 ```
 
-That runs the board without installing it. To install it for good, run `npm install -g keel-workspace`. The command is then `keel-board`, in any folder.
+It installs what the board needs, each only when it is missing: git, Node (into `~/.local/share/keel`, only when no Node 22 or newer is there), Claude Code (with Anthropic's own installer) and the board. It puts the `keel-board` command in `~/.local/bin` and on your PATH. It needs no sudo, except to install git on Linux. Run it again to update the board. `curl ... | bash -s -- --uninstall` removes what it made, and keeps Claude Code, git and your boards.
 
-**From a clone.** Use a clone when you want to change keel itself, or the skills and instructions it ships. It also needs npm and `jq`.
+```sh
+mkdir my-idea && cd my-idea    # an empty folder, or a repository you already work in
+keel-board
+```
+
+The first time, the page that opens is a setup page ([0015](docs/adr/0015-the-first-page-sets-the-machine-up.md)). It lists what is left: Claude Code, your Claude sign-in, git. "Sign in to Claude" opens Claude's sign-in in a new tab, and the board opens by itself once you have approved it. Nothing is typed in a terminal.
+
+**With npm.** When you have Node 22 or newer, `npx keel-workspace` runs the board without installing it, and `npm install -g keel-workspace` installs the `keel-board` command. The same setup page installs Claude Code and signs you in.
+
+**From a clone.** Use a clone when you want to change keel itself, or the skills and instructions it ships. It needs Node 22 or newer, npm, git and `jq`.
 
 ```sh
 git clone https://github.com/kabir-fx/keel.git && cd keel
@@ -119,6 +127,8 @@ A build is run to be tried, on your press only ([0013](docs/adr/0013-a-finished-
 
 The server moves your main branch only as record [0014](docs/adr/0014-the-board-keeps-the-home-branch.md) says: by fast-forward, when the board opens and on your Approve. It never rewrites it, never stashes, commits or overwrites your uncommitted changes, and never pushes without your press. Fetching and pushing use your own git credentials. With none stored, the remote counts as not answering.
 
+**The setup page.** While this machine is not ready, the page that opens is a setup page, not the board ([0015](docs/adr/0015-the-first-page-sets-the-machine-up.md)). The server looks for Claude Code on your PATH and in `~/.local/bin`, asks it `claude auth status`, and looks for git. Nothing else runs until you press. "Install Claude Code" fetches Anthropic's installer from `https://claude.ai/install.sh` and runs it as you: it installs into your home folder. "Sign in to Claude" runs `claude auth login`, which opens Claude's sign-in page in your browser. Your sign-in is Claude Code's own: keel never sees a password or a token, and stores nothing of it. Only the owner's page may ask for either step. A sign-in still waiting when the server stops is ended with it.
+
 **The board agent.** The server starts one headless Claude Code process and wakes it when you pause ([0003](docs/adr/0003-the-board-server-hosts-the-agent.md)). It runs on your own Claude Code sign-in: keel starts it without `ANTHROPIC_API_KEY`. By default it uses Sonnet at low effort.
 
 - It may read and list files inside the repository, and draw on the board through the board tools. Its only built-in tools are Read and Glob.
@@ -165,6 +175,7 @@ What this does not cover:
 
 | What | Where | In git? |
 |---|---|---|
+| What `get.sh` installs: the board, and a Node when the machine had none | `~/.local/share/keel/`, and the `keel-board` launcher in `~/.local/bin` | No. Not under `~/.keel`: a build's check may not read that folder, and it must be able to run this Node. |
 | The board log | `.keel/board/log.jsonl` in the repository | Yes. The log is the board's story and memory. Nothing is deleted from it ([0001](docs/adr/0001-the-board-is-an-append-only-log.md)). |
 | Snapshots and dropped files | `.keel/board/assets/` | The log names them. Large files need not be committed. |
 | That a server is up: its process and its port, no token | `.keel/board/server.json` | No. `.keel/board/.gitignore` keeps it out. |
@@ -188,6 +199,8 @@ These numbers were measured on one machine on 2026-11-17 and 2026-11-18, with a 
 - The board tools in your own Claude Code session. The installer adds only the guard hook. The tools are in `workspace/plugin/`.
 - An install from npm adds nothing to your own Claude Code session: no guard hook, no rules, no skills. Those come only with `./install.sh` from a clone.
 - The package from npm has run on a Mac only. It declares macOS and Linux, and Linux is not tried.
+- `get.sh` has run on one Mac with Apple silicon. Its Linux steps, an Intel Mac, and the wait for Apple's developer tools window have run only against stand-ins. Windows has no `get.sh`.
+- The setup page's sign-in has run once for real, on a Mac, with a Claude Pro account. A sign-in that ends while the board is open is not noticed until the agent's next turn fails.
 - Pen and touch input have not been tried on a real pen or touch device ([0004](docs/adr/0004-a-hand-built-canvas.md)). Talk has not been tried with a real voice.
 - Pictures fit a pipeline best. The agent can draw a screen only as one plain drawing. Branches in a walk, state machines and data shapes cannot be drawn yet ([0005](docs/adr/0005-the-agent-draws-from-a-grammar.md)).
 - Your `CLAUDE.md` does not shape what the board agent says.
@@ -202,6 +215,7 @@ These numbers were measured on one machine on 2026-11-17 and 2026-11-18, with a 
 scripts/check.sh board              # the workspace: typecheck, unit tests, the plugin's files
 KEEL_E2E=1 scripts/check.sh board   # the same, and the browser tests (they use your Chrome)
 scripts/check.sh install            # the installer, against throwaway folders
+scripts/check.sh get                # get.sh, against a throwaway home, with stand-ins for every download
 ```
 
 To see the board with no agent and no cost, run `keel-board open --link none` in a scratch repository. To see one real agent turn, run `npm run live-check -w @keel/board-plugin` in `workspace/`. It posts a note and prints how many seconds the card took. It costs one turn on your subscription.

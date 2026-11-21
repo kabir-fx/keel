@@ -6,7 +6,7 @@ It runs on your machine, beside [Claude Code](https://claude.com/claude-code), o
 
 ## Start
 
-You need Node 22 or newer, git, and Claude Code installed and signed in.
+You need Node 22 or newer.
 
 ```sh
 mkdir my-idea && cd my-idea
@@ -14,6 +14,14 @@ npx keel-workspace
 ```
 
 The folder may be new and empty, or a repository you already work in. The command makes `.keel/board/` in it, starts the board server on your machine, and opens the board in your browser. Press Ctrl-C to stop it.
+
+The first time, the page is a setup page. It lists what is left on this machine: Claude Code, your Claude sign-in, git. One press installs Claude Code with Anthropic's own installer, and one press signs you in, in a new browser tab. The board opens by itself once that is done.
+
+No Node yet? One command installs Node, git, Claude Code and the board, on macOS or Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kabir-fx/keel/main/get.sh | bash
+```
 
 To install it for good:
 

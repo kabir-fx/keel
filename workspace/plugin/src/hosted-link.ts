@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AgentLink, CreateLink, LinkContext, PresenceUpdate, Wake, WakeResult } from '@keel/protocol';
+import { ClaudeSetup, findClaude } from './claude-setup';
 import { bareToolName, toolPresence, writingPresence } from './presence';
 
 /**
@@ -341,6 +342,7 @@ export function followCall(w: Writing | undefined, event: unknown): { writing: W
 
 export class HostedLink implements AgentLink {
   readonly name: string;
+  readonly setup: ClaudeSetup;
   private proc: ChildProcessWithoutNullStreams | undefined;
   private turn: Turn | undefined;
   private chain: Promise<unknown> = Promise.resolve();
@@ -365,6 +367,7 @@ export class HostedLink implements AgentLink {
   ) {
     this.name = `claude (${opts.model}, hosted)`;
     this.stateDir = stateDirOf(ctx);
+    this.setup = new ClaudeSetup({ bin: opts.bin, env: childEnv, log: ctx.log });
     for (const [what, file] of [['board tools', opts.mcp], ['board skill', opts.skill], ['picture grammar', opts.grammar]] as const) {
       if (!fs.existsSync(file)) throw new Error(`The ${what} are missing at ${file}. Build the plugin: npm run build -w @keel/board-plugin.`);
     }
@@ -459,7 +462,8 @@ export class HostedLink implements AgentLink {
     this.costKnown = before !== undefined;
 
     const args = agentArgs({ model: this.opts.model, effort: this.opts.effort, mcpConfig, skillFile, settingsFile, sessionId, resume });
-    const proc = spawn(this.opts.bin, args, { cwd: this.ctx.repoDir, env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+    const env = childEnv();
+    const proc = spawn(findClaude(this.opts.bin, env) ?? this.opts.bin, args, { cwd: this.ctx.repoDir, env, stdio: ['pipe', 'pipe', 'pipe'] });
     this.proc = proc;
     this.ctx.log(`${resume ? 'resumed' : 'started'} the agent: session ${sessionId}, pid ${proc.pid ?? '?'}`);
 
@@ -602,6 +606,7 @@ export class HostedLink implements AgentLink {
 
   async close(): Promise<void> {
     this.closed = true;
+    await this.setup.close();
     const proc = this.proc;
     if (proc) {
       const exited = new Promise<void>((resolve) => proc.once('close', () => resolve()));

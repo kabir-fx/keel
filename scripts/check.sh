@@ -7,6 +7,7 @@
 #   scripts/check.sh bar        bar-guard.sh, against a throwaway repository
 #   scripts/check.sh brief      brief-check.sh, against a clean and a bad brief
 #   scripts/check.sh install    the installer, against a throwaway config directory and bin folder
+#   scripts/check.sh get        get.sh, against a throwaway home, install folder and bin folder
 #   scripts/check.sh board      the workspace: typecheck, unit tests, the plugin's files.
 #                               KEEL_E2E=1 adds the browser tests.
 #
@@ -139,7 +140,7 @@ lint() {
   done
   grep -rq 'nothing after it' skills agents && fail "a skill voids a verdict on any later commit: point at keel/verdicts.md instead" || ok
 
-  for file in install.sh scripts/check.sh hooks/guard.sh skills/vet/scripts/bar-guard.sh skills/keel/scripts/brief-check.sh; do
+  for file in install.sh get.sh scripts/check.sh hooks/guard.sh skills/vet/scripts/bar-guard.sh skills/keel/scripts/brief-check.sh; do
     [ -x "$file" ] && ok || fail "$file is not executable"
     bash -n "$file" 2>/dev/null && ok || fail "$file has a syntax error"
   done
@@ -696,6 +697,266 @@ $root/workspace run build"
   case "$got" in *"Done. Start a new Claude Code session"*) ok ;; *) fail "install --no-board counted the board as skipped: $got" ;; esac
 }
 
+# A stand-in node: answers --version with $2, and otherwise notes which node ran,
+# the PATH it saw, and each argument, in $GET_LAUNCH.
+fake_node() { # fake_node <path> <version>
+  mkdir -p "$(dirname "$1")"
+  printf '#!/bin/sh\nif [ "$1" = --version ]; then echo v%s; exit 0; fi\n{ echo "node $0"; echo "PATH=$PATH"; for a in "$@"; do echo "arg [$a]"; done; } >>"$GET_LAUNCH"\n' "$2" >"$1"
+  chmod +x "$1"
+}
+
+# get.sh against a throwaway home, install folder and bin folder. Stand-ins for
+# uname, curl, xcode-select, node, npm and Claude's installer note how they were
+# called, and curl serves files from a folder, so nothing here uses the network.
+get_check() {
+  local g="$tmp/get" fake shim calls launch t name sum h inst bin extra serve xcode got out n sys_os sys_arch shell_
+  fake="$g/fake" shim="$g/shim" calls="$g/calls" launch="$g/launch"
+  mkdir -p "$fake" "$shim" "$g/goodnode" "$g/hasclaude" "$g/serve-ok" "$g/serve-bad" "$g/serve-noclaude" "$g/linux"
+
+  # The PATH of a bare machine: only the tools get.sh runs, so no node, git or claude.
+  for t in bash sh tar gzip sed grep head tail cut mkdir rm mv chmod cat dirname basename mktemp id tr readlink rmdir env sleep ls shasum sha256sum; do
+    command -v "$t" >/dev/null 2>&1 && ln -sf "$(command -v "$t")" "$shim/$t"
+  done
+
+  cat >"$fake/uname" <<'EOF'
+#!/bin/sh
+case "$1" in -m) echo "${FAKE_ARCH:-arm64}" ;; *) echo "${FAKE_OS:-Darwin}" ;; esac
+EOF
+  cat >"$fake/curl" <<'EOF'
+#!/bin/sh
+url="" out=""
+while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift ;; http*) url="$1" ;; esac; shift; done
+echo "curl $url" >>"$GET_CALLS"
+f="$GET_SERVE/${url##*/}"
+[ -f "$f" ] || { echo "curl: (22) not served: $url" >&2; exit 22; }
+if [ -n "$out" ]; then cat "$f" >"$out"; else cat "$f"; fi
+EOF
+  cat >"$fake/xcode-select" <<'EOF'
+#!/bin/sh
+case "$1" in
+  -p) [ -f "$GET_XCODE" ] && echo /Library/Developer/CommandLineTools ;;
+  --install) echo "xcode-select --install" >>"$GET_CALLS"; : >"$GET_XCODE" ;;
+esac
+EOF
+  cat >"$g/npm" <<'EOF'
+#!/bin/sh
+prefix="" prev=""
+for a in "$@"; do [ "$prev" = --prefix ] && prefix="$a"; prev="$a"; done
+echo "npm $0 PATH=${PATH%%:*} $*" >>"$GET_CALLS"
+d="$prefix/lib/node_modules/keel-workspace"
+mkdir -p "$d/server/bin"
+printf '{\n  "name": "keel-workspace",\n  "version": "%s"\n}\n' "${FAKE_PKG_VERSION:-0.1.0}" >"$d/package.json"
+: >"$d/server/bin/keel-board.mjs"
+EOF
+  cat >"$g/serve-ok/install.sh" <<'EOF'
+echo "claude installer" >>"$GET_CALLS"
+mkdir -p "$HOME/.local/bin"
+printf '#!/bin/sh\n' >"$HOME/.local/bin/claude"
+chmod +x "$HOME/.local/bin/claude"
+EOF
+  printf 'echo "claude installer" >>"$GET_CALLS"\necho "error: boom, no route to host"\nexit 1\n' >"$g/serve-noclaude/install.sh"
+  printf '#!/bin/sh\n' >"$g/hasclaude/claude"
+  chmod +x "$fake"/* "$g/npm" "$g/hasclaude/claude"
+  fake_node "$g/goodnode/node" 24.1.0
+  cp "$g/npm" "$g/goodnode/npm"
+  fake_node "$g/oldnode/node" 20.11.0
+  cp "$g/npm" "$g/oldnode/npm"
+
+  # A Node tarball as nodejs.org lays it out, with its sum, and the same tarball with a wrong sum.
+  name="node-v24.1.0-darwin-arm64"
+  fake_node "$g/build/$name/bin/node" 24.1.0
+  cp "$g/npm" "$g/build/$name/bin/npm"
+  tar -czf "$g/serve-ok/$name.tar.gz" -C "$g/build" "$name"
+  sum="$( (shasum -a 256 "$g/serve-ok/$name.tar.gz" 2>/dev/null || sha256sum "$g/serve-ok/$name.tar.gz") | cut -d ' ' -f 1)"
+  printf '%s  node-v24.1.0-linux-x64.tar.gz\n%s  %s.tar.gz\n%s  %s.tar.xz\n' "$(printf '1%.0s' $(seq 64))" "$sum" "$name" "$(printf '2%.0s' $(seq 64))" "$name" >"$g/serve-ok/SHASUMS256.txt"
+  cp "$g/serve-ok/$name.tar.gz" "$g/serve-ok/install.sh" "$g/serve-bad/"
+  printf '%s  %s.tar.gz\n' "$(printf '0%.0s' $(seq 64))" "$name" >"$g/serve-bad/SHASUMS256.txt"
+  cp "$g/serve-ok/$name.tar.gz" "$g/serve-ok/SHASUMS256.txt" "$g/serve-noclaude/"
+
+  # Each case sets h, inst, bin, extra (PATH folders before the bare ones), serve and
+  # xcode (a file that exists when Apple's developer tools are there), then calls run_get.
+  run_get() {
+    : >"$calls"
+    env -i HOME="$h" KEEL_INSTALL_DIR="$inst" KEEL_BIN_DIR="$bin" PATH="$fake:$extra$shim" SHELL="${shell_:-/bin/zsh}" \
+      GET_CALLS="$calls" GET_SERVE="$serve" GET_XCODE="$xcode" GET_LAUNCH="$launch" FAKE_OS="${sys_os:-Darwin}" FAKE_ARCH="${sys_arch:-arm64}" \
+      bash "$root/get.sh" "$@" 2>&1
+    echo "exit=$?"
+  }
+  : >"$g/xcode-ready"
+  xcode="$g/xcode-ready" serve="$g/serve-ok" sys_os="" sys_arch="" shell_=""
+
+  # A good Node and Claude Code on PATH: no Node is downloaded and Claude's installer does not run.
+  h="$g/h1" inst="$g/h1/share/keel" bin="$g/h1/bin" extra="$g/goodnode:$g/hasclaude:"
+  mkdir -p "$h"
+  out="$(run_get)"
+  case "$out" in *"found      Node v24.1.0 at $g/goodnode/node"*"exit=0") ok ;; *) fail "get.sh with a good Node: $out" ;; esac
+  [ ! -e "$inst/node" ] && ok || fail "get.sh with a good Node installed a Node"
+  expect "get.sh with a good Node and Claude Code downloads nothing" "$(grep -c '^curl' "$calls")" 0
+  expect "get.sh installs the board with npm into its prefix" "$(grep '^npm' "$calls")" \
+    "npm $g/goodnode/npm PATH=$g/goodnode install --global --prefix $inst/pkg --no-audit --no-fund keel-workspace@latest"
+  head -n 2 "$bin/keel-board" | grep -q "keel-board launcher, written by keel's get.sh" && ok || fail "the launcher lacks get.sh's marker"
+  [ -x "$bin/keel-board" ] && [ ! -L "$bin/keel-board" ] && ok || fail "the launcher is not an executable file"
+  : >"$launch"
+  env -i HOME="$h" PATH="$g/goodnode:$shim" GET_LAUNCH="$launch" "$bin/keel-board" --help
+  expect "the launcher without a managed Node runs the node on PATH" "$(head -n 1 "$launch")" "node $g/goodnode/node"
+
+  # No Node, no Claude Code, and an install folder with a space: Node is downloaded and
+  # checked, Claude's installer runs, and the launcher puts that Node first.
+  h="$g/h2" inst="$g/h2/my share/keel" bin="$g/h2/.local/bin" extra=""
+  mkdir -p "$h"
+  out="$(run_get)"
+  case "$out" in *"installed  Node v24.1.0 in $inst/node"*"installed  Claude Code"*"exit=0") ok ;; *) fail "get.sh on a bare machine: $out" ;; esac
+  [ -x "$inst/node/bin/node" ] && [ ! -e "$inst/node.new" ] && ok || fail "get.sh did not unpack Node into $inst/node"
+  expect "get.sh fetches the sums, then the tarball, then Claude's installer" "$(grep '^curl' "$calls")" \
+    "curl https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt
+curl https://nodejs.org/dist/latest-v24.x/$name.tar.gz
+curl https://claude.ai/install.sh"
+  grep -q '^claude installer$' "$calls" && ok || fail "get.sh did not run Claude's installer"
+  case "$(grep '^npm' "$calls")" in "npm $inst/node/bin/npm PATH=$inst/node/bin install "*) ok ;; *) fail "get.sh runs the downloaded npm with its Node first: $(cat "$calls")" ;; esac
+  : >"$launch"
+  env -i HOME="$h" PATH="$g/goodnode:$shim" GET_LAUNCH="$launch" "$bin/keel-board" open "two words" "it's" >/dev/null 2>&1
+  expect "the launcher runs the managed Node, the package's launcher and every argument" "$(grep -v '^PATH=' "$launch")" \
+    "node $inst/node/bin/node
+arg [$inst/pkg/lib/node_modules/keel-workspace/server/bin/keel-board.mjs]
+arg [open]
+arg [two words]
+arg [it's]"
+  case "$(grep '^PATH=' "$launch")" in "PATH=$inst/node/bin:$g/goodnode:$shim:$h/.local/bin") ok ;; *) fail "the launcher's PATH: $(cat "$launch")" ;; esac
+  case "$out" in *"(in a new terminal)  mkdir my-idea && cd my-idea && keel-board"*"sign in to Claude"*) ok ;; *) fail "get.sh's last lines: $out" ;; esac
+
+  # A second run changes nothing, says so, adds no second PATH line, and updates the board.
+  out="$(FAKE_PKG_VERSION=0.2.0 run_get)"
+  case "$out" in *"installed "*|*"written "*|*"added "*|*fetching*) fail "get.sh run twice changed something: $out" ;; *"exit=0") ok ;; *) fail "get.sh run twice: $out" ;; esac
+  case "$out" in *"found      Node v24.1.0 in $inst/node"*"found      Claude Code"*"found      $bin/keel-board"*"found      $bin on PATH in $h/.zshrc"*) ok ;; *) fail "get.sh run twice does not say each thing is there: $out" ;; esac
+  expect "get.sh run twice downloads nothing" "$(grep -c '^curl' "$calls")" 0
+  expect "get.sh run twice runs npm install again" "$(grep -c '^npm' "$calls")" 1
+  expect "get.sh adds one PATH line across two runs" "$(grep -c "keel's get.sh" "$h/.zshrc")" 1
+  expect "the PATH line puts the bin folder on PATH" "$(env -i HOME="$h" PATH=/x /bin/sh -c ". '$h/.zshrc'; echo \"\$PATH\"")" "$bin:/x"
+
+  # With a managed Node already there, a Node older than 22 on PATH is passed over.
+  extra="$g/oldnode:"
+  out="$(run_get)"
+  case "$out" in *"found      Node v24.1.0 in $inst/node"*"exit=0") ok ;; *) fail "get.sh with Node 20 and a managed Node: $out" ;; esac
+
+  # Uninstall takes out exactly what get.sh made.
+  mkdir -p "$h/.keel/boards/x"
+  printf 'mine\n' >"$bin/other"
+  printf 'alias ll=ls\n' >>"$h/.zshrc"
+  extra=""
+  out="$(run_get --uninstall)"
+  case "$out" in *"exit=0") ok ;; *) fail "get.sh --uninstall: $out" ;; esac
+  [ ! -e "$inst" ] && [ ! -e "$bin/keel-board" ] && ok || fail "get.sh --uninstall left $(ls -A "$inst" "$bin" 2>&1)"
+  [ -d "$h/my share" ] && ok || fail "get.sh --uninstall removed the install folder's parent"
+  expect "get.sh --uninstall leaves the foreign file and Claude Code" "$(ls -A "$bin")" "claude
+other"
+  [ -d "$h/.keel/boards/x" ] && [ -x "$h/.local/bin/claude" ] && ok || fail "get.sh --uninstall removed the boards or Claude Code"
+  expect "get.sh --uninstall takes out only its PATH line" "$(cat "$h/.zshrc")" "alias ll=ls"
+
+  # The download does not match its sum: a hard stop that leaves no Node folder.
+  h="$g/h3" inst="$g/h3/keel" bin="$g/h3/bin" serve="$g/serve-bad"
+  mkdir -p "$h"
+  out="$(run_get)"
+  case "$out" in *"does not match its checksum"*"exit=1") ok ;; *) fail "get.sh with a bad checksum: $out" ;; esac
+  [ ! -e "$inst/node" ] && [ ! -e "$inst/node.new" ] && ok || fail "get.sh with a bad checksum left a Node folder"
+  expect "get.sh with a bad checksum runs no npm" "$(grep -c '^npm' "$calls")" 0
+
+  # Claude's installer fails: get.sh says so and goes on.
+  h="$g/h4" inst="$g/h4/keel" bin="$g/h4/bin" serve="$g/serve-noclaude" extra="$g/goodnode:"
+  mkdir -p "$h"
+  out="$(run_get)"
+  case "$out" in *"Claude Code did not install"*"boom, no route to host"*"Still to do:"*"Claude Code: run  curl -fsSL https://claude.ai/install.sh | bash"*"exit=0") ok ;; *) fail "get.sh when Claude's installer fails: $out" ;; esac
+  [ -f "$bin/keel-board" ] && ok || fail "get.sh stopped when Claude's installer failed"
+
+  # A keel-board that is not get.sh's own is left alone, and the exit status is not 0.
+  h="$g/h5" inst="$g/h5/keel" bin="$g/h5/bin" serve="$g/serve-ok" extra="$g/goodnode:$g/hasclaude:"
+  mkdir -p "$bin"
+  ln -s "$root/workspace/server/bin/keel-board.mjs" "$bin/keel-board"
+  out="$(run_get)"
+  case "$out" in *"SKIPPED    $bin/keel-board exists and is a link to $root/workspace/server/bin/keel-board.mjs. Move it away and run again."*"exit=1") ok ;; *) fail "get.sh over a foreign keel-board: $out" ;; esac
+  expect "get.sh leaves a foreign keel-board" "$(readlink "$bin/keel-board")" "$root/workspace/server/bin/keel-board.mjs"
+  out="$(run_get --uninstall)"
+  expect "get.sh --uninstall leaves a foreign keel-board" "$(readlink "$bin/keel-board")" "$root/workspace/server/bin/keel-board.mjs"
+
+  # Shells: bash on macOS gets both startup files, fish gets its own syntax, a bin folder on PATH gets none.
+  h="$g/h6" inst="$g/h6/keel" bin="$g/h6/bin" shell_=/bin/bash
+  mkdir -p "$h"
+  run_get >/dev/null
+  [ "$(grep -c "keel's get.sh" "$h/.bashrc")" = 1 ] && [ "$(grep -c "keel's get.sh" "$h/.bash_profile")" = 1 ] && ok || fail "get.sh for bash on macOS: $(ls -A "$h")"
+  h="$g/h7" inst="$g/h7/keel" bin="$g/h7/bin" shell_=/usr/local/bin/fish
+  mkdir -p "$h"
+  run_get >/dev/null
+  expect "get.sh for fish" "$(cat "$h/.config/fish/config.fish")" "set -gx PATH '$bin' \$PATH # keel-board: added by keel's get.sh"
+  h="$g/h8" inst="$g/h8/keel" bin="$g/h8/bin" shell_="" extra="$g/goodnode:$g/hasclaude:$g/h8/bin:"
+  mkdir -p "$h"
+  out="$(run_get)"
+  [ ! -e "$h/.zshrc" ] && ok || fail "get.sh changed .zshrc with the bin folder on PATH"
+  case "$out" in *"Done. Next, type:"*"  mkdir my-idea && cd my-idea && keel-board"*) ok ;; *) fail "get.sh's last lines with the bin folder on PATH: $out" ;; esac
+
+  # git: on macOS the developer tools are asked for; on Linux with no package manager it is a note.
+  h="$g/h9" inst="$g/h9/keel" bin="$g/h9/bin" xcode="$g/h9/xcode" extra="$g/goodnode:$g/hasclaude:"
+  mkdir -p "$h"
+  out="$(run_get)"
+  case "$out" in *"press Install"*"installed  Apple's developer tools, with git"*"exit=0") ok ;; *) fail "get.sh without git on macOS: $out" ;; esac
+  grep -q '^xcode-select --install$' "$calls" && ok || fail "get.sh did not run xcode-select --install"
+  h="$g/h10" inst="$g/h10/keel" bin="$g/h10/bin" sys_os=Linux
+  mkdir -p "$h"
+  out="$(run_get)"
+  case "$out" in *"no known package manager"*"Still to do:"*"git: install it"*"exit=0") ok ;; *) fail "get.sh without git on Linux: $out" ;; esac
+  cat >"$g/linux/apt-get" <<EOF
+#!/bin/sh
+echo "apt-get \$*" >>"\$GET_CALLS"
+printf '#!/bin/sh\\n' >"$g/linux/git"; chmod +x "$g/linux/git"
+EOF
+  printf '#!/bin/sh\necho "sudo $*" >>"$GET_CALLS"\nexec "$@"\n' >"$g/linux/sudo"
+  chmod +x "$g/linux/apt-get" "$g/linux/sudo"
+  extra="$g/goodnode:$g/hasclaude:$g/linux:"
+  out="$(run_get)"
+  case "$out" in *"installed  git"*"exit=0") ok ;; *) fail "get.sh installing git with apt-get: $out" ;; esac
+  if [ "$(id -u)" = 0 ]; then
+    expect "get.sh runs apt-get as root" "$(grep -c '^sudo' "$calls")" 0
+  else
+    expect "get.sh runs apt-get with sudo" "$(grep '^sudo' "$calls")" "sudo apt-get update -qq
+sudo apt-get install -y -qq git"
+  fi
+  xcode="$g/xcode-ready" sys_os=""
+
+  # Systems it does not support.
+  h="$g/h11" inst="$g/h11/keel" bin="$g/h11/bin"
+  for t in MINGW64_NT-10.0:x86_64:"Windows is not supported yet" FreeBSD:amd64:"FreeBSD is not supported" Darwin:i686:"i686 processor is not supported"; do
+    sys_os="${t%%:*}" sys_arch="${t#*:}" sys_arch="${sys_arch%%:*}"
+    out="$(run_get)"
+    case "$out" in *"${t##*:}"*"exit=1") ok ;; *) fail "get.sh on $sys_os $sys_arch: $out" ;; esac
+  done
+  [ ! -e "$h" ] && ok || fail "get.sh on an unsupported system made $h"
+  sys_os="" sys_arch=""
+
+  # Read from a pipe, as `curl | bash` runs it.
+  h="$g/h12" inst="$g/h12/keel" bin="$g/h12/bin" extra="$g/goodnode:$g/hasclaude:"
+  mkdir -p "$h"
+  out="$(env -i HOME="$h" KEEL_INSTALL_DIR="$inst" KEEL_BIN_DIR="$bin" PATH="$fake:$extra$shim" SHELL=/bin/zsh GET_CALLS="$calls" GET_SERVE="$serve" GET_XCODE="$xcode" \
+    bash <"$root/get.sh" 2>&1; echo "exit=$?")"
+  case "$out" in *"Done. Next, type:"*"exit=0") ok ;; *) fail "bash < get.sh: $out" ;; esac
+  [ -f "$bin/keel-board" ] && ok || fail "bash < get.sh wrote no launcher"
+  out="$(cat "$root/get.sh" | env -i HOME="$h" PATH="$shim" bash -s -- --help 2>&1; echo "exit=$?")"
+  case "$out" in "get.sh: install the keel board"*"--uninstall"*"exit=0") ok ;; *) fail "cat get.sh | bash -s -- --help: $out" ;; esac
+
+  # The real npm installs a local package, and the launcher runs it with the real Node.
+  if has_node; then
+    n="$(dirname "$(command -v node)")"
+    h="$g/h13" inst="$g/h13/a b/keel" bin="$g/h13/bin"
+    mkdir -p "$g/pkg/package/server/bin" "$h"
+    printf '{"name":"keel-workspace","version":"0.0.0-check","bin":{"keel-board":"server/bin/keel-board.mjs"}}\n' >"$g/pkg/package/package.json"
+    printf 'console.log(JSON.stringify(process.argv.slice(2)));\n' >"$g/pkg/package/server/bin/keel-board.mjs"
+    tar -czf "$g/keel-workspace-check.tgz" -C "$g/pkg" package
+    out="$(env -i HOME="$h" KEEL_INSTALL_DIR="$inst" KEEL_BIN_DIR="$bin" KEEL_PACKAGE="$g/keel-workspace-check.tgz" PATH="$fake:$g/hasclaude:$n:$shim" SHELL=/bin/zsh \
+      GET_CALLS="$calls" GET_SERVE="$serve" GET_XCODE="$xcode" npm_config_offline=true npm_config_update_notifier=false bash "$root/get.sh" 2>&1; echo "exit=$?")"
+    case "$out" in *"installed  the board, keel-workspace 0.0.0-check"*"exit=0") ok ;; *) fail "get.sh with the real npm and a local package: $out" ;; esac
+    expect "the launcher runs the real package with its arguments" "$(env -i HOME="$h" PATH="$n:/usr/bin:/bin" "$bin/keel-board" open "a b" 2>&1)" '["open","a b"]'
+  else
+    printf 'info  no Node 22 here: get.sh is not checked with the real npm\n'
+  fi
+}
+
 board() {
   local file out
   has_node || { fail "the board checks need Node 22 or newer and npm"; return; }
@@ -733,12 +994,13 @@ case "$what" in
   bar) bar ;;
   brief) brief ;;
   install) install_check ;;
+  get) get_check ;;
   board) board ;;
   all)
-    lint; hook; bar; brief; install_check
+    lint; hook; bar; brief; install_check; get_check
     if has_node; then board; else printf 'skipped board: it needs Node 22 or newer and npm\n'; fi
     ;;
-  *) echo "usage: scripts/check.sh [lint|hook|bar|brief|install|board]" >&2; exit 2 ;;
+  *) echo "usage: scripts/check.sh [lint|hook|bar|brief|install|get|board]" >&2; exit 2 ;;
 esac
 
 if [ "$fails" -gt 0 ]; then

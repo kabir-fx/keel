@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import type { BoardState, BuildJob, BuildResult, Builder, BuilderContext, CreateBuilder, RefreshRequest, RefreshResult, RunShow, ShowRequest, ShowSession } from '@keel/protocol';
 import { STATE_DIR_ENV, admit, awaitsProof, oneLine, remarksOnPart, renderBrief } from '@keel/protocol';
 import { checkPlaces, keepDependencyFiles, runCheck, stopLeftoverChecks, tailOf } from './build-tools';
+import { findClaude } from './claude-setup';
 import { BoardClient, BoardError } from './client';
 import { readStarts, recordStart } from './starts';
 import { BUILDER_IDENTITY, GitError, OwnerFilesError, branchExists, branchFor, branchNames, dirtyFiles, ensureWorktree, folderFiles, git, gitInstalled, gitOk, hasIdentity, headOf, isAncestor, pinEnv, removeWorktree, repoTop, samePath, shortOf } from './git';
@@ -1273,7 +1274,7 @@ export class HostedBuilder implements Builder {
   private start(files: { mcpConfig: string; promptFile: string; settingsFile: string }, workdir: string, identity: NodeJS.ProcessEnv): BuildProcess {
     const args = builderArgs({ model: this.opts.model, effort: this.opts.effort, ...files });
     const env = { ...childEnv(), ...identity, MCP_TOOL_TIMEOUT: String(this.opts.checkTimeoutMs + 120_000) };
-    const p = new BuildProcess(this.opts.bin, args, workdir, env, (l) => this.record(l), (m) => this.ctx.log(`builder: ${m}`));
+    const p = new BuildProcess(findClaude(this.opts.bin, env) ?? this.opts.bin, args, workdir, env, (l) => this.record(l), (m) => this.ctx.log(`builder: ${m}`));
     this.ctx.log(`builder: started claude in ${workdir}, pid ${p.pid ?? '?'}`);
     return p;
   }
