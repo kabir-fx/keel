@@ -25,8 +25,8 @@ import type {
   ServerMessage,
   ShowInfo,
 } from '@keel/protocol';
-import type { SessionReply } from '@keel/protocol';
-import { ASSETS_DIR, ClientMessage, LOG_FILE, ONE_TIME_CODE_MS, PresenceUpdate, ROUTES, ShowAsk, canvasBuilds, chaptersOn, digest, isForeign, openCount, openThings, renderDigest } from '@keel/protocol';
+import type { SessionReply, SetupInfo } from '@keel/protocol';
+import { ASSETS_DIR, ClientMessage, LOG_FILE, ONE_TIME_CODE_MS, PresenceUpdate, ROUTES, SetupAsk, ShowAsk, canvasBuilds, chaptersOn, digest, isForeign, openCount, openThings, renderDigest } from '@keel/protocol';
 import { AssetPlaceError, assetFile, assetsUsage, contentTypeOf, openAsset, saveAsset } from './assets';
 import { Board } from './board';
 import type { BuildInfo } from './build';
@@ -39,6 +39,7 @@ import { loadBuilder, loadLink } from './link';
 import { PresenceHub } from './presence';
 import type { KeptShow } from './private';
 import { PrivateBoard, takeLock } from './private';
+import { gitSetup } from './setup';
 import { CHALLENGE_HEADER, PROOF_HEADER, ensureGitignore, proofOf, removeServerFile, sameSecret, writeServerFile } from './serverfile';
 import type { CheckedShow, ShowServer } from './show';
 import { checkShow, startShowServer } from './show';
@@ -165,6 +166,8 @@ export interface RunningServer {
   readonly scheduler: WakeScheduler | undefined;
   /** The builder's name, or "none". */
   readonly builderName: string;
+  /** What this machine still needs before an idea can be built, looked at now. */
+  setup(): Promise<SetupInfo>;
   /** The build's life on this board. */
   readonly builds: BuildRunner;
   /** What this machine's repository holds for each canvas, as the owner's page hears it. */
@@ -700,6 +703,15 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       return json(res, 200, { home: info ?? null });
     }
 
+    if (route === ROUTES.setup) {
+      if (actor !== 'owner') return json(res, 403, { error: 'Only the owner sets this machine up.' });
+      if (method === 'GET') return json(res, 200, await setup());
+      if (method !== 'POST') return notAllowed(res, 'GET, POST');
+      const parsed = SetupAsk.safeParse(await readJson(req, LIMITS.presence));
+      if (!parsed.success) return json(res, 400, { error: parsed.error.issues.map((i) => `${i.path.join('.') || 'ask'}: ${i.message}`).join('; ') });
+      return json(res, 200, await setup(parsed.data));
+    }
+
     if (route === ROUTES.stop) {
       if (method !== 'POST') return notAllowed(res, 'POST');
       if (actor !== 'system') return json(res, 403, { error: 'Only the system stops the board server: run "keel-board stop".' });
@@ -1066,6 +1078,13 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   let link: AgentLink | undefined;
   let builder: Builder | undefined;
   let scheduler: WakeScheduler | undefined;
+
+  /** How this machine stands, after the step the owner asked for, when one was asked. */
+  const setup = async (ask?: SetupAsk): Promise<SetupInfo> => {
+    const s = link?.setup;
+    const agent = !s ? undefined : !ask ? await s.look() : ask.action === 'install' ? await s.install() : ask.action === 'sign-in' ? await s.signIn() : await s.code(ask.code);
+    return { ...(agent ? { agent } : {}), git: gitSetup() };
+  };
   let closing: Promise<void> | undefined;
   let markClosed: () => void = () => {};
   const closed = new Promise<void>((resolve) => {
@@ -1487,6 +1506,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     linkName,
     scheduler,
     builderName,
+    setup: () => setup(),
     builds: runner,
     works: worksNow,
     shows: showsNow,

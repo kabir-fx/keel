@@ -14,6 +14,7 @@ import type { BoardInfoReply, RunningServer } from './server';
 import { startServer } from './server';
 import type { FoundServer } from './serverfile';
 import { findBoardDir, findServer, removeStaleServerFile } from './serverfile';
+import { setupLines } from './setup';
 import { oneLine, plain } from './text';
 
 /**
@@ -40,8 +41,6 @@ export interface RunDeps {
   browse?: (url: string, background: boolean) => void;
   /** The owner's home folder, where `open` refuses to start. Default: `os.homedir()`. */
   home?: string;
-  /** The `PATH` to look for Claude Code on. Default: `$PATH`. */
-  searchPath?: string;
 }
 
 export interface RunResult {
@@ -74,28 +73,6 @@ export function defaultLink(env: NodeJS.ProcessEnv = process.env): string {
 function hostedLink(): string {
   return fileURLToPath(new URL('../../plugin/dist/hosted-link.js', import.meta.url));
 }
-
-/**
- * The first executable file called `name` in a `PATH` string, or undefined. A plain scan of
- * the folders: no process is started. An empty entry is skipped.
- */
-export function findOnPath(name: string, searchPath: string | undefined): string | undefined {
-  for (const dir of (searchPath ?? '').split(path.delimiter)) {
-    if (!dir) continue;
-    const file = path.join(dir, name);
-    try {
-      if (!fs.statSync(file).isFile()) continue;
-      fs.accessSync(file, fs.constants.X_OK);
-      return file;
-    } catch {
-      // Not here.
-    }
-  }
-  return undefined;
-}
-
-export const NO_CLAUDE =
-  'keel-board: Claude Code was not found on your PATH. The board opens, but the agent will not answer until Claude Code is installed and signed in. Get it from https://claude.com/claude-code';
 
 /** Why a board cannot be opened in this folder, or undefined when it can. */
 function tooWide(realDir: string, home: string): string | undefined {
@@ -268,10 +245,6 @@ async function open(dir: string, values: Values, io: Io, deps: RunDeps): Promise
 
   const linkSpec = values.link ?? defaultLink();
   const linkOptions = parseLinkOptions(values['link-opt'] ?? []);
-  // The hosted agent runs `claude`. Without it the board still opens: say so once, before the address.
-  if (path.resolve(linkSpec) === hostedLink() && linkOptions.bin === undefined && !findOnPath('claude', deps.searchPath ?? process.env.PATH)) {
-    io.err(NO_CLAUDE);
-  }
 
   let server: RunningServer;
   try {
@@ -292,6 +265,8 @@ async function open(dir: string, values: Values, io: Io, deps: RunDeps): Promise
     throw e;
   }
 
+  // The board opens either way. What the page will ask for first is said once, before the address.
+  for (const line of setupLines(await server.setup())) io.err(line);
   const s = server.board.state;
   io.err(`Board "${oneLine(s.name)}" · e${s.seq} · agent: ${oneLine(server.linkName)} · builder: ${oneLine(server.builderName)} · ${oneLine(server.board.dir)}`);
   io.out(server.url);

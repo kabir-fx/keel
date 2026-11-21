@@ -1,0 +1,25 @@
+/* The page before the board: what this machine still needs. The page scrolls, since the body does not. */
+.setup { height: 100%; overflow: auto; padding: 12vh 16px 48px; }
+.setup__card { width: min(520px, 100%); margin: 0 auto; display: flex; flex-direction: column; gap: 14px; padding: 26px 28px 20px; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-float); font-size: 14px; line-height: 20px; }
+.setup__card h1 { margin: 0; font: 600 22px/28px var(--font-head); }
+.setup__lead { margin: 0; color: var(--text-2); }
+.setup__steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.setup__step { display: flex; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); }
+.setup__mark { flex: none; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font: 600 12.5px/1 var(--font-ui); border: 1.5px solid var(--grey-2); color: var(--grey); background: var(--ground); }
+.setup__step--done .setup__mark { border-color: var(--teal-mid); background: var(--teal-light); color: var(--teal-text); }
+.setup__step--now .setup__mark { border-color: var(--agent); background: var(--agent); color: #fff; }
+.setup__step--todo .setup__mark { border-color: var(--owner); background: var(--owner-bg); color: var(--owner-text); }
+.setup__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.setup__body h2 { margin: 0; font: 600 15px/24px var(--font-ui); }
+.setup__body p { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.setup__step--later h2, .setup__step--later p { color: var(--grey); }
+.setup__body p.setup__note { padding: 8px 10px; border-radius: 8px; background: var(--owner-bg); color: var(--owner-text); font-weight: 600; }
+.setup__acts { display: flex; gap: 8px; }
+.setup__more summary { cursor: pointer; color: var(--text-2); }
+.setup__more[open] summary { margin-bottom: 8px; }
+.setup__more a { color: var(--agent); font-weight: 600; }
+.setup__code { display: flex; gap: 8px; margin-top: 8px; }
+.setup__code input { flex: 1; min-width: 0; height: 30px; padding: 0 10px; border: 1.5px solid var(--grey-2); border-radius: 8px; font: inherit; color: var(--ink); }
+.setup__code input:focus-visible, .setup__skip:focus-visible, .setup__more summary:focus-visible, .setup__more a:focus-visible { outline: 2px solid var(--agent); outline-offset: 2px; }
+.setup__skip { align-self: flex-start; padding: 4px 0; border: 0; background: none; color: var(--text-2); font-size: 13px; text-decoration: underline; cursor: pointer; }
+.setup__skip:hover { color: var(--ink); }

@@ -114,6 +114,11 @@ export const ROUTES = {
   push: '/api/push',
   /** POST, the owner only: look at the remote again and bring the home branch level when that is a fast-forward. `{ home }`. */
   sync: '/api/sync',
+  /**
+   * The owner only. GET: `SetupInfo`, what this machine still needs. POST a `SetupAsk`: take
+   * one step, then `SetupInfo` as it stands after it.
+   */
+  setup: '/api/setup',
   /** The websocket. */
   ws: '/ws',
   /**
@@ -123,6 +128,41 @@ export const ROUTES = {
    */
   showWs: '/ws/show',
 } as const;
+
+/**
+ * How the agent's harness stands on this machine. `name` is what the page calls it. `note`
+ * says, in a sentence, why the last step failed.
+ */
+export type AgentSetup = { name: string } & (
+  | { state: 'missing'; installing?: boolean; note?: string }
+  /** `signIn` while a sign-in runs. Its `url` is the sign-in page, for a browser that did not open by itself. */
+  | { state: 'signed-out'; signIn?: { url?: string }; note?: string }
+  | { state: 'ready' }
+);
+
+/**
+ * What this machine needs before an idea can go from a note to a build. Said to the owner's
+ * page only, never in the log: it is a fact of this machine.
+ */
+export interface SetupInfo {
+  /** Left out when the linked agent needs nothing, and when no agent is linked. */
+  agent?: AgentSetup;
+  /** A build needs git. `how` says how to get it on this system. */
+  git: { state: 'ready' } | { state: 'missing'; how: string };
+}
+
+/** True when nothing is left to set up. */
+export function setupDone(s: SetupInfo): boolean {
+  return (s.agent === undefined || s.agent.state === 'ready') && s.git.state === 'ready';
+}
+
+/** What the owner's page asks of `ROUTES.setup`. */
+export const SetupAsk = z.discriminatedUnion('action', [
+  z.strictObject({ action: z.literal('install') }),
+  z.strictObject({ action: z.literal('sign-in') }),
+  z.strictObject({ action: z.literal('code'), code: z.string().trim().min(1).max(2000) }),
+]);
+export type SetupAsk = z.infer<typeof SetupAsk>;
 
 /** What the owner's page asks of `ROUTES.show`. */
 export const ShowAsk = z.discriminatedUnion('action', [

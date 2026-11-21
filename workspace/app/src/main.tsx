@@ -10,6 +10,7 @@ import './styles/index.css';
 import type { Id } from '@keel/protocol';
 import { ROUTES, seqOf } from '@keel/protocol';
 import type { PictureView } from '@keel/pictures';
+import type { SetupInfo } from '@keel/protocol';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
@@ -18,6 +19,9 @@ import { ManualClock } from './frame';
 import { startReplay } from './replay/page';
 import { Player } from './replay/player';
 import { playScript } from './replay/script';
+import { SetupGate } from './SetupPage';
+import type { SetupHttp } from './setup';
+import { callSetup, setupSkipped } from './setup';
 import type { BoardSource } from './source';
 import { CODE_SPENT, forgetToken, localSource, OPEN_FROM_TERMINAL, serverSource, socketUrl, takeCode, takeToken, tradeCode } from './source';
 
@@ -31,6 +35,8 @@ interface Booted {
   fixture?: boolean;
   player?: Player;
   clock?: ManualClock;
+  /** What this machine still needs, when the server says something is left and the owner has not passed the page by. */
+  setup?: { http: SetupHttp; first: SetupInfo };
 }
 
 /**
@@ -42,6 +48,7 @@ interface Booted {
  *   `window.renderAt(ms)` moves the board's clock (`replay/page.ts`).
  * - otherwise the page talks to the board server that served it, with the owner's token: traded
  *   for the one-time code in the address, or kept in this page's own storage from before.
+ *   While the machine is not set up, the setup page stands before the board (`SetupPage.tsx`).
  */
 async function boot(): Promise<Booted | { problem: string; title?: string }> {
   const params = new URLSearchParams(window.location.search);
@@ -93,12 +100,15 @@ async function boot(): Promise<Booted | { problem: string; title?: string }> {
   // The same address opened twice in one browser: the token from the first time still works.
   token ??= takeToken();
   if (!token) return spent ? { problem: CODE_SPENT, title: 'This address no longer opens the board' } : { problem: OPEN_FROM_TERMINAL, title: 'This page has no key to the board' };
+  const http = { base: window.location.origin, token };
+  const first = setupSkipped() ? undefined : await callSetup(http);
   return {
     source: serverSource({
       url: socketUrl(window.location, token, ROUTES.ws),
-      http: { base: window.location.origin, token },
+      http,
       onRefused: () => forgetToken(),
     }),
+    ...(first ? { setup: { http, first } } : {}),
   };
 }
 
@@ -113,9 +123,16 @@ boot().then((r) => {
     );
     return;
   }
+  const app = <App source={r.source} show={r.show} view={r.view} focus={r.focus} mode={r.mode} remember={!r.fixture} clock={r.clock} />;
   root.render(
     <StrictMode>
-      <App source={r.source} show={r.show} view={r.view} focus={r.focus} mode={r.mode} remember={!r.fixture} clock={r.clock} />
+      {r.setup ? (
+        <SetupGate http={r.setup.http} first={r.setup.first}>
+          {app}
+        </SetupGate>
+      ) : (
+        app
+      )}
     </StrictMode>,
   );
   if (r.player) startReplay(r.player, r.clock);
