@@ -1,5 +1,5 @@
-import type { BoardEvent, BoardState, Builder, BuildJob, BuildResult, BuildShow, Id, Presence, PresenceUpdate } from '@keel/protocol';
-import { renderBrief, trackProgress } from '@keel/protocol';
+import type { BoardEvent, BoardState, Builder, BuildJob, BuildResult, BuildShow, Chapter, Id, Presence, PresenceUpdate, ShowPlan } from '@keel/protocol';
+import { awaitsProof, canvasTitle, renderBrief, trackProgress } from '@keel/protocol';
 import { plain } from './text';
 
 /**
@@ -47,20 +47,34 @@ export interface BuildInfo {
   check?: string;
 }
 
-/** What the owner agreed to: the check the build runs, and the parts it may build. */
+/** What the owner agreed to: the check the build runs, the parts it may build, and the setup and show. */
 export interface BuildConsent {
   check: string;
   track: readonly Id[];
+  setup?: string;
+  show?: ShowPlan;
+}
+
+/** The setup and the show a chapter carries, which a consent must hold word for word. */
+export function termsOf(c: Chapter | undefined): { setup?: string; show?: ShowPlan } {
+  return { ...(c?.setup !== undefined ? { setup: c.setup } : {}), ...(c?.show !== undefined ? { show: c.show } : {}) };
 }
 
 export interface BuildRunnerOptions {
   /** Undefined when no builder is linked: "Build this" is still admitted, and the feed says how to link one. */
   builder: Builder | undefined;
   /**
-   * The owner's consent for a chapter, with exactly this check and a track that holds these
-   * parts. Left out: no consent, so nothing ever runs.
+   * The owner's consent for a chapter, with exactly this check, setup and show, and a track
+   * that holds these parts. Left out: no consent, so nothing ever runs.
    */
-  consent?: (chapter: Id, check: string | undefined, track: readonly Id[]) => BuildConsent | undefined;
+  consent?: (chapter: Id, check: string | undefined, track: readonly Id[], terms: { setup?: string; show?: ShowPlan }) => BuildConsent | undefined;
+  /**
+   * Where a new run's branch starts: the home branch, brought level with its remote just
+   * before. Undefined in a repository with no commit. Left out: the job has no base.
+   */
+  base?: () => Promise<{ branch: string; commit: string } | undefined>;
+  /** True while the server works on a canvas's branch: merging or deleting it. A build on that canvas waits until it is done. */
+  canvasBusy?: (canvas: Id) => boolean;
   /** The board's state now. */
   state: () => BoardState;
   /** Post drafts as the system. */
@@ -75,6 +89,10 @@ export interface BuildRunnerOptions {
    * gave is passed on as it came, its folder and page as text: the server checks it and serves it.
    */
   show?: (chapter: Id, show: BuildShow) => void;
+  /** A run started: from now until `ended`, the builder works on the canvas of `chapter`. */
+  began?: (chapter: Id) => void;
+  /** A run ended, for any reason. The builder may have committed since the last event it caused. */
+  ended?: (chapter: Id) => void;
   log?: (message: string) => void;
   /** How long close waits for the builder's pause, then for its close. */
   closeTimeoutMs?: number;
@@ -109,6 +127,8 @@ export class BuildRunner {
   private closed = false;
   /** Runs started, for tests. */
   runs = 0;
+  /** Those waiting for the current run to end. */
+  private ends: Array<() => void> = [];
 
   constructor(opts: BuildRunnerOptions) {
     this.opts = opts;
@@ -122,6 +142,11 @@ export class BuildRunner {
   /** True while a run is going. */
   get busy(): boolean {
     return this.current !== undefined;
+  }
+
+  /** The canvas the builder works on now: from the run's start to its end, its last commit included. */
+  get canvasInWork(): Id | undefined {
+    return this.current?.job.canvas;
   }
 
   /**
@@ -215,6 +240,21 @@ export class BuildRunner {
     return info;
   }
 
+  /**
+   * The owner deleted this chapter's canvas: take it out of line, and when it runs now, pause it and
+   * resolve once the run has ended.
+   */
+  async drop(chapter: Id): Promise<void> {
+    this.dequeue(chapter);
+    this.held.delete(chapter);
+    this.stopped.delete(chapter);
+    const run = this.current;
+    if (!run || run.chapter !== chapter) return;
+    const ended = new Promise<void>((resolve) => this.ends.push(resolve));
+    this.pauseRun(run);
+    await ended;
+  }
+
   /** The server closes: pause the run, then close the builder. Nothing is posted after this. */
   async close(): Promise<void> {
     if (this.closed) return;
@@ -241,6 +281,16 @@ export class BuildRunner {
         if (!this.opts.builder) return this.say(ev.chapter, NO_BUILDER);
         this.stopped.delete(ev.chapter);
         return this.enqueue(ev.chapter, false, true);
+      }
+      case 'canvas.remove': {
+        for (const c of Object.values(s.removedChapters)) {
+          if (c.canvas !== ev.canvas) continue;
+          this.dequeue(c.id);
+          this.held.delete(c.id);
+          this.stopped.delete(c.id);
+          if (this.current?.chapter === c.id) this.pauseRun(this.current);
+        }
+        return;
       }
       case 'build.pause': {
         this.dequeue(ev.chapter);
@@ -359,21 +409,36 @@ export class BuildRunner {
     }
   }
 
-  /** Start the next build in line, when none runs. */
+  /** Look at the line again: a canvas the server worked on is free now. */
+  poke(): void {
+    this.schedule();
+  }
+
+  /** Start the next build in line, when none runs. A build on a canvas the server works on keeps its place. */
   private pump(): void {
     const b = this.opts.builder;
     if (this.closed || this.current || !b) return;
-    while (this.queue.length > 0) {
-      const next = this.queue.shift()!;
+    for (let i = 0; i < this.queue.length; ) {
       const s = this.opts.state();
+      const waits = s.chapters[this.queue[i]!.chapter];
+      if (waits && this.opts.canvasBusy?.(waits.canvas)) {
+        i++;
+        continue;
+      }
+      const next = this.queue.splice(i, 1)[0]!;
       const c = s.chapters[next.chapter];
       if (!c || c.state !== 'building' || c.paused || this.held.has(next.chapter)) continue;
       const job = makeJob(s, next.chapter, next.resume);
-      if (job.track.length === 0) continue;
+      // With every part built, an app that has not answered yet is the run's last step still to do.
+      if (job.track.length === 0 && !awaitsProof(s, next.chapter)) continue;
       // The last gate: the owner's consent, with this very check and these parts.
-      const consent = this.opts.consent?.(next.chapter, c.check, job.track.map((p) => p.id));
+      const consent = this.opts.consent?.(next.chapter, c.check, job.track.map((p) => p.id), termsOf(c));
       if (!consent || consent.check !== c.check) continue;
       job.check = consent.check;
+      if (consent.setup !== undefined) job.setup = consent.setup;
+      else delete job.setup;
+      if (consent.show !== undefined) job.show = consent.show;
+      else delete job.show;
       this.begin(b, job);
       return;
     }
@@ -385,10 +450,17 @@ export class BuildRunner {
     this.runs += 1;
     this.stopped.delete(job.chapter);
     this.refreshPresence();
+    this.opts.began?.(job.chapter);
     void (async () => {
       let outcome: { result: unknown } | { error: unknown };
       try {
-        outcome = { result: await b.run(job) };
+        if (this.opts.base) {
+          const base = await this.opts.base();
+          if (base) job.base = base;
+        }
+        // Paused, deleted or closed while the home branch was looked at: nothing ran.
+        if (run.asked || this.closed) outcome = { result: { outcome: 'paused' } };
+        else outcome = { result: await b.run(job) };
       } catch (e) {
         outcome = { error: e };
       }
@@ -398,14 +470,22 @@ export class BuildRunner {
 
   private end(run: Run, outcome: { result: unknown } | { error: unknown }): void {
     if (this.current === run) this.current = undefined;
+    for (const resolve of this.ends.splice(0)) resolve();
     if (this.closed) return;
+    this.opts.ended?.(run.chapter);
     const s = this.opts.state();
     const c = s.chapters[run.chapter];
+    if (!c) {
+      // The owner deleted it while it ran: there is nothing left to report on.
+      if (!this.opts.inWake() && !this.current) this.opts.presence.set(this.opts.rest());
+      this.schedule();
+      return;
+    }
     const title = c?.title ?? run.job.title;
     const left = run.job.track.filter((p) => s.model.parts[p.id]?.state !== 'built');
     const p = trackProgress(s, run.chapter);
     const tally = `${p.built} of ${p.total} parts are built`;
-    const retry = 'Pause and resume to try again.';
+    const retry = 'Press Try again to go on.';
     const asked = run.asked || c?.paused === true || this.held.has(run.chapter);
 
     let problem: string | undefined;
@@ -419,6 +499,8 @@ export class BuildRunner {
     } else if (!asked && left.length > 0) {
       const names = left.map((x) => `"${x.name}"`).join(', ');
       problem = `The builder stopped (it said "${outcome.result.outcome}"), but nobody paused it and ${left.length === 1 ? 'one part is' : `${left.length} parts are`} not built: ${names}. ${retry}`;
+    } else if (!asked && awaitsProof(s, run.chapter)) {
+      problem = `The builder stopped (it said "${outcome.result.outcome}"), but the app of "${title}" has not answered yet, so it is not built. ${retry}`;
     }
     if (problem !== undefined) {
       this.stopped.add(run.chapter);
@@ -454,7 +536,7 @@ export class BuildRunner {
   private agreed(s: BoardState, chapter: Id): boolean {
     const c = s.chapters[chapter];
     if (!c || c.check === undefined || !this.opts.consent) return false;
-    return this.opts.consent(chapter, c.check, jobTrack(s, chapter).map((p) => p.id))?.check === c.check;
+    return this.opts.consent(chapter, c.check, jobTrack(s, chapter).map((p) => p.id), termsOf(c))?.check === c.check;
   }
 
   private say(chapter: Id, text: string, kind: 'update' | 'problem' = 'update'): void {
@@ -505,12 +587,18 @@ export class BuildRunner {
   }
 }
 
-/** The job for a chapter: its title, the parts still to build in track order, the agreed check and the brief. */
+/**
+ * The job for a chapter: its title, the parts still to build in track order, the agreed
+ * check, setup and show, and the brief. Its base is set when the run starts.
+ */
 export function makeJob(s: BoardState, chapter: Id, resume: boolean): BuildJob {
   const c = s.chapters[chapter];
   const track = jobTrack(s, chapter);
-  const job: BuildJob = { chapter, title: c?.title ?? chapter, track, brief: renderBrief(s, chapter) ?? '', resume };
+  const canvas = c?.canvas ?? chapter;
+  const job: BuildJob = { chapter, canvas, canvasTitle: canvasTitle(s, canvas) || (c?.title ?? chapter), title: c?.title ?? chapter, track, brief: renderBrief(s, chapter) ?? '', resume };
   if (c?.check !== undefined) job.check = c.check;
+  if (c?.setup !== undefined) job.setup = c.setup;
+  if (c?.show !== undefined) job.show = c.show;
   return job;
 }
 

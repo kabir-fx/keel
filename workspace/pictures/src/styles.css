@@ -536,7 +536,20 @@
 .kp [data-sub].kp-assumed__item.kp--crossed { text-decoration: line-through; text-decoration-color: var(--owner); text-decoration-thickness: 2px; }
 .kp-assumed__note { margin: 0; font: 600 14px/20px var(--font-ui); color: var(--ink); }
 .kp-assumed__list { margin: 0; padding: 0 0 0 22px; display: flex; flex-direction: column; gap: 3px; font-size: 14px; line-height: 20px; color: var(--ink); }
-.kp-blueprint__foot { display: flex; align-items: center; gap: 18px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13.5px; line-height: 19px; }
+.kp-blueprint__foot { display: flex; flex-direction: column; gap: 14px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13.5px; line-height: 19px; }
+.kp-blueprint__go { display: flex; align-items: center; gap: 18px; }
+.kp-blueprint__go .kp-btn { flex: none; }
+/* What "Build this" agrees to: every command the press lets run, read before it. */
+.kp-agree { display: flex; flex-direction: column; gap: 8px; }
+.kp-agree__list { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; align-items: baseline; }
+.kp-agree__list > div { display: contents; }
+.kp-agree__list dt { color: var(--text-2); }
+.kp-agree__list dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.kp-cmd { padding: 1px 7px; border-radius: 6px; background: var(--light); border: 1px solid var(--line); color: var(--ink); font: 600 12.5px/18px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.kp-agree__from { margin: 0; padding: 8px 12px; border-radius: 8px; background: var(--light); color: var(--text-2); }
+.kp-link { padding: 0; border: 0; background: none; color: var(--agent); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
+.kp-link + .kp-link { margin-left: 12px; }
+.kp-link:focus-visible { outline: 2px solid var(--agent); outline-offset: 2px; border-radius: 2px; }
 
 /* -------------------------------------------------------------- choice */
 

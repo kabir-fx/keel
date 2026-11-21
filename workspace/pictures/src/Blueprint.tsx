@@ -1,4 +1,6 @@
-import type { BlueprintPicture, BoardState, Id } from '@keel/protocol';
+import type { BlueprintPicture, BoardState, Chapter, Id, ShowPlan } from '@keel/protocol';
+import { awaitsProof } from '@keel/protocol';
+import type { ReactNode } from 'react';
 import { FLAT_SMALL, FlatSvg, layoutFlat } from './PipeSvg';
 import { asPart } from './build';
 import { sourceOf } from './describe';
@@ -6,7 +8,7 @@ import { Gaps, StateChip, Star, tapper, wholeClass } from './parts';
 import { pipeModel } from './pipemodel';
 import { Legend } from './Pipeline';
 import { lookOf } from './theme';
-import type { PictureProps } from './types';
+import type { BuildPlace, PictureProps } from './types';
 import { NO_MARKINGS } from './types';
 
 /**
@@ -15,6 +17,8 @@ import { NO_MARKINGS } from './types';
  * out on purpose, how the owner will know it works, the build track, and, just above the
  * button, everything the agent assumed that the owner did not say. "Build this" shows
  * while the chapter is solid and not yet building; once it builds, the track fills in.
+ * Beside the button: the commands the press agrees to (records 0007 and 0013), and where the
+ * build goes (record 0014).
  */
 
 const SIDE = 388;
@@ -26,7 +30,81 @@ export function blueprintChapter(state: BoardState, item: Id) {
   return id ? state.chapters[id] : undefined;
 }
 
-export function BlueprintCard({ item, state, markings, onAct }: PictureProps & { item: { picture: BlueprintPicture } }) {
+/** How the owner will try the result, in words, with the command it runs. */
+function showSays(show: ShowPlan | undefined): ReactNode {
+  if (!show) return 'Not named. The board shows a page when the build makes one, else a terminal with the check typed in.';
+  switch (show.kind) {
+    case 'page':
+      return 'A page. It opens on the board, and nothing runs.';
+    case 'app':
+      return (
+        <>
+          An app. When you press Try it, the board runs <code className="kp-cmd">{show.run}</code> in the build’s own copy and shows it here
+          {show.port !== undefined ? `, on port ${show.port}` : ''}.
+        </>
+      );
+    case 'terminal':
+      return (
+        <>
+          A terminal. When you press Try it, the board opens one in the build’s own copy and types <code className="kp-cmd">{show.run}</code>.
+        </>
+      );
+  }
+}
+
+/**
+ * Where a build started now goes, and what it will not have (plan 5.7). A canvas's first build
+ * starts from the home branch on a branch of its own; a later one goes onto that branch, with
+ * the ideas already there. Said only while "Build this" waits.
+ */
+function StartLine({ place, here, onAct }: { place: BuildPlace; here: Chapter[]; onAct: PictureProps['onAct'] }) {
+  const quote = (titles: string[]) => (titles.length <= 1 ? `“${titles[0] ?? ''}”` : `${titles.slice(0, -1).map((t) => `“${t}”`).join(', ')} and “${titles[titles.length - 1]}”`);
+  const { home, branch, waiting } = place;
+  const start = branch
+    ? `This build goes onto this canvas’s branch, ${branch}${here.length > 0 ? `, with ${quote(here.map((c) => c.title))}` : ''}.`
+    : home
+      ? home.commit
+        ? `This build starts from ${home.branch} at ${home.commit}, on a branch of its own.`
+        : `This build starts from ${home.branch}, which has no commit yet, on a branch of its own.`
+      : undefined;
+  if (!start && waiting.length === 0) return null;
+  return (
+    <p className="kp-agree__from" data-testid="blueprint-start">
+      {start}
+      {waiting.length > 0 && (
+        <>
+          {start ? ' ' : ''}
+          {waiting.length === 1
+            ? `${quote([waiting[0]!.title])} is built and not approved yet, so this build will not have it.`
+            : `${quote(waiting.map((c) => c.title))} are built and not approved yet, so this build will not have them.`}{' '}
+          {waiting.map((c) =>
+            c.held && !c.running ? (
+              <span key={c.chapter} className="kp-muted" data-held={c.chapter}>
+                {c.held}
+              </span>
+            ) : (
+              <button
+                key={c.chapter}
+                type="button"
+                className="kp-link"
+                data-try={c.chapter}
+                data-running={c.running ? '' : undefined}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAct?.({ type: 'try', chapter: c.chapter });
+                }}
+              >
+                {c.running ? `${quote([c.title])} is running: open it` : `Try ${quote([c.title])} first`}
+              </button>
+            ),
+          )}
+        </>
+      )}
+    </p>
+  );
+}
+
+export function BlueprintCard({ item, state, markings, view, onAct }: PictureProps & { item: { picture: BlueprintPicture } }) {
   const p = item.picture;
   const m = markings ?? NO_MARKINGS;
   const tap = tapper(item.id, m, onAct);
@@ -41,6 +119,10 @@ export function BlueprintCard({ item, state, markings, onAct }: PictureProps & {
   const built = track.filter((x) => x && lookOf(x) === 'built').length;
   const building = chapter?.state === 'building';
   const canBuild = chapter?.state === 'solid';
+  // Once it builds, what the owner agreed to is the chapter's own: the press took it from here.
+  const agreed = canBuild || !chapter?.check ? { check: p.check, setup: p.setup, show: p.show } : { check: chapter.check, setup: chapter.setup, show: chapter.show };
+  // The other ideas on this canvas, which share its branch.
+  const here = chapter ? state.chapterOrder.flatMap((id) => (id !== chapter.id && state.chapters[id]?.canvas === chapter.canvas ? [state.chapters[id]!] : [])) : [];
   return (
     <article className={`kp kp-blueprint${wholeClass(m)}`} {...asPart('frame')} data-kind="blueprint" data-chapter-state={chapter?.state} style={{ width }}>
       <header className="kp-blueprint__head" {...asPart('head')}>
@@ -148,29 +230,68 @@ export function BlueprintCard({ item, state, markings, onAct }: PictureProps & {
         </section>
       )}
       <footer className="kp-blueprint__foot" {...asPart('block')}>
-        {canBuild && (
-          <button
-            type="button"
-            className="kp-btn kp-btn--dark kp-btn--big"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (chapter) onAct?.({ type: 'build.start', chapter: chapter.id, track: [...p.parts], blueprint: item.id, check: p.check });
-            }}
-          >
-            Build this
-          </button>
-        )}
-        <span className="kp-muted">
-          {chapter?.state === 'solid'
-            ? `Solid means I stop asking and start building. By pressing it you agree that I run this check after each commit: ${p.check}`
-            : chapter?.state === 'building'
-              ? chapter.paused
-                ? 'Paused. Nothing is built while it is paused.'
-                : 'Building. Filled parts are built, blue is where I am.'
-              : chapter?.state === 'built'
-                ? 'Built. Every part on the track has a commit and a check that passed.'
-                : 'This idea is not solid. Solidify it to build it.'}
-        </span>
+        <section className="kp-agree" data-testid="blueprint-agrees">
+          <h4 className="kp-panel__head">{canBuild ? 'What “Build this” agrees to' : 'What you agreed to with “Build this”'}</h4>
+          <dl className="kp-agree__list">
+            <div>
+              <dt>The check, after each part</dt>
+              <dd>
+                <code className="kp-cmd">{agreed.check}</code>
+              </dd>
+            </div>
+            {agreed.setup && (
+              <div data-agree="setup">
+                <dt>The setup, once before the first part</dt>
+                <dd>
+                  <code className="kp-cmd">{agreed.setup}</code> <span className="kp-muted">It may fetch from the network.</span>
+                </dd>
+              </div>
+            )}
+            <div data-agree="show">
+              <dt>How you will try it</dt>
+              <dd>{showSays(agreed.show)}</dd>
+            </div>
+          </dl>
+        </section>
+        {canBuild && view?.build && <StartLine place={view.build} here={here} onAct={onAct} />}
+        <div className="kp-blueprint__go">
+          {canBuild && (
+            <button
+              type="button"
+              className="kp-btn kp-btn--dark kp-btn--big"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!chapter) return;
+                onAct?.({
+                  type: 'build.start',
+                  chapter: chapter.id,
+                  track: [...p.parts],
+                  blueprint: item.id,
+                  check: p.check,
+                  ...(p.setup !== undefined ? { setup: p.setup } : {}),
+                  ...(p.show !== undefined ? { show: p.show } : {}),
+                });
+              }}
+            >
+              Build this
+            </button>
+          )}
+          <span className="kp-muted">
+            {chapter?.state === 'solid'
+              ? 'Solid means I stop asking and start building. Nothing runs before you press it, and only these commands run after.'
+              : chapter?.state === 'building'
+                ? chapter.paused
+                  ? 'Paused. Nothing is built while it is paused.'
+                  : awaitsProof(state, chapter.id)
+                    ? 'Every part is built. The app is started once before this counts as built.'
+                    : 'Building. Filled parts are built, blue is where I am.'
+                : chapter?.state === 'built'
+                  ? chapter.merged
+                    ? `Built, approved, and merged into ${chapter.merged.into} at ${chapter.merged.commit}.`
+                    : 'Built. Every part on the track has a commit and a check that passed. Try it, then approve it.'
+                  : 'This idea is not solid. Solidify it to build it.'}
+          </span>
+        </div>
       </footer>
       <Gaps gaps={p.gaps} />
     </article>

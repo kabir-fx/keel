@@ -7,7 +7,7 @@ import type { CameraStore } from './camera/camera';
 import type { ToolId } from './chrome';
 import { oncePerFrame } from './frame';
 import type { HintFacts } from './hints';
-import { blueprintWaits, hintFor } from './hints';
+import { blueprintWaits, buildWaits, hintFor } from './hints';
 import type { LiveStore } from './live';
 import type { BoardSource } from './source';
 import { crosses } from './tips';
@@ -81,7 +81,8 @@ export function HintLine({ source, camera, state, hand, pen, field, tool, lassoe
   const penGo = useSyncExternalStore(hand.subscribe, pen.open);
   const questions = useMemo(() => openQuestions(state).length, [state]);
   const toBuild = useMemo(() => blueprintWaits(state, chapter), [state, chapter]);
-  const line = hintFor({ penGo, field, agentWaits: presence.state === 'waiting', questions, lassoed, toBuild, tool, empty, away: presence.state === 'away' });
+  const toTry = buildWaits(state, chapter);
+  const line = hintFor({ penGo, field, agentWaits: presence.state === 'waiting', questions, lassoed, toBuild, toTry, tool, empty, away: presence.state === 'away' });
   const ref = useRef<HTMLDivElement>(null);
   useGiveWayToField(ref, camera, field, line);
   return (

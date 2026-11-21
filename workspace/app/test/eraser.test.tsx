@@ -192,13 +192,57 @@ describe('the eraser on the board', () => {
     expect(removed(t)).toEqual(['i1', 'i2']);
   });
 
-  it('it never touches a picture, a note or anything but the owner’s ink, boxes, arrows and pins', () => {
+  it('a sweep over the agent’s picture fades it, and the lift takes it off as Delete does, saying Undo puts it back', async () => {
+    const t = eraserBoard();
+    // Across the card at (0, 500, 300, 200), well inside it.
+    const press = sweep(t, [
+      [100, 600],
+      [200, 600],
+    ]);
+    expect(t.flagged()).toEqual(['a1']);
+    t.eraser.up(press, t.board);
+    expect(removed(t)).toEqual(['a1']);
+    expect(t.did.groups).toEqual([['a1']]);
+    await t.answer();
+    expect(t.did.said.at(-1)).toMatch(/^Taken off the board\. Undo \(.+\) puts it back\.$/);
+    expect(t.flagged()).toEqual([]);
+  });
+
+  it('a click inside a picture takes it off; a click on a note or beside the picture takes nothing', () => {
+    for (const [at, want] of [
+      [[150, 650], ['a1']],
+      [[100, 350], []],
+      [[340, 600], []],
+    ] as const) {
+      const t = eraserBoard();
+      const press = sweep(t, [at]);
+      t.eraser.up(press, t.board);
+      expect(removed(t), String(at)).toEqual(want);
+    }
+  });
+
+  it('a sweep that reaches the owner’s drawing takes only the drawing: the picture it lies on stays', () => {
+    const t = eraserBoard();
+    // Ink across the card, as the owner would underline something on it.
+    t.b.must('owner', { type: 'item.add', chapter: CH, item: line('on', 20, 600, 200) });
+    t.board.boxes().set('on', [20, 600, 200, 0]);
+    const el = document.createElement('div');
+    el.dataset.item = 'on';
+    t.els.set('on', el);
+    // Down on the card off the ink: the card fades. Then across the ink: the ink is what goes.
+    const press = sweep(t, [[100, 520]]);
+    expect(t.flagged()).toEqual(['a1']);
+    t.eraser.move(moveTo(press, 100, 650), t.board);
+    expect(t.flagged()).toEqual(['on']);
+    t.eraser.up(press, t.board);
+    expect(removed(t)).toEqual(['on']);
+  });
+
+  it('never touches a note: the owner’s writing goes with Delete', () => {
     const t = eraserBoard();
     const press = sweep(t, [
       [-50, 350],
-      [400, 350],
-      [400, 600],
-      [-50, 600],
+      [380, 350],
     ]);
     expect(t.flagged()).toEqual([]);
     t.eraser.up(press, t.board);
@@ -324,7 +368,7 @@ describe('the eraser on the board', () => {
     expect(removed(t)).toEqual(['i2', 'pn']);
   });
 
-  it('lists what it can reach once, as the press goes down, and measures nothing on the page for it', () => {
+  it('lists what it can reach once, as the press goes down, and measures the page for it only then', () => {
     const t = eraserBoard();
     const where = vi.spyOn(t.board, 'where');
     const outlines = vi.spyOn(t.board, 'outlines');
@@ -336,7 +380,7 @@ describe('the eraser on the board', () => {
     ]);
     t.eraser.up(press, t.board);
     expect(where).toHaveBeenCalledTimes(1);
-    expect(outlines).not.toHaveBeenCalled();
+    expect(outlines).toHaveBeenCalledTimes(1);
   });
 
   it('a press on a button inside a picture is the button’s', () => {
@@ -392,7 +436,7 @@ describe('the eraser in the app', () => {
     open();
     Keyboard.press('e');
     expect(document.querySelector('.app')!.getAttribute('data-tool')).toBe('eraser');
-    const button = screen.getByRole('button', { name: 'Erase your ink, boxes, arrows and pins' });
+    const button = screen.getByRole('button', { name: 'Erase your ink, boxes, arrows and pins, or a picture' });
     expect(button.getAttribute('aria-pressed')).toBe('true');
     expect(button.textContent).toBe('Erase');
   });

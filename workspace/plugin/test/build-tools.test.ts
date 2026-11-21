@@ -429,5 +429,6 @@ describe('the check itself', () => {
         KEEL_BUILD_CHECK_TIMEOUT: '5',
       }),
     ).toEqual({ chapter: 'x', check: 'make check', workdir: '/w', tree: '/t', stateDir: '/s', denyRead: ['/a'], systemToken: 't', checkTimeoutMs: 5000 });
+    expect(buildEnvFrom({ KEEL_BOARD_ROLE: 'builder', KEEL_BUILD_SETUPS: JSON.stringify(['npm ci', 3, '']) })?.setups).toEqual(['npm ci']);
   });
 });

@@ -38,23 +38,23 @@ describe('a glide and the chapter in view', () => {
   it('a fit that glides keeps the chapter the owner works in, all the way there', async () => {
     render(<App source={twoChapters()} remember />);
     // The first view is the chapter in work.
-    expect(screen.getByTestId('board-name').textContent).toBe('uLLM · The next idea');
+    expect(screen.getByTestId('board-name').textContent).toBe('uLLM · One engine, many requests · The next idea');
     reduceMotion(false);
     Keyboard.press('1');
     await frame();
     await frame();
     // On the way: the camera is not where it is going yet, and the chapter is still theirs.
-    expect(screen.getByTestId('board-name').textContent).toBe('uLLM · The next idea');
+    expect(screen.getByTestId('board-name').textContent).toBe('uLLM · One engine, many requests · The next idea');
     await frames(40);
     // Arrived at the whole board, most of it the old chapter's: a fit is a look round, so the
     // chapter is still theirs.
-    expect(screen.getByTestId('board-name').textContent).toBe('uLLM · The next idea');
+    expect(screen.getByTestId('board-name').textContent).toBe('uLLM · One engine, many requests · The next idea');
   });
 
   it('with reduced motion the same fit keeps it too', () => {
     render(<App source={twoChapters()} remember />);
     Keyboard.press('1');
-    expect(screen.getByTestId('board-name').textContent).toBe('uLLM · The next idea');
+    expect(screen.getByTestId('board-name').textContent).toBe('uLLM · One engine, many requests · The next idea');
   });
 });
 

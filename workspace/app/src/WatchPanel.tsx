@@ -1,16 +1,19 @@
-import type { BoardState, Id } from '@keel/protocol';
+import type { BoardState, CanvasWork, HomeInfo, Id, ShowInfo } from '@keel/protocol';
+import { showRun } from '@keel/protocol';
 import { Star, StateChip } from '@keel/pictures';
 import { useLayoutEffect, useRef, useState } from 'react';
+import { ApproveBlock } from './Approve';
 import type { Draft } from './drafts';
-import type { PostResult } from './source';
-import { safeShowUrl } from './source';
+import type { PostResult, Reply } from './source';
 import type { FeedLine, ServerBuild } from './watch';
+import { heldWhy, runningOf, tryLabel } from './tryit';
 import { buildStatus, feedOf, goesOn, reopenedParts, trackOf } from './watch';
 
 /**
  * Watching a build (storyboard screen 6), drawn: the build track, the feed, Pause and Resume, what
  * the server says about the build, and a line that says the owner can leave. It shows while
- * the chapter in view builds or is built, and folds away to one line.
+ * the chapter in view builds or is built, and folds away to one line. Once it is built: Try it
+ * first, then Approve (records 0013 and 0014).
  */
 
 /** How many of the remarks the builder will follow the panel lists before "and N more". */
@@ -29,11 +32,18 @@ export interface WatchProps {
   notifies?: boolean;
   /** Show a part on the board. */
   onPart?: (part: Id) => void;
-  /** The address of what the build made, when the server serves it: the chapter's entry in `BoardSource.shows`. */
-  showUrl?: string | undefined;
+  /** What this machine's repository holds for the chapter's canvas: its entry in `BoardSource.works`. */
+  work?: CanvasWork | undefined;
+  home?: HomeInfo | undefined;
+  /** What the owner can try of the chapter now: its entry in `BoardSource.shows`. */
+  show?: ShowInfo | undefined;
+  /** Open the chapter's try room. */
+  onTry?: () => void;
+  push?: (() => Promise<Reply>) | undefined;
+  onNewCanvas?: () => void;
 }
 
-export function Watch({ state, chapter, server, isOwner, folded, onFold, post, notifies = false, onPart, showUrl }: WatchProps) {
+export function Watch({ state, chapter, server, isOwner, folded, onFold, post, notifies = false, onPart, work, home, show, onTry, push, onNewCanvas }: WatchProps) {
   const c = state.chapters[chapter];
   const track = trackOf(state, chapter);
   const status = buildStatus(state, chapter, server);
@@ -86,8 +96,9 @@ export function Watch({ state, chapter, server, isOwner, folded, onFold, post, n
   };
 
   const unagreed = status.state === 'unagreed';
+  const stopped = status.state === 'stopped';
   const pause =
-    building && isOwner && !unagreed ? (
+    building && isOwner && !unagreed && (c.paused || !stopped) ? (
       c.paused ? (
         <button type="button" className="watch__btn watch__btn--go" disabled={busy} onClick={() => void act({ type: 'build.resume', chapter })}>
           Resume
@@ -99,13 +110,24 @@ export function Watch({ state, chapter, server, isOwner, folded, onFold, post, n
       )
     ) : null;
 
-  // What was built opens only on a press, in a tab of its own: never in this page, never by itself.
-  const shown = c.state === 'built' ? safeShowUrl(showUrl) : undefined;
-  const seeIt = shown ? (
-    <a className="watch__btn watch__btn--go" href={shown} target="_blank" rel="noopener noreferrer" data-testid="watch-show">
-      See it
-    </a>
-  ) : null;
+  // What was built runs only on a press, in the try room: never by itself. A show that runs
+  // already is said on the press, which opens it. The Approve block says why it is held.
+  const held = heldWhy(state, c.canvas, work, home);
+  const running = runningOf(show);
+  const tryIt =
+    c.state === 'built' && !c.merged && onTry ? (
+      <button
+        type="button"
+        className="watch__btn watch__btn--go"
+        data-testid="watch-try"
+        data-running={running}
+        disabled={!!held && !running}
+        data-tip={held && !running ? held : undefined}
+        onClick={onTry}
+      >
+        {tryLabel(show)}
+      </button>
+    ) : null;
 
   return (
     <aside className={`chrome watch${folded ? ' watch--folded' : ''}`} data-testid="watch" data-viewport-ui={folded ? 'top' : 'side'} data-state={status.state} data-chapter={chapter} aria-label={`The build of ${c.title}`}>
@@ -119,7 +141,7 @@ export function Watch({ state, chapter, server, isOwner, folded, onFold, post, n
         )}
         <span className="watch__grow" />
         {pause}
-        {seeIt}
+        {tryIt}
         <button
           type="button"
           className="watch__fold"
@@ -146,9 +168,35 @@ export function Watch({ state, chapter, server, isOwner, folded, onFold, post, n
               </>
             )}
           </p>
+          {stopped && isOwner && (
+            <button type="button" className="watch__btn watch__btn--dark watch__again" data-testid="watch-again" disabled={busy} onClick={() => void agree()}>
+              Try again
+            </button>
+          )}
+          {c.state === 'built' && <ApproveBlock state={state} canvas={c.canvas} work={work} home={home} isOwner={isOwner} post={post} push={push} onNewCanvas={onNewCanvas} />}
           {unagreed && (
             <div className="watch__agree" data-testid="watch-agree">
               {status.check ? <code className="watch__check">{status.check}</code> : <p>The board names no check for it.</p>}
+              {(c.setup || showRun(c.show)) && (
+                <dl className="watch__commands" data-testid="watch-commands">
+                  {c.setup && (
+                    <>
+                      <dt>and this setup, once before the first part, with the network:</dt>
+                      <dd>
+                        <code className="watch__check">{c.setup}</code>
+                      </dd>
+                    </>
+                  )}
+                  {showRun(c.show) && (
+                    <>
+                      <dt>and, when you press Try it, {c.show?.kind === 'terminal' ? 'this command in a terminal' : 'this command to run the app'}:</dt>
+                      <dd>
+                        <code className="watch__check">{showRun(c.show)}</code>
+                      </dd>
+                    </>
+                  )}
+                </dl>
+              )}
               {status.remarks && status.remarks.length > 0 && (
                 <div className="watch__remarks" data-testid="watch-remarks">
                   <p>The builder will also follow these remarks on the parts:</p>

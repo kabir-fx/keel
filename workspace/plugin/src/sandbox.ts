@@ -29,6 +29,10 @@ export interface SandboxPlaces {
    * its git folder. Code that rewrote it could point a later git at a config of its own.
    */
   denyWrite?: string[];
+  /** The network is on: for the setup, which fetches, and for a show, which may serve. */
+  network?: boolean;
+  /** More folders it may write in: the package managers' caches, for the setup. */
+  write?: string[];
 }
 
 export interface SandboxPlan {
@@ -84,6 +88,11 @@ export function sandboxEnv(tmp: string, base: NodeJS.ProcessEnv = process.env): 
   return env;
 }
 
+/** The usual package managers' caches under the home folder: where the setup may write outside the copy. */
+export function packageCaches(home: string = os.homedir()): string[] {
+  return ['.npm', '.cache', 'Library/Caches', '.cargo', 'go/pkg', '.pnpm-store', '.yarn', '.bun', '.gradle', '.m2', '.local/share/pnpm'].map((d) => path.join(home, d));
+}
+
 /** The folders the check never reads: where the board keeps its tokens, and the owner's keys. */
 export function defaultDenyRead(o: { stateRoot: string; ownerRepo?: string; home?: string }): string[] {
   const home = o.home ?? os.homedir();
@@ -104,14 +113,14 @@ export function seatbeltProfile(p: SandboxPlaces): string {
   const lines = [
     '(version 1)',
     '(allow default)',
-    '(deny network*)',
+    ...(p.network ? [] : ['(deny network*)']),
     // Three ways to have another program, outside the box, do the work: ask the system to open
     // a file or an app, send an app a scripting event, or hand the system a job to run.
     '(deny lsopen)',
     '(deny appleevent-send)',
     '(deny job-creation)',
     '(deny file-write*)',
-    `(allow file-write* (subpath ${sbpl(p.workdir)}) (subpath ${sbpl(p.tmp)}) (regex #"^/dev/(null|zero|tty|dtracehelper|fd/)"))`,
+    `(allow file-write* ${[p.workdir, p.tmp, ...(p.write ?? [])].map((d) => `(subpath ${sbpl(d)})`).join(' ')} (regex #"^/dev/(null|zero|tty|dtracehelper|fd/)"))`,
   ];
   if (p.denyRead.length) lines.push(`(deny file-read-data ${p.denyRead.map((d) => `(subpath ${sbpl(d)})`).join(' ')})`);
   lines.push(`(allow file-read-data (subpath ${sbpl(p.workdir)}) (subpath ${sbpl(p.tmp)}))`);
@@ -124,9 +133,10 @@ export function seatbeltProfile(p: SandboxPlaces): string {
 export function bwrapArgs(p: SandboxPlaces, cmd: string): string[] {
   // Its own process numbers too: it sees no process outside the box, cannot read one's
   // environment through /proc, and every process it starts ends with it, whatever group it joins.
-  const args = ['--die-with-parent', '--unshare-net', '--unshare-pid', '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc'];
+  const args = ['--die-with-parent', ...(p.network ? [] : ['--unshare-net']), '--unshare-pid', '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc'];
   for (const d of p.denyRead) if (fs.existsSync(d)) args.push('--tmpfs', real(d));
   args.push('--bind', real(p.workdir), real(p.workdir), '--bind', real(p.tmp), real(p.tmp));
+  for (const d of p.write ?? []) if (fs.existsSync(d)) args.push('--bind', real(d), real(d));
   // Read-only again inside the writable worktree. A bound path cannot be renamed or taken away.
   for (const d of p.denyWrite ?? []) if (fs.existsSync(d)) args.push('--ro-bind', real(d), real(d));
   args.push('--chdir', real(p.workdir));

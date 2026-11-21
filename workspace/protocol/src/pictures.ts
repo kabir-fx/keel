@@ -453,6 +453,38 @@ export const BlueprintPick = z.strictObject({
 export type BlueprintPick = z.infer<typeof BlueprintPick>;
 
 /**
+ * How the owner tries a finished build, before they approve it. The blueprint names it, and
+ * by pressing "Build this" the owner sees it. Nothing here runs by itself: an `app` or a
+ * `terminal` starts on the owner's own press, in the build's copy, boxed in.
+ */
+export const ShowPlan = z.discriminatedUnion('kind', [
+  /** A page that stands alone. It is opened as files, and nothing is run. */
+  z.strictObject({ kind: z.literal('page') }),
+  /**
+   * An app a command serves on this machine, such as "npm start". The board runs `run` with
+   * `PORT` set to a free port, waits until the app answers there, and shows it. `port` is
+   * for a command that cannot be told its port: the one it always listens on.
+   */
+  z.strictObject({ kind: z.literal('app'), run: line(300), port: z.number().int().min(1024).max(65535).optional() }),
+  /** A tool used in a terminal. The board opens one in the build's copy, with `run` typed in. */
+  z.strictObject({ kind: z.literal('terminal'), run: line(300) }),
+]);
+export type ShowPlan = z.infer<typeof ShowPlan>;
+
+/** The command a show runs, when it runs one. */
+export function showRun(show: ShowPlan | undefined): string | undefined {
+  return show && show.kind !== 'page' ? show.run : undefined;
+}
+
+/** Are two show plans the same, word for word? */
+export function sameShow(a: ShowPlan | undefined, b: ShowPlan | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'page' || b.kind === 'page') return true;
+  return a.run === b.run && (a.kind === 'app' ? a.port : undefined) === (b.kind === 'app' ? b.port : undefined);
+}
+
+/**
  * The read-back of a solidified idea, as one picture. Post it after the owner solidifies,
  * then wait: the owner presses "Build this" on it. `parts` is the build track, in order,
  * one commit each.
@@ -482,6 +514,18 @@ export const BlueprintPicture = z.strictObject({
    * only when this command has passed after its commit.
    */
   check: line(300),
+  /**
+   * The one command that makes a fresh copy of the repository ready to run, such as "npm ci".
+   * Leave it out when nothing has to be fetched. It runs once before the build, with the
+   * network, and the owner agrees to it with "Build this".
+   */
+  setup: line(300).optional(),
+  /**
+   * How the owner tries the result. Name one on every blueprint: the parts must include what
+   * makes it work. Left out, the board shows a page that stands alone when the build made
+   * one, else a terminal with the check.
+   */
+  show: ShowPlan.optional(),
   walk: Id.optional(),
   gaps,
 });

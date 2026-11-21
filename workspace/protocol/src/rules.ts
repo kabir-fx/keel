@@ -5,10 +5,10 @@ import type { ArrowTie, Item, ItemPatch } from './items';
 import { isMark, targetsOf } from './items';
 import type { ModelData, ModelOp } from './model';
 import type { LanesBody, PictureSpec } from './pictures';
-import { APPROACH_LETTERS } from './pictures';
+import { APPROACH_LETTERS, sameShow } from './pictures';
 import { MAX_COL, applyModelOp, copyModel, nextCol } from './reduce';
 import type { BoardState, ItemState, ModelState } from './state';
-import { chaptersWithPart, liveItems, ownersPictures, reopeningMarks } from './state';
+import { awaitsProof, canvasBuilds, chaptersWithPart, liveItems, ownersPictures, reopeningMarks } from './state';
 import { oneLine, secretIn } from './secrets';
 
 /**
@@ -42,6 +42,7 @@ const ALL: readonly Actor[] = ['owner', 'agent', 'system'];
 /** Who may send what. */
 export const MAY: Record<EventType, readonly Actor[]> = {
   'board.open': ['system'],
+  'canvas.open': ['owner', 'system'],
   'chapter.open': ['owner', 'system'],
   'chapter.rename': ALL,
   'item.add': ALL,
@@ -56,6 +57,10 @@ export const MAY: Record<EventType, readonly Actor[]> = {
   'build.start': ['owner'],
   'build.pause': ['owner'],
   'build.resume': ['owner'],
+  'canvas.approve': ['owner'],
+  'canvas.merged': ['system'],
+  'build.proved': ['system'],
+  'canvas.remove': ['owner'],
   'feed.add': ['agent', 'system'],
   'choice.pick': ['owner'],
   ask: ['owner'],
@@ -79,8 +84,19 @@ export function check(state: BoardState, d: EventDraft): Verdict {
   }
 
   switch (d.type) {
-    case 'chapter.open':
-      return has(state.chapters, d.chapter) ? no('R4', `Chapter "${d.chapter}" already exists. Use a new id.`) : OK;
+    case 'canvas.open':
+      if (has(state.removedCanvases, d.canvas)) return no('R4', `Canvas "${d.canvas}" was deleted. An id is used once: use a new id.`);
+      return has(state.canvases, d.canvas) ? no('R4', `Canvas "${d.canvas}" already exists. Use a new id.`) : OK;
+
+    case 'chapter.open': {
+      if (has(state.removedChapters, d.chapter)) return no('R4', `Chapter "${d.chapter}" was deleted. An id is used once: use a new id.`);
+      if (has(state.chapters, d.chapter)) return no('R4', `Chapter "${d.chapter}" already exists. Use a new id.`);
+      if (d.canvas !== undefined) return needCanvas(state, d.canvas);
+      // The canvas made for a first idea takes the idea's id: it must be free.
+      return state.canvasOrder.length === 0 && has(state.removedCanvases, d.chapter)
+        ? no('R4', `A canvas "${d.chapter}" was deleted, and this idea would start one of that name. Use a new id.`)
+        : OK;
+    }
 
     case 'chapter.rename': {
       const c = needChapter(state, d.chapter);
@@ -121,6 +137,7 @@ export function check(state: BoardState, d: EventDraft): Verdict {
     case 'item.restore': {
       const s = state.items[d.item];
       if (!s) return no('R7', `There is no item "${d.item}".`);
+      if (!has(state.chapters, s.chapter)) return no('R7', `Item "${d.item}" belonged to an idea the owner deleted. It stays off the board.`);
       if (!s.removed) return no('R8', `Item "${d.item}" is on the board already.`);
       if (s.by !== d.by && d.by !== 'owner') return no('R6', `Only its author, or the owner, puts an item back. "${d.item}" is by the ${s.by}.`);
       return OK;
@@ -153,6 +170,33 @@ export function check(state: BoardState, d: EventDraft): Verdict {
       if (!c) return no('R7', `There is no chapter "${d.chapter}".`);
       return c.paused ? OK : no('R8', 'The build is not paused.');
     }
+
+    case 'build.proved': {
+      const c = state.chapters[d.chapter];
+      if (!c) return no('R7', `There is no chapter "${d.chapter}".`);
+      if (c.show?.kind !== 'app') return no('R8', 'This chapter is not tried as an app.');
+      return awaitsProof(state, d.chapter) ? OK : no('R8', 'Only a building chapter with every part built waits for its app to answer.');
+    }
+
+    case 'canvas.approve': {
+      const c = needCanvas(state, d.canvas);
+      if (!c.ok) return c;
+      const b = canvasBuilds(state, d.canvas);
+      // Every idea on a canvas shares its branch: a build in work there would be merged half done.
+      if (b.building.length > 0) return no('R8', `"${oneLine(b.building[0]!.title, 80)}" is still building on this canvas, and every idea on a canvas shares its branch. Approve when it is built.`);
+      if (b.waiting.length > 0) return OK;
+      return b.merged.length > 0 ? no('R8', `Everything built on this canvas is merged into ${oneLine(b.merged[0]!.merged!.into, 80)} already.`) : no('R8', 'Nothing on this canvas is built yet. Only a built idea is approved.');
+    }
+
+    case 'canvas.merged': {
+      const c = needCanvas(state, d.canvas);
+      if (!c.ok) return c;
+      // A statement of what the repository holds: it stands whatever else the canvas does now.
+      return canvasBuilds(state, d.canvas).waiting.length > 0 ? OK : no('R8', 'No built idea on this canvas waits to be merged.');
+    }
+
+    case 'canvas.remove':
+      return needCanvas(state, d.canvas);
 
     case 'feed.add': {
       if (d.part !== undefined && !livePart(state.model, d.part)) return no('R7', `There is no part "${d.part}".`);
@@ -337,6 +381,11 @@ function checkAnswers(state: BoardState, answers: readonly Id[] | undefined): Ve
 /** Is this key really in the map? A plain lookup would also find what every object has. */
 function has(map: object, key: string): boolean {
   return Object.hasOwn(map, key);
+}
+
+function needCanvas(state: BoardState, canvas: Id): Verdict {
+  if (has(state.canvases, canvas)) return OK;
+  return has(state.removedCanvases, canvas) ? no('R7', `Canvas "${canvas}" was deleted.`) : no('R7', `There is no canvas "${canvas}".`);
 }
 
 function needChapter(state: BoardState, chapter: Id): Verdict {
@@ -840,6 +889,13 @@ function checkBuildStart(state: BoardState, d: DraftOf<'build.start'>): Verdict 
     // blueprint that shows another is not that agreement.
     if (s.item.picture.check !== d.check) {
       return no('R2', `Blueprint "${d.blueprint}" shows the check "${oneLine(s.item.picture.check, 120)}". "Build this" must name that check, word for word.`);
+    }
+    // The same press agrees to the setup and to what the show runs: both as the blueprint shows them.
+    if (s.item.picture.setup !== d.setup) {
+      return no('R2', `Blueprint "${d.blueprint}" ${s.item.picture.setup === undefined ? 'shows no setup command' : `shows the setup "${oneLine(s.item.picture.setup, 120)}"`}. "Build this" must name the same, word for word.`);
+    }
+    if (!sameShow(s.item.picture.show, d.show)) {
+      return no('R2', `"Build this" must say how the result is tried just as blueprint "${d.blueprint}" shows it.`);
     }
   }
   return OK;

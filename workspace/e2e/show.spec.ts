@@ -8,11 +8,12 @@ import { logPath, settle, startBuild, watchErrors } from './build-flow';
  * What a finished build shows, on the real board server. The scripted builder writes a small
  * page of its own (a heading, a count, a button, a script and a style sheet) into its private
  * folder and hands it over when the run is done. The server serves it from a port of its own,
- * and the build panel shows "See it".
+ * and the build panel shows "Try it", which opens the try room with the page framed in it and a
+ * link that opens it in a tab of its own.
  *
- * The page is code a model wrote, so it must never get near the owner's token: it opens in a
- * tab of its own, on another origin, with no way back to the board's tab, and the board
- * refuses anything it sends. The address holds a key, and is never written into the log.
+ * The page is code a model wrote, so it must never get near the owner's token: it is on another
+ * origin, its tab has no way back to the board's tab, only the board's origin may frame it, and
+ * the board refuses anything it sends. The address holds a key, and is never written into the log.
  *
  * The agent and the system are never told the address either. That is not reachable from a
  * browser without their tokens, so it is left to the server's unit tests.
@@ -21,7 +22,7 @@ import { logPath, settle, startBuild, watchErrors } from './build-flow';
  */
 
 /** The feed line the server posts when it does not open a browser itself (`--no-browser`). */
-const SHOW_WAITS = 'You can look at it: press "See it" on the build panel.';
+const SHOW_WAITS = 'You can look at it: press "Try it" on the build panel.';
 /** Where the page keeps the owner's token (`app/src/source.ts`). */
 const TOKEN_KEY = 'keel.board.token';
 
@@ -52,26 +53,28 @@ const rawGet = (origin: string, path: string): Promise<number> =>
     req.end();
   });
 
-test('a finished build shows its page: "See it" opens it in a tab of its own, on its own origin, and the board refuses it', async ({ page, context, request }) => {
+test('a finished build shows its page: "Try it" frames it, its link opens it in a tab of its own, on its own origin, and the board refuses it', async ({ page, context, request }) => {
   test.setTimeout(120_000);
   const errors = watchErrors(page);
   const { url, repo } = board!;
   await startBuild(page, url);
   const boardOrigin = new URL(page.url()).origin;
   const watch = page.getByTestId('watch');
-  const seeIt = page.getByTestId('watch-show');
+  const tryIt = page.getByTestId('watch-try');
+  const room = page.getByTestId('try-room');
+  const seeIt = page.getByTestId('try-tab');
 
   await test.step('nothing to see while the parts are building', async () => {
     await expect(watch).toBeVisible();
     await expect(page.getByTestId('chapter-state')).toHaveText('building');
     const building = page.locator('[data-testid="track"] > li[data-state="building"]');
     await expect(building, 'a part is building').toHaveCount(1, { timeout: 10_000 });
-    await expect(seeIt, 'no "See it" while the chapter is still building').toHaveCount(0);
+    await expect(tryIt, 'no "Try it" while the chapter is still building').toHaveCount(0);
     // Every look until the chapter is built finds no link.
     const deadline = Date.now() + 40_000;
     let looks = 0;
     while (Date.now() < deadline && (await page.getByTestId('chapter-state').textContent()) !== 'built') {
-      expect(await seeIt.count(), 'no "See it" before the chapter is built').toBe(0);
+      expect(await tryIt.count(), 'no "Try it" before the chapter is built').toBe(0);
       looks++;
       await page.waitForTimeout(50);
     }
@@ -81,8 +84,10 @@ test('a finished build shows its page: "See it" opens it in a tab of its own, on
   });
 
   // The link: a new tab, with no way back, to a port that is not the board's.
-  await expect(seeIt, '"See it" shows once the chapter is built').toBeVisible({ timeout: 10_000 });
-  await expect(seeIt).toHaveText('See it');
+  await expect(tryIt, '"Try it" shows once the chapter is built').toBeVisible({ timeout: 10_000 });
+  await tryIt.click();
+  await expect(room).toHaveAttribute('data-kind', 'page');
+  await expect(seeIt).toHaveText('Open in a new tab');
   await expect(seeIt, 'it opens in a tab of its own').toHaveAttribute('target', '_blank');
   const rel = ((await seeIt.getAttribute('rel')) ?? '').split(/\s+/);
   expect(rel, 'the shown tab gets no handle on the board, and no referrer').toEqual(expect.arrayContaining(['noopener', 'noreferrer']));
@@ -95,14 +100,16 @@ test('a finished build shows its page: "See it" opens it in a tab of its own, on
   const showBase = `${showOrigin}/${key}/${chapter}`;
 
   await test.step('the feed says where to look, and the log never holds the address', async () => {
+    await page.keyboard.press('Escape');
+    await expect(room).toHaveCount(0);
     const line = page.getByTestId('feed').locator('.feed__line', { hasText: SHOW_WAITS });
-    await expect(line, 'the feed says to press "See it"').toHaveCount(1);
+    await expect(line, 'the feed says to press "Try it"').toHaveCount(1);
     await expect(line, 'an update from the build, not a commit or a problem').toHaveAttribute('data-kind', 'update');
     await expect(line.locator('.feed__text'), 'the line is just that, with no address').toHaveText(SHOW_WAITS);
     await settle(page);
     await page.screenshot({ path: `${SHOTS}/live-show-1-panel.png` });
     const log = readFileSync(logPath(repo), 'utf8');
-    expect(log, 'the log holds the feed line').toContain('press \\"See it\\" on the build panel');
+    expect(log, 'the log holds the feed line').toContain('press \\"Try it\\" on the build panel');
     // The port alone is a short number that a time or an id can hold by chance: look for it as an address.
     for (const host of ['127.0.0.1', 'localhost']) expect(log.includes(`${host}:${port}`), "the show's address is not in the log").toBe(false);
     expect(log.includes(key!), "the show's key is not in the log").toBe(false);
@@ -111,6 +118,7 @@ test('a finished build shows its page: "See it" opens it in a tab of its own, on
   // The shown tab. Its console errors are kept apart: the refused calls below make some on purpose.
   const shownErrors: Array<{ text: string; url: string }> = [];
   const keep = (m: ConsoleMessage) => m.type() === 'error' && shownErrors.push({ text: m.text(), url: m.location().url });
+  await tryIt.click();
   const [shown] = await Promise.all([context.waitForEvent('page'), seeIt.click()]);
   shown.on('console', keep);
   shown.on('pageerror', (e) => shownErrors.push({ text: e.message, url: '' }));
@@ -131,6 +139,9 @@ test('a finished build shows its page: "See it" opens it in a tab of its own, on
     expect(await shown.evaluate(() => localStorage.length), 'the shown origin holds nothing: no token').toBe(0);
     expect(new URL(page.url()).origin, 'the board tab stayed on the board').toBe(boardOrigin);
     await expect(page.getByTestId('board')).toBeVisible();
+    // The same page, framed in the try room on the board's tab.
+    await expect(page.frameLocator('[data-testid="try-frame"]').getByRole('heading', { name: 'The engine is built' })).toBeVisible();
+    await expect(page.getByTestId('try-frame')).toHaveAttribute('src', href);
     expect(shownErrors, 'the shown page loads with no error').toEqual([]);
   });
 
@@ -185,8 +196,10 @@ test('a finished build shows its page: "See it" opens it in a tab of its own, on
     const good = await request.get(href);
     expect(good.status(), 'the good address answers').toBe(200);
     expect(good.headers()['x-content-type-options'], 'nothing is sniffed').toBe('nosniff');
-    expect(good.headers()['x-frame-options'], 'the page is never framed').toBe('DENY');
-    expect(good.headers()['content-security-policy'], 'the owner\'s app runs as it would by hand: no policy').toBeUndefined();
+    expect(good.headers()['x-frame-options'], 'framing is said by the policy alone').toBeUndefined();
+    // The board's own origin may frame it, by either name of this machine, and nothing else. The owner's app runs as it would by hand.
+    const boardPort = new URL(boardOrigin).port;
+    expect(good.headers()['content-security-policy']).toBe(`frame-ancestors http://127.0.0.1:${boardPort} http://localhost:${boardPort}`);
 
     const k = key!;
     const wrongKey = (k[0] === 'A' ? 'B' : 'A') + k.slice(1);
@@ -197,14 +210,18 @@ test('a finished build shows its page: "See it" opens it in a tab of its own, on
     expect(await rawGet(showOrigin, `/${key}/${chapter}/%2e%2e/board.json`), 'a step up, sent as written, finds nothing').toBe(404);
   });
 
-  await test.step('"See it" is still there after a reload, and when the panel is folded', async () => {
+  await test.step('"Try it" is still there after a reload, and when the panel is folded', async () => {
     await page.reload();
     await expect(page.getByTestId('board')).toBeVisible();
-    await expect(seeIt, '"See it" is back after a reload').toBeVisible({ timeout: 10_000 });
+    await expect(tryIt, '"Try it" is back after a reload').toBeVisible({ timeout: 10_000 });
+    await tryIt.click();
     await expect(seeIt, 'to the same address').toHaveAttribute('href', href);
+    await page.getByTestId('try-close').click();
+    await expect(room).toHaveCount(0);
     await page.getByRole('button', { name: 'Fold the build away' }).click();
     await expect(watch).toHaveClass(/watch--folded/);
-    await expect(seeIt, '"See it" shows on the folded panel').toBeVisible();
+    await expect(tryIt, '"Try it" shows on the folded panel').toBeVisible();
+    await tryIt.click();
     await expect(seeIt).toHaveAttribute('href', href);
   });
 

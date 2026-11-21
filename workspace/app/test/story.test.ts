@@ -2,7 +2,7 @@ import type { Box } from '@keel/protocol';
 import { admit, replay } from '@keel/protocol';
 import { describe, expect, it } from 'vitest';
 import { cutAt, loadFixture } from '../src/fixture';
-import { NEXT_GAP, chapterProgress, itemWords, mainItems, nextIdeaDrafts, nextIdeaSpot, projectProgress, storyOf, when } from '../src/story';
+import { chapterProgress, itemWords, mainItems, projectProgress, storyOf, when } from '../src/story';
 import { trackOf } from '../src/watch';
 import { CH, note, openBoard } from './helpers';
 
@@ -91,48 +91,6 @@ describe('the Story', () => {
     expect(trackOf(b.state, CH)!.parts.find((x) => x.id === 'old')).toMatchObject({ state: 'built', commit: 'def5678' });
     expect(trackOf(b.state, CH)!.parts.find((x) => x.id === 'old')).not.toHaveProperty('shelf');
     expect(projectProgress(b.state)).toMatchObject({ parts: { built: 1, total: 2 }, already: 0 });
-  });
-});
-
-describe('the next idea', () => {
-  it('starts to the right of everything on the board, level with its top', () => {
-    const boxes: Box[] = [
-      [0, 100, 300, 200],
-      [-500, -40, 200, 100],
-      [900, 600, 400, 300],
-    ];
-    const spot = nextIdeaSpot(boxes, [320, 88]);
-    expect(spot).toEqual([1300 + NEXT_GAP, -40, 320, 88]);
-    for (const b of boxes) {
-      const clear = spot[0] >= b[0] + b[2] || b[0] >= spot[0] + spot[2] || spot[1] >= b[1] + b[3] || b[1] >= spot[1] + spot[3];
-      expect(clear).toBe(true);
-    }
-    expect(nextIdeaSpot([], [320, 88])).toEqual([0, 0, 320, 88]);
-  });
-
-  it('opens a new chapter titled from the note, and puts the note in it; the board admits both', () => {
-    const b = openBoard();
-    b.must('owner', note('m1', [0, 0, 320, 100]));
-    const drafts = nextIdeaDrafts(b.state, { id: 'm2', text: 'Now put HTTP in front of it. curl should just work.', box: [560.4, 0, 320, 88] });
-    expect(drafts).toEqual([
-      { type: 'chapter.open', chapter: 'now-put-http-in-front-of', title: 'Now put HTTP in front of' },
-      { type: 'item.add', chapter: 'now-put-http-in-front-of', item: { id: 'm2', kind: 'note', box: [560, 0, 320, 88], text: 'Now put HTTP in front of it. curl should just work.' } },
-    ]);
-    let state = b.state;
-    for (const d of drafts) {
-      const r = admit(state, d, 'owner', '2026-11-17T14:00:00Z');
-      expect(r.ok).toBe(true);
-      if (r.ok) state = r.state;
-    }
-    expect(state.chapterOrder).toEqual([CH, 'now-put-http-in-front-of']);
-    expect(state.items.m2!.chapter).toBe('now-put-http-in-front-of');
-  });
-
-  it('never reuses a chapter id', () => {
-    const b = openBoard();
-    b.must('owner', { type: 'chapter.open', chapter: 'batches', title: 'Batches' });
-    const drafts = nextIdeaDrafts(b.state, { id: 'm9', text: 'Batches', box: [0, 0, 320, 58] });
-    expect(drafts[0]).toMatchObject({ chapter: 'batches-2' });
   });
 });
 

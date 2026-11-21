@@ -4,10 +4,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BuildJob, Builder, BuilderContext, PresenceUpdate } from '@keel/protocol';
-import { renderBrief } from '@keel/protocol';
-import { BUILDER_BUILTINS, GIT_ALLOWED, GIT_DENIED_FLAGS, GIT_DENIED_LEADS, allowList, bashRules, buildPlaces, builderSettings, createBuilder, filesNote, grammarSection, secretNames } from '../src/hosted-builder';
+import { canvasTitle, renderBrief } from '@keel/protocol';
+import { BUILDER_BUILTINS, GIT_ALLOWED, GIT_DENIED_FLAGS, GIT_DENIED_LEADS, allowList, bashRules, buildPlaces, builderSettings, createBuilder, filesNote, grammarSection, readPlace, secretNames } from '../src/hosted-builder';
 import { createBuilder as fromLinkModule, DENIED_FILES } from '../src/hosted-link';
-import { RecordPathError, keelBlock, nextRecordNumber, recordPlaces, safeDir, safeRelative, writeNew, writeRecords } from '../src/records';
+import { RecordPathError, freeRecordName, keelBlock, nextRecordNumber, recordPlaces, safeDir, safeRelative, writeNew, writeRecords } from '../src/records';
 import { BCH, buildBoard, makeRepo, sh } from './build-board';
 import type { FakeBoard } from './fake-board';
 
@@ -67,10 +67,27 @@ async function builder(options: Record<string, string> = {}): Promise<Builder> {
   return b;
 }
 
+/** The home branch as the server reads it: `main` at its commit, or nothing in a repository with no commit. */
+function homeOf(dir: string): BuildJob['base'] {
+  try {
+    return { branch: 'main', commit: sh(dir, 'git', 'rev-parse', '--verify', '--quiet', 'main^{commit}') };
+  } catch {
+    return undefined;
+  }
+}
+
+/** The build's branch, as the builder named it, and the name its records take. */
+const branch = () => readPlace(stateDir, BCH)!.branch;
+const named = () => branch().slice('board/'.length);
+
 function job(resume = false): BuildJob {
   const c = board.state.chapters[BCH]!;
+  const base = homeOf(repo);
   return {
+    ...(base ? { base } : {}),
     chapter: BCH,
+    canvas: c.canvas,
+    canvasTitle: canvasTitle(board.state, c.canvas),
     title: c.title,
     track: c.track.filter((id) => board.state.model.parts[id]?.state !== 'built').map((id) => ({ id, name: board.state.model.parts[id]!.name })),
     check: c.check!,
@@ -141,19 +158,19 @@ describe('a build, end to end against a fake claude', () => {
     expect(r.outcome, r.note).toBe('done');
 
     // The branch: the records first, one commit per part, then the brief with the result.
-    const log = sh(repo, 'git', 'log', '--format=%s', `${before.head}..board/${BCH}`).split('\n').reverse();
+    const log = sh(repo, 'git', 'log', '--format=%s', `${before.head}..${branch()}`).split('\n').reverse();
     expect(log).toEqual(['An adder: the brief and the decision record', 'sum: the part', 'cli: the part', 'docs: the part', 'An adder: the brief, with the result']);
-    const files = sh(repo, 'git', 'ls-tree', '-r', '--name-only', `board/${BCH}`).split('\n');
-    expect(files).toEqual(expect.arrayContaining(['docs/briefs/adder.md', 'docs/adr/0001-adder.md', 'parts/sum.txt']));
+    const files = sh(repo, 'git', 'ls-tree', '-r', '--name-only', `${branch()}`).split('\n');
+    expect(files).toEqual(expect.arrayContaining(['docs/briefs/an-adder.md', 'docs/adr/0001-an-adder.md', 'parts/sum.txt']));
     // The brief went in as the board was at "Build this", and leaves as the board is now.
-    const first = sh(repo, 'git', 'show', `board/${BCH}~4:docs/briefs/adder.md`);
+    const first = sh(repo, 'git', 'show', `${branch()}~4:docs/briefs/an-adder.md`);
     expect(first).toContain('**State:** in build, 0 of 3 parts built.');
-    const brief = sh(repo, 'git', 'show', `board/${BCH}:docs/briefs/adder.md`);
+    const brief = sh(repo, 'git', 'show', `${branch()}:docs/briefs/an-adder.md`);
     expect(brief).toContain('# An adder');
     expect(brief).toContain('**State:** built, 3 of 3 parts.');
     expect(brief).toMatch(/\*\*The sum\*\*.*built at `[0-9a-f]{7,}`/);
-    expect(sh(repo, 'git', 'show', '--name-only', '--format=', `board/${BCH}`)).toBe('docs/briefs/adder.md');
-    const adr = sh(repo, 'git', 'show', `board/${BCH}:docs/adr/0001-adder.md`);
+    expect(sh(repo, 'git', 'show', '--name-only', '--format=', `${branch()}`)).toBe('docs/briefs/an-adder.md');
+    const adr = sh(repo, 'git', 'show', `${branch()}:docs/adr/0001-an-adder.md`);
     expect(adr).toContain('**Status:** accepted');
     expect(adr).toContain('A pure function and a thin command line');
     expect(adr).toContain('No floats yet.');
@@ -164,15 +181,18 @@ describe('a build, end to end against a fake claude', () => {
       expect(states).toEqual(['agent:building', 'system:built']);
     }
     expect(board.state.chapters[BCH]?.state).toBe('built');
-    expect(board.state.feed.at(-1)?.text).toContain(`git merge board/${BCH}`);
+    expect(branch()).toBe('board/an-adder');
+    expect(board.state.feed.at(-1)?.text).toBe('Every part is built, on the branch board/an-adder, with the brief brought up to date (docs/briefs/an-adder.md). Try it on the board, then approve it to merge it into main.');
+    expect(board.state.feed.some((f) => /\bgit (merge|checkout|worktree)\b/.test(f.text))).toBe(false);
+    expect(board.state.feed.some((f) => f.text.includes(`from main at ${before.head.slice(0, 7)}`))).toBe(true);
 
-    // The owner's checkout and branch never moved, and the worktree is gone; the branch stays.
+    // The owner's checkout and branch never moved. The worktree stays, for the owner to try the build in.
     expect(ownerView()).toEqual(before);
-    expect(fs.existsSync(buildPlaces(stateDir, BCH).tree)).toBe(false);
-    expect(sh(repo, 'git', 'worktree', 'list', '--porcelain')).not.toContain(stateDir);
+    expect(fs.existsSync(path.join(buildPlaces(stateDir, BCH).tree, 'parts', 'docs.txt'))).toBe(true);
+    expect(sh(repo, 'git', 'worktree', 'list', '--porcelain')).toContain(fs.realpathSync(stateDir));
     expect(presence.some((p) => p.state === 'building' && p.note?.startsWith('building part 1 of 3'))).toBe(true);
     // The owner is the author; the builder is the committer.
-    expect(sh(repo, 'git', 'log', '--format=%an|%cn', `${before.head}..board/${BCH}`).split('\n')).toEqual(Array(5).fill('Owner|Keel builder'));
+    expect(sh(repo, 'git', 'log', '--format=%an|%cn', `${before.head}..${branch()}`).split('\n')).toEqual(Array(5).fill('Owner|Keel builder'));
     // Each turn's own cost: the stream gives a running total, $0.01 more each turn.
     expect(r.note).toContain('$0.03');
   }, 60_000);
@@ -255,8 +275,8 @@ describe('a build, end to end against a fake claude', () => {
     expect(board.state.model.parts.cli?.state).toBe('solid');
     expect(fs.existsSync(buildPlaces(stateDir, BCH).tree)).toBe(true);
     // A pause leaves the brief as it was.
-    expect(sh(repo, 'git', 'log', '-1', '--format=%s', `board/${BCH}`)).toBe('sum: the part');
-    expect(sh(repo, 'git', 'show', `board/${BCH}:docs/briefs/adder.md`)).toContain('in build, 0 of 3 parts built');
+    expect(sh(repo, 'git', 'log', '-1', '--format=%s', `${branch()}`)).toBe('sum: the part');
+    expect(sh(repo, 'git', 'show', `${branch()}:docs/briefs/an-adder.md`)).toContain('in build, 0 of 3 parts built');
 
     // Never two runs at once.
     delete process.env.FAKE_SLOW_MS;
@@ -266,7 +286,7 @@ describe('a build, end to end against a fake claude', () => {
     expect(twice.note).toContain('one build at a time');
     const r2 = await second;
     expect(r2.outcome, r2.note).toBe('done');
-    const log = sh(repo, 'git', 'log', '--format=%s', `${before.head}..board/${BCH}`).split('\n').reverse();
+    const log = sh(repo, 'git', 'log', '--format=%s', `${before.head}..${branch()}`).split('\n').reverse();
     expect(log).toEqual(['An adder: the brief and the decision record', 'sum: the part', 'cli: the part', 'docs: the part', 'An adder: the brief, with the result']);
     // The resumed run wrote no records again, and said where it went on from.
     expect(board.state.feed.some((f) => f.text.includes('goes on') && f.text.includes('1 of 3'))).toBe(true);
@@ -287,7 +307,7 @@ describe('a build, end to end against a fake claude', () => {
     // The run's own note is the server's to post.
     expect(r.note).toContain('The cli is not built');
     // A build that stops leaves the brief as it was: no result commit.
-    expect(sh(repo, 'git', 'log', '--format=%s', `board/${BCH}`)).not.toContain('with the result');
+    expect(sh(repo, 'git', 'log', '--format=%s', `${branch()}`)).not.toContain('with the result');
   }, 60_000);
 
   it('no commit: board_check refuses, the builder is told once more, then the run fails', async () => {
@@ -358,9 +378,9 @@ describe('a build, end to end against a fake claude', () => {
     const r = await b.run(job());
     expect(r.outcome, r.note).toBe('done');
     const turn = records().find((x) => x.turn !== undefined)!.turn!;
-    const decision = sh(repo, 'git', 'show', `board/${BCH}:docs/adr/0001-adder.md`);
-    const brief = sh(repo, 'git', 'show', `board/${BCH}:docs/briefs/${BCH}.md`);
-    const messages = sh(repo, 'git', 'log', '--format=%B', `board/${BCH}`);
+    const decision = sh(repo, 'git', 'show', `${branch()}:docs/adr/0001-${named()}.md`);
+    const brief = sh(repo, 'git', 'show', `${branch()}:docs/briefs/${named()}.md`);
+    const messages = sh(repo, 'git', 'log', '--format=%B', `${branch()}`);
     for (const text of [turn, decision, brief, messages]) {
       for (const line of text.split('\n')) expect(line.trimStart().startsWith('THE OWNER')).toBe(false);
     }
@@ -421,14 +441,14 @@ describe('a build, end to end against a fake claude', () => {
     expect(fs.realpathSync(sh(repo, 'git', 'rev-parse', '--show-toplevel'))).toBe(fs.realpathSync(repo));
     expect(fromNothingOwner()).toEqual({ unborn: true, status: '?? .keel/', staged: '' });
     // The branch: the empty first commit, then the build as anywhere else.
-    const log = sh(repo, 'git', 'log', '--format=%s', `board/${BCH}`).split('\n').reverse();
-    expect(log).toEqual([`The start of board/${BCH}, from an empty folder`, 'An adder: the brief and the decision record', 'sum: the part', 'cli: the part', 'docs: the part', 'An adder: the brief, with the result']);
+    const log = sh(repo, 'git', 'log', '--format=%s', `${branch()}`).split('\n').reverse();
+    expect(log).toEqual([`The start of ${branch()}, from an empty folder`, 'An adder: the brief and the decision record', 'sum: the part', 'cli: the part', 'docs: the part', 'An adder: the brief, with the result']);
     const said = board.state.feed.filter((f) => f.text.includes('starts from nothing'));
-    expect(said.map((f) => f.text)).toEqual([`This folder was no git repository, so the builder made it one with "git init". It had no commit to build on either, so the branch board/${BCH} starts from nothing: an empty first commit, then the build.`]);
-    expect(board.state.feed.at(-1)?.text).toContain(`git merge board/${BCH}`);
-    sh(repo, 'git', 'merge', '--quiet', `board/${BCH}`);
+    expect(said.map((f) => f.text)).toEqual([`This folder was no git repository, so the builder made it one with "git init". It had no commit to build on either, so the branch ${branch()} starts from nothing: an empty first commit, then the build.`]);
+    expect(board.state.feed.at(-1)?.text).toMatch(/Try it on the board, then approve it to merge it into the main branch\.$/);
+    sh(repo, 'git', 'merge', '--quiet', `${branch()}`);
     expect(fs.readFileSync(path.join(repo, 'parts', 'sum.txt'), 'utf8')).toBe('the sum part\n');
-    expect(fs.existsSync(path.join(repo, 'docs', 'briefs', `${BCH}.md`))).toBe(true);
+    expect(fs.existsSync(path.join(repo, 'docs', 'briefs', `${named()}.md`))).toBe(true);
   }, 60_000);
 
   it('builds in a repository with no commit, beside a .DS_Store, and leaves the owner\'s HEAD unborn', async () => {
@@ -440,11 +460,11 @@ describe('a build, end to end against a fake claude', () => {
     expect(r.outcome, r.note).toBe('done');
     expect(fromNothingOwner()).toEqual({ unborn: true, status: '?? .DS_Store\n?? .keel/', staged: '' });
     const said = board.state.feed.filter((f) => f.text.includes('starts from nothing'));
-    expect(said.map((f) => f.text)).toEqual([`This folder has no commit yet, so the branch board/${BCH} starts from nothing: an empty first commit, then the build. Your own branch stays as it is.`]);
+    expect(said.map((f) => f.text)).toEqual([`This folder has no commit yet, so the branch ${branch()} starts from nothing: an empty first commit, then the build. Your own branch stays as it is.`]);
     // It comes before the line that says the build started.
     expect(board.state.feed.findIndex((f) => f.text.includes('starts from nothing'))).toBeLessThan(board.state.feed.findIndex((f) => f.text.startsWith('The builder started')));
-    expect(sh(repo, 'git', 'log', '--max-parents=0', '--format=%cn|%T', `board/${BCH}`)).toBe(`Keel builder|${sh(repo, 'git', 'mktree')}`);
-    sh(repo, 'git', 'merge', '--quiet', `board/${BCH}`);
+    expect(sh(repo, 'git', 'log', '--max-parents=0', '--format=%cn|%T', `${branch()}`)).toBe(`Keel builder|${sh(repo, 'git', 'mktree')}`);
+    sh(repo, 'git', 'merge', '--quiet', `${branch()}`);
     expect(sh(repo, 'git', 'ls-files')).toContain('parts/docs.txt');
   }, 60_000);
 
@@ -463,7 +483,7 @@ describe('a build, end to end against a fake claude', () => {
     expect(r.outcome, r.note).toBe('done');
     expect(board.state.feed.filter((f) => f.text.includes('starts from nothing'))).toHaveLength(1);
     expect(board.state.feed.some((f) => f.text.includes('goes on') && f.text.includes('1 of 3'))).toBe(true);
-    expect(sh(repo, 'git', 'rev-list', '--max-parents=0', `board/${BCH}`).split('\n')).toHaveLength(1);
+    expect(sh(repo, 'git', 'rev-list', '--max-parents=0', `${branch()}`).split('\n')).toHaveLength(1);
     expect(fromNothingOwner()).toEqual({ unborn: true, status: '?? .keel/', staged: '' });
   }, 60_000);
 
@@ -498,11 +518,11 @@ describe('a build, end to end against a fake claude', () => {
     repo = boardFolder(path.join(top, 'app'));
     const r = await (await builder()).run(job());
     expect(r.outcome, r.note).toBe('done');
-    const files = sh(top, 'git', 'ls-tree', '-r', '--name-only', `board/${BCH}`).split('\n');
-    expect(files).toEqual(expect.arrayContaining(['README.md', 'app/parts/sum.txt', `app/docs/briefs/${BCH}.md`, `app/docs/adr/0001-${BCH}.md`]));
+    const files = sh(top, 'git', 'ls-tree', '-r', '--name-only', `${branch()}`).split('\n');
+    expect(files).toEqual(expect.arrayContaining(['README.md', 'app/parts/sum.txt', `app/docs/briefs/${named()}.md`, `app/docs/adr/0001-${named()}.md`]));
     expect(records().find((x) => x.start)?.cwd).toBe(path.join(fs.realpathSync(stateDir), 'build', BCH, 'tree', 'app'));
     // The owner is the author, as in any build: git was asked in the worktree, which now has the folder.
-    expect(sh(top, 'git', 'log', '-1', '--format=%an|%cn', `board/${BCH}`)).toBe('Owner|Keel builder');
+    expect(sh(top, 'git', 'log', '-1', '--format=%an|%cn', `${branch()}`)).toBe('Owner|Keel builder');
     expect(sh(top, 'git', 'status', '--porcelain')).toBe('?? app/');
   }, 60_000);
 
@@ -550,15 +570,13 @@ describe('a build, end to end against a fake claude', () => {
     const show = buildPlaces(stateDir, BCH).show;
     expect(r.show).toEqual({ dir: show, page: 'index.html' });
     const listed = (fs.readdirSync(show, { recursive: true }) as string[]).sort();
-    expect(listed).toEqual(['README.md', 'app.js', 'docs', 'docs/adr', `docs/adr/0001-${BCH}.md`, 'docs/briefs', `docs/briefs/${BCH}.md`, 'index.html', 'parts', 'parts/sum.txt', 'style.css']);
+    expect(listed).toEqual(['README.md', 'app.js', 'docs', 'docs/adr', `docs/adr/0001-${named()}.md`, 'docs/briefs', `docs/briefs/${named()}.md`, 'index.html', 'parts', 'parts/sum.txt', 'style.css']);
     expect((fs.statSync(show).mode & 0o777).toString(8)).toBe('700');
     expect((fs.statSync(path.join(show, 'docs')).mode & 0o777).toString(8)).toBe('700');
     expect(fs.readFileSync(path.join(show, 'app.js'), 'utf8')).toBe('console.log(1);\n');
-    // The worktree is gone; the show stays, beside it, and nothing temporary is left.
-    expect(fs.existsSync(buildPlaces(stateDir, BCH).tree)).toBe(false);
-    expect(fs.readdirSync(path.dirname(show)).sort()).toEqual(['own', 'show']);
-    // The builder's own last line is as it was: the server says the rest.
-    expect(board.state.feed.at(-1)?.text).toMatch(/^Every part is built, on the branch board\/adder.*Merge it when you are ready: git merge board\/adder\.$/);
+    // The worktree stays, the show beside it, and nothing temporary is left.
+    expect(fs.readdirSync(path.dirname(show)).sort()).toEqual(['own', 'place.json', 'show', 'tree']);
+    expect(board.state.feed.at(-1)?.text).toMatch(/^Every part is built, on the branch board\/an-adder.*Try it on the board, then approve it to merge it into main\.$/);
   }, 60_000);
 
   it('a page that needs a build step gives no show, and the build is done all the same', async () => {
@@ -667,6 +685,21 @@ describe('the fence and the records, as data', () => {
     root = fresh('e');
     expect(writeRecords(root, 'c1', '# brief\n', decide)).toEqual({ brief: 'docs/briefs/c1.md', decision: 'docs/adr/0001-c1.md', written: true });
     expect(() => safeDir(root, '../escape')).toThrow(RecordPathError);
+  });
+
+  it('a free record name skips every name a brief or a decision record has, and a resume finds its own record by its whole name', () => {
+    const root = path.join(tmp, 'names');
+    fs.mkdirSync(path.join(root, 'docs', 'briefs'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'docs', 'adr'));
+    fs.writeFileSync(path.join(root, 'docs', 'briefs', 'An-Adder.md'), 'theirs\n');
+    fs.writeFileSync(path.join(root, 'docs', 'adr', '0002-an-adder-2.md'), 'theirs\n');
+    expect(freeRecordName(root, 'an-adder', new Set())).toBe('an-adder-3');
+    expect(freeRecordName(root, 'an-adder', new Set(['an-adder-3']))).toBe('an-adder-4');
+    expect(freeRecordName(root, 'other', new Set())).toBe('other');
+    fs.writeFileSync(path.join(root, 'docs', 'briefs', 'c1.md'), 'ours\n');
+    fs.writeFileSync(path.join(root, 'docs', 'adr', '0003-big-c1.md'), 'theirs\n');
+    fs.writeFileSync(path.join(root, 'docs', 'adr', '0004-c1.md'), 'ours\n');
+    expect(writeRecords(root, 'c1', '# brief\n', () => '# a decision\n')).toEqual({ brief: 'docs/briefs/c1.md', decision: 'docs/adr/0004-c1.md', written: false });
   });
 
   it('records go where the repository\'s Keel block says, inside the repository only', () => {

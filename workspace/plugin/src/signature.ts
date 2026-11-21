@@ -12,6 +12,7 @@ import {
   ModelData,
   PipelinePicture,
   ShelfPicture,
+  ShowPlan,
   SpreadPicture,
   Sub,
   Target,
@@ -41,6 +42,8 @@ type Node = {
   maxItems?: number;
   items?: Node;
   anyOf?: Node[];
+  /** A discriminated union: one of these, told apart by a key they all have. */
+  oneOf?: Node[];
   properties?: Record<string, Node>;
   required?: string[];
 };
@@ -52,7 +55,7 @@ function schemaOf(s: z.ZodType): Node {
 
 const key = (n: Node) => JSON.stringify(n);
 
-/** Sub-schemas printed by name. The pictures that hold a whole model say `model`. */
+/** Sub-schemas printed by name. The pictures that hold a whole model say `model`; a blueprint says `show`. */
 const NAMED = new Map<string, string>([
   [key(schemaOf(Id)), 'id'],
   [key(schemaOf(Sub)), 'sub'],
@@ -60,6 +63,7 @@ const NAMED = new Map<string, string>([
   [key(schemaOf(ModelData)), 'candidate-model'],
   [key(schemaOf(LanesApproach)), 'lanes-approach'],
   [key(schemaOf(FreeApproach)), 'free-approach'],
+  [key(schemaOf(ShowPlan)), 'show'],
 ]);
 
 function count(min: number | undefined, max: number | undefined): string {
@@ -71,6 +75,7 @@ function render(n: Node, top = false): string {
   const named = top ? undefined : NAMED.get(key(n));
   if (named) return named;
   if (n.anyOf) return n.anyOf.map((x) => render(x)).join(' | ');
+  if (n.oneOf) return n.oneOf.map((x) => render(x)).join(' | ');
   if (n.const !== undefined) return JSON.stringify(n.const);
   if (n.enum) return n.enum.map((v) => JSON.stringify(v)).join('|');
   switch (n.type) {
@@ -124,7 +129,8 @@ export function pictureSignature(kind: PictureKind): string {
 
 /**
  * Every keys line the grammar file carries, by the name its block has there: the eleven
- * picture kinds, the two kinds of approach in a spread, and the candidate model of a pipeline.
+ * picture kinds, the two kinds of approach in a spread, the candidate model of a pipeline, and
+ * the show of a blueprint.
  * The board's own model (`board_model`) is added by the tools, which own its input schema.
  */
 export function grammarSignatures(): Record<string, string> {
@@ -133,5 +139,6 @@ export function grammarSignatures(): Record<string, string> {
   out['lanes-approach'] = signatureOf(LanesApproach);
   out['free-approach'] = signatureOf(FreeApproach);
   out['candidate-model'] = signatureOf(ModelData);
+  out.show = signatureOf(ShowPlan);
   return out;
 }

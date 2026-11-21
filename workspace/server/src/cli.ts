@@ -5,8 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { WebSocket } from 'ws';
-import type { BoardEvent, DigestReply, Refusal, ServerMessage } from '@keel/protocol';
-import { BOARD_DIR, ROUTES, formatEvent } from '@keel/protocol';
+import type { BoardEvent, BoardState, DigestReply, HomeInfo, Refusal, ServerMessage } from '@keel/protocol';
+import { BOARD_DIR, ROUTES, canvasTitle, chaptersOn, formatEvent } from '@keel/protocol';
 import type { BuildInfo } from './build';
 import { parseLinkOptions } from './link';
 import { BoardBusyError, lockHolder, privatePlace } from './private';
@@ -347,9 +347,36 @@ async function status(boardDir: string, io: Io): Promise<number> {
   io.out(`board    ${oneLine(b.name)} · e${b.seq} · ${b.open} open`);
   io.out(`agent    ${oneLine(b.link)} · ${p.state}${p.note ? ` (${oneLine(p.note)})` : ''}`);
   io.out(`builder  ${oneLine(b.builder ?? 'none')} · ${oneLine(buildLine(b.build, b.builder ?? 'none'))}`);
+  // The branches are facts of this machine, said to the owner: this command is the owner here.
+  const { body: o } = await call<BoardInfoReply>(f, f.tokens.owner, ROUTES.board);
+  if (o.home) io.out(`home     ${oneLine(homeLine(o.home))}`);
+  const { body: state } = await call<BoardState>(f, f.tokens.system, ROUTES.state);
+  for (const id of state.canvasOrder ?? []) {
+    const w = o.works?.[id];
+    const n = [w?.ahead !== undefined ? `${w.ahead} ahead` : '', w?.behind ? `${w.behind} behind` : ''].filter(Boolean).join(', ');
+    const branch = w?.branch ? `${w.branch}${n ? ` (${n} of ${o.home?.branch ?? 'home'})` : ''}` : 'no branch here';
+    const ideas = chaptersOn(state, id).map((c) => `${c.title} (${c.merged ? 'merged' : c.state})`);
+    io.out(`canvas   ${oneLine(canvasTitle(state, id) || id)} · ${oneLine(branch)} · ${oneLine(ideas.length > 0 ? ideas.join(', ') : 'blank')}`);
+  }
   // No token and no code here: "link" prints an address that works once.
   io.out(`page     ${originOf(f)}/  ("keel-board link" prints an address that opens it)`);
   return 0;
+}
+
+/** The home branch, in one line. */
+export function homeLine(h: HomeInfo): string {
+  const head = `${h.branch} · ${h.commit ?? 'no commit yet'}`;
+  const where = h.folderOn ? ` · your folder is on ${h.folderOn}` : '';
+  switch (h.sync) {
+    case 'level':
+      return `${head} · level with ${h.upstream ?? 'its remote'}${where}`;
+    case 'ahead':
+      return `${head} · ${h.ahead === 1 ? 'one commit' : `${h.ahead ?? 'some'} commits`} to push${where}`;
+    case 'local':
+      return `${head}${h.commit ? ' · follows no remote' : ''}${where}`;
+    default:
+      return `${head} · ${h.note ?? h.sync}${where}`;
+  }
 }
 
 /** How far the build is, in one line. */
@@ -367,7 +394,7 @@ export function buildLine(b: BuildInfo | undefined, builder: string): string {
     case 'paused':
       return `"${b.title}" is paused: ${tally}`;
     case 'stopped':
-      return `"${b.title}" stopped: ${tally}. Pause and resume it to try again`;
+      return `"${b.title}" stopped: ${tally}. Press Try again on the board to go on`;
     case 'unagreed':
       return `"${b.title}" is building in the log, but you have not agreed to it on this machine: nothing runs until you press Resume${b.check ? `. Its check: ${b.check}` : ''}`;
   }

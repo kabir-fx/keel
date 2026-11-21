@@ -49,7 +49,6 @@ async function inView(page: Page, selector: string): Promise<boolean> {
   return (w * h) / (b.width * b.height) > 0.6;
 }
 
-const overlaps = (a: Box, b: Box) => a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
 
 test('checkpoint 5 opens on the board: the blueprint waits for the go, and no build shows yet', async ({ page }) => {
   await open(page, 5);
@@ -168,7 +167,7 @@ test('the build folds away to one line, and comes back', async ({ page }) => {
   await expect(page.getByTestId('feed')).toBeVisible();
 });
 
-test('checkpoint 7 opens in the Story: every chapter newest first, its moments, the whole pipeline, the progress', async ({ page }) => {
+test('checkpoint 7 opens in the Story: the canvas with each idea on it, its moments, the whole pipeline, the progress', async ({ page }) => {
   await open(page, 7);
   const story = page.getByTestId('story');
   await expect(story).toBeVisible();
@@ -176,21 +175,24 @@ test('checkpoint 7 opens in the Story: every chapter newest first, its moments, 
   await expect(page.getByRole('button', { name: 'Story' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('board-name')).toHaveText('uLLM · the story');
   await expect(page.getByTestId('idea-count')).toHaveText('2 ideas · 1 built');
-  const chapters = await story.locator('article.chapter').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.chapter));
-  expect(chapters).toEqual(['api-server', 'engine-loop']);
-  const built = story.locator('article[data-chapter="engine-loop"]');
-  await expect(built).toHaveAttribute('data-state', 'built');
-  await expect(built.getByTestId('chapter-progress')).toContainText('7 of 7 parts built');
-  await expect(built.locator('.chapter__when')).toContainText('built ');
-  const moments = await built.locator('.moment__title').allTextContents();
+  // A log from before canvases puts every idea on one canvas, named by its first idea.
+  const cards = story.locator('article[data-canvas]');
+  await expect(cards).toHaveCount(1);
+  const canvas = cards.first();
+  await expect(canvas).toHaveAttribute('data-canvas', 'engine-loop');
+  await expect(canvas.locator('.chapter__title h3')).toHaveText('The engine loop');
+  await expect(canvas.locator('.chapter__when')).toContainText('2 ideas, one branch');
+  const chapters = await canvas.locator('li[data-chapter]').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.chapter));
+  expect(chapters).toEqual(['engine-loop', 'api-server']);
+  await expect(canvas.locator('li[data-chapter="engine-loop"]').getByTestId('idea-state')).toHaveText('built: try it');
+  await expect(canvas.locator('li[data-chapter="api-server"]').getByTestId('idea-state')).toHaveText('idea');
+  const moments = await canvas.locator('.moment:not(.moment--main) .moment__title').allTextContents();
   expect(moments).toEqual(['1 · Your note and sketch', '2 · Three ways, your marks', '3 · The model, one request', '4 · The bridge, opened', '5 · The blueprint', '6 · Built, part by part']);
   // Each moment is a small live drawing of its items.
-  await expect(built.locator('[data-moment="e53"] [data-kind="blueprint"]')).toHaveCount(1);
+  await expect(canvas.locator('[data-moment="e53"] [data-kind="blueprint"]')).toHaveCount(1);
   // The new idea has no moment yet: its note and the agent's placeholder stand for it.
-  const idea = story.locator('article[data-chapter="api-server"]');
-  await expect(idea).toHaveAttribute('data-state', 'idea');
-  await expect(idea.locator('.moment--main')).toHaveCount(2);
-  await expect(idea).toContainText('Now put HTTP in front of it');
+  await expect(canvas.locator('.moment--main')).toHaveCount(2);
+  await expect(canvas.locator('.moment--main').first()).toContainText('Now put HTTP in front of it');
   // The whole pipeline, flat and live, with the legend.
   const whole = page.getByTestId('whole-pipeline');
   await expect(whole.locator('[data-kind="pipeline"]')).toHaveAttribute('data-view', 'flat');
@@ -223,37 +225,42 @@ test('the Board / Story switch; a press on a moment goes to it on the board', as
   await page.locator('[data-moment="e48"]').click();
   await expect(page.getByTestId('story')).toHaveCount(0);
   await expect.poll(() => inView(page, '[data-item="focus"]')).toBe(true);
-  // A chapter: the board shows all of it.
+  // A canvas: the board shows all of it.
   await page.getByRole('button', { name: 'Story' }).click();
-  await page.locator('article[data-chapter="engine-loop"] .chapter__head').click();
+  await page.locator('article[data-canvas="engine-loop"] .chapter__head').click();
   await expect(page.getByTestId('story')).toHaveCount(0);
   await expect(page.getByTestId('board-name')).toContainText('The engine loop');
 });
 
-test('the next idea starts with one note, in a new chapter, clear of everything on the board', async ({ page }) => {
+test('the next idea starts on a new canvas: a blank board, and one note there starts it, apart from everything else', async ({ page }) => {
   await open(page, 7);
   const n0 = (await admitted(page)).length;
-  const note = page.getByTestId('next-idea').getByRole('textbox');
-  await note.fill('Batches of many requests at once');
-  await page.getByTestId('next-idea').getByRole('button', { name: 'Start it' }).click();
-  await expect.poll(async () => (await admitted(page)).slice(n0).map((e) => e.type)).toEqual(['chapter.open', 'item.add']);
-  const [open1, add] = (await admitted(page)).slice(n0);
-  expect(open1).toMatchObject({ by: 'owner', title: 'Batches of many requests at once' });
+  const box = page.getByTestId('new-canvas');
+  await expect(box).toContainText('Each canvas gets a branch of its own');
+  await box.getByRole('button', { name: 'Start a new canvas' }).click();
+  await expect.poll(async () => (await admitted(page)).slice(n0).map((e) => e.type)).toEqual(['canvas.open']);
+  const opened = (await admitted(page))[n0] as Admitted & { canvas: string };
+  expect(opened.by).toBe('owner');
+  // The board shows again, on the blank canvas: nothing of the first canvas is on it.
+  await expect(page.getByTestId('story')).toHaveCount(0);
+  await expect(page.locator('.layer > [data-item]')).toHaveCount(0);
+  await expect(page.getByTestId('canvas-name')).toHaveText(' · Untitled canvas');
+
+  await page.getByRole('button', { name: 'Write a note' }).click();
+  await page.mouse.click(420, 360);
+  await page.keyboard.type('Batches of many requests at once');
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await admitted(page)).slice(n0 + 1).map((e) => e.type)).toEqual(['chapter.open', 'item.add']);
+  const [open1, add] = (await admitted(page)).slice(n0 + 1) as Array<Admitted & { canvas?: string }>;
+  expect(open1).toMatchObject({ by: 'owner', title: 'Batches of many requests at once', canvas: opened.canvas });
   const item = add!.item as { id: string; kind: string; text: string; box: Box };
   expect(add!.chapter).toBe(open1!.chapter);
   expect(item).toMatchObject({ kind: 'note', text: 'Batches of many requests at once' });
-  // The board shows again, at the note, and the pill follows the new chapter.
-  await expect(page.getByTestId('story')).toHaveCount(0);
+  // The note is in view, alone on its canvas, and the pill follows the new idea.
   await expect(page.locator(`[data-item="${item.id}"]`)).toBeVisible();
   expect(await inView(page, `[data-item="${item.id}"]`)).toBe(true);
-  await expect(page.getByTestId('board-name')).toContainText('Batches of many requests at once');
+  await expect(page.locator('.layer > [data-item]')).toHaveCount(1);
+  await expect(page.getByTestId('canvas-name')).toHaveText(' · Batches of many requests at once');
   await expect(page.getByTestId('chapter-state')).toHaveText('idea');
-  // Nothing else on the board is where the note is.
-  const boxes = await page.locator('.layer > [data-item][data-box]').evaluateAll((els) =>
-    els.map((e) => ({ id: (e as HTMLElement).dataset.item!, box: (e as HTMLElement).dataset.box!.split(',').map(Number) })),
-  );
-  const others = boxes.filter((b) => b.id !== item.id);
-  expect(others.length).toBeGreaterThan(20);
-  for (const o of others) expect(overlaps(item.box, o.box as Box), `the note overlaps ${o.id}`).toBe(false);
   await page.screenshot({ path: `${SHOTS}/story-next-idea.png` });
 });

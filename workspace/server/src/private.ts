@@ -3,8 +3,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { Id } from '@keel/protocol';
-import { MAX_FOREIGN_RANGES, MAX_SHOWS, PRIVATE_BOARD_FILE, PrivateBoardFile, STATE_DIR_ENV, privateBoardKey } from '@keel/protocol';
+import type { Id, ShowPlan } from '@keel/protocol';
+import { MAX_FOREIGN_RANGES, MAX_SHOWS, MAX_WORKS, PRIVATE_BOARD_FILE, PrivateBoardFile, STATE_DIR_ENV, privateBoardKey, sameShow } from '@keel/protocol';
 import { NOFOLLOW, errCode, lstatOf, readNoFollow, replaceFile, writeAll } from './files';
 
 /**
@@ -14,7 +14,7 @@ import { NOFOLLOW, errCode, lstatOf, readNoFollow, replaceFile, writeAll } from 
  *     board.json      0600  `PrivateBoardFile`: the owner's token, the port, the running server's
  *                           tokens, the builds the owner agreed to on this machine, the
  *                           seal of the log as this machine's server last wrote it, and
- *                           what finished builds have to show
+ *                           what finished builds have to show, and each build's branch
  *     server.lock     0600  held while a server runs, so two servers never write one log
  *     link/           0700  the agent link's own files (`LinkContext.stateDir`)
  *     builder/        0700  the builder's own files (`BuilderContext.stateDir`)
@@ -37,6 +37,13 @@ export type LogSeal = NonNullable<PrivateBoardFile['log']>;
 export type ForeignRange = NonNullable<PrivateBoardFile['foreign']>[number];
 /** What a finished build shows: the real path of its folder, its page, when it came, and whether it was opened. */
 export type KeptShow = NonNullable<PrivateBoardFile['shows']>[number];
+/** Where a canvas's build lives: its branch, as the builder reported it. */
+export type KeptWork = NonNullable<PrivateBoardFile['works']>[number];
+/** What a press of "Build this" agrees to beside the check: the setup and how the result is tried. */
+export interface ConsentTerms {
+  setup?: string;
+  show?: ShowPlan;
+}
 
 export interface PrivatePlace {
   /** `<root>/boards/<key>` */
@@ -268,20 +275,55 @@ export class PrivateBoard {
     return n;
   }
 
-  /** The owner agreed, live, to build a chapter with this check and track. */
+  /** Each canvas's branch, oldest first. */
+  get works(): readonly KeptWork[] {
+    return this.data.works ?? [];
+  }
+
+  /** The branch a canvas's build lives on, as the builder last said. */
+  workOf(canvas: Id): string | undefined {
+    return this.works.find((w) => w.canvas === canvas)?.branch;
+  }
+
+  /** Keep where a canvas's build lives. It takes the place of the canvas's last one, and the oldest go past `MAX_WORKS`. */
+  setWork(work: KeptWork): void {
+    if (this.workOf(work.canvas) === work.branch) return;
+    const kept = this.works.filter((w) => w.canvas !== work.canvas);
+    this.data = { ...this.data, works: [...kept, work].slice(-MAX_WORKS) };
+    this.save();
+  }
+
+  /**
+   * Forget what this machine kept for a canvas and the chapters on it: its branch, what they
+   * showed, and the owner's agreements to build them. The file is written only when something went.
+   */
+  forget(canvas: Id, chapters: readonly Id[]): void {
+    const works = this.works.filter((w) => w.canvas !== canvas);
+    const shows = this.shows.filter((x) => !chapters.includes(x.chapter));
+    const consents = this.consents.filter((c) => !chapters.includes(c.chapter));
+    if (works.length === this.works.length && shows.length === this.shows.length && consents.length === this.consents.length) return;
+    const { works: _w, shows: _s, consents: _c, ...rest } = this.data;
+    this.data = { ...rest, ...(works.length > 0 ? { works } : {}), ...(shows.length > 0 ? { shows } : {}), ...(consents.length > 0 ? { consents } : {}) };
+    this.save();
+  }
+
+  /** The owner agreed, live, to build a chapter with this check and track, and this setup and show. */
   addConsent(c: Consent): void {
-    const same = (x: Consent) => x.chapter === c.chapter && x.check === c.check && sameList(x.track, c.track);
+    const same = (x: Consent) => x.chapter === c.chapter && x.check === c.check && sameList(x.track, c.track) && x.setup === c.setup && sameShow(x.show, c.show);
     const kept = this.consents.filter((x) => !same(x));
     this.data = { ...this.data, consents: [...kept, c].slice(-MAX_CONSENTS) };
     this.save();
   }
 
-  /** A consent for this chapter whose check is exactly `check` and whose track holds every part of `track`. */
-  consentFor(chapter: Id, check: string | undefined, track: readonly Id[]): Consent | undefined {
+  /**
+   * A consent for this chapter whose check is exactly `check`, whose track holds every part of
+   * `track`, and whose setup and show are exactly `terms`: none agreed to none.
+   */
+  consentFor(chapter: Id, check: string | undefined, track: readonly Id[], terms: ConsentTerms = {}): Consent | undefined {
     if (check === undefined) return undefined;
     for (let i = this.consents.length - 1; i >= 0; i--) {
       const c = this.consents[i]!;
-      if (c.chapter === chapter && c.check === check && track.every((p) => c.track.includes(p))) return c;
+      if (c.chapter === chapter && c.check === check && c.setup === terms.setup && sameShow(c.show, terms.show) && track.every((p) => c.track.includes(p))) return c;
     }
     return undefined;
   }

@@ -3,7 +3,7 @@ import { createElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import type { HintFacts } from '../src/hints';
-import { blueprintWaits, emptyLine, HINTS, hintFor, TOOL_LINES } from '../src/hints';
+import { blueprintWaits, buildWaits, emptyLine, HINTS, hintFor, TOOL_LINES } from '../src/hints';
 import type { LocalSource } from '../src/source';
 import { localSource } from '../src/source';
 import { CH, Board, note, openBoard, placeAt, text } from './helpers';
@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 /** A board where nothing calls for a word: the Select tool in hand, the agent listening, things on the board. */
-const QUIET: HintFacts = { penGo: false, field: undefined, agentWaits: false, questions: 0, lassoed: 0, toBuild: false, tool: 'select', empty: false, away: false };
+const QUIET: HintFacts = { penGo: false, field: undefined, agentWaits: false, questions: 0, lassoed: 0, toBuild: false, toTry: false, tool: 'select', empty: false, away: false };
 
 const facts = (over: Partial<HintFacts>): HintFacts => ({ ...QUIET, ...over });
 
@@ -38,6 +38,7 @@ describe('the hint line: one table, the first rule that matches wins', () => {
       ['a lasso holds one thing', { lassoed: 1 }, solidifyLine(1)],
       ['a lasso holds three things', { lassoed: 3 }, solidifyLine(3)],
       ['a blueprint waits to be built', { toBuild: true }, 'Read the blueprint, then press Build this.'],
+      ['a build waits to be tried and approved', { toTry: true }, 'Press Try it to run what was built. When it does what you asked, approve it.'],
       ['the pen in hand', { tool: 'pen' }, 'Draw on a picture to mark it. Its buttons still work.'],
       ['the board is empty', { empty: true }, emptyLine(false)],
       ['the board is empty and the agent away', { empty: true, away: true }, 'Write it, draw it, drop something in, or say it. The agent is away: it reads what you add when it is back.'],
@@ -163,6 +164,30 @@ describe('a blueprint that waits for "Build this"', () => {
     expect(b.state.chapters.c2?.state).toBe('solid');
     expect(blueprintWaits(b.state, 'c2')).toBe(false);
     expect(blueprintWaits(b.state, CH)).toBe(true);
+  });
+});
+
+describe('a build that waits to be tried', () => {
+  it('on the board, the line says Try it, then approve; once merged, it says nothing', async () => {
+    const b = openBoard();
+    b.must('owner', note('m1', [0, 0, 320, 100]));
+    b.must('owner', { type: 'item.add', chapter: CH, item: { id: 'l1', kind: 'lasso', box: [0, 0, 400, 200], path: [0, 0, 400, 0, 400, 200], targets: [{ item: 'm1' }] } });
+    b.must('agent', { type: 'model.patch', ops: [{ op: 'lane.set', lane: { id: 'core', name: 'Core' } }, { op: 'part.set', part: { id: 'sched', name: 'The scheduler', lane: 'core' } }] });
+    b.must('owner', { type: 'solidify', chapter: CH, picks: ['m1'], parts: ['sched'], lasso: 'l1' });
+    b.must('agent', { type: 'item.add', chapter: CH, item: { id: 'bp', kind: 'picture', answers: ['m1'], picture: { kind: 'blueprint', title: 'The plan', picks: [{ text: 'one engine' }], proof: ['it runs'], parts: ['sched'], check: 'make check' } } });
+    b.must('owner', { type: 'build.start', chapter: CH, track: ['sched'], blueprint: 'bp', check: 'make check' });
+    b.must('system', { type: 'part.state', part: 'sched', state: 'building' });
+    b.must('system', { type: 'part.state', part: 'sched', state: 'built', commit: 'abc1234', check: { cmd: 'make check', passed: true } });
+    expect(buildWaits(b.state, CH)).toBe(true);
+    const src = localSource({ events: b.events });
+    render(createElement(App, { source: src }));
+    expect(shownLine()).toBe('Press Try it to run what was built. When it does what you asked, approve it.');
+    await act(async () => {
+      await src.post({ type: 'canvas.approve', canvas: CH });
+      await src.postAs('system', { type: 'canvas.merged', canvas: CH, commit: 'abc1234', into: 'main' });
+    });
+    expect(shownLine()).toBeNull();
+    expect(buildWaits(src.state, CH)).toBe(false);
   });
 });
 

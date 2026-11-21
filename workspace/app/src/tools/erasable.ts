@@ -6,7 +6,7 @@
  * a long way between two frames still meets what it crossed; and the eraser reaches
  * `max(2.25, 5 / zoom)` past a line. Ink is tested against the centre line of its strokes, as the
  * log keeps them, with half the stroke's width added; a box on its border, an arrow on its line
- * and the sides of its head, a pin on its icon.
+ * and the sides of its head, a pin on its icon, a picture anywhere on its frame.
  *
  * Adapted from Excalidraw (MIT licence, copyright 2020 Excalidraw), at commit 9fbeaed:
  * - the test of the newest piece, and the reach, from packages/excalidraw/eraser/index.ts
@@ -15,8 +15,9 @@
  * Changed for the board: ink is tested on the centre line the log keeps, not on its outline,
  * with half its width added, and what is reached is decided by the board's own kinds of mark.
  *
- * Only the owner's own drawing is erased: ink, boxes, arrows and pins. A picture, a note, a file,
- * a remark and a lasso go with Delete.
+ * The eraser takes the owner's drawing (ink, boxes, arrows and pins) and the agent's pictures,
+ * which the owner may take off as they may with Delete. A note, a file, a remark and a lasso go
+ * with Delete only: they hold the owner's words and picks, not a stroke to rub out.
  */
 
 import type { Box, Id, Item } from '@keel/protocol';
@@ -36,12 +37,20 @@ export interface Line {
   readonly half: number;
 }
 
+/**
+ * What a thing is to the eraser: the owner's drawing, or a picture it lies on. One sweep takes
+ * one of the two (`eraserTool`): the drawing when it reaches any, so rubbing out a line on a
+ * picture never takes the picture with it.
+ */
+export type EraseLayer = 'drawing' | 'picture';
+
 /** One thing the eraser can take off, as it is drawn now, in board units. */
 export interface Erasable {
   readonly id: Id;
+  readonly layer: EraseLayer;
   readonly lines: readonly Line[];
-  /** For a pin, its icon: the eraser that comes inside it reaches the pin. */
-  readonly icon?: Box;
+  /** The eraser that comes inside this reaches the thing: a pin's icon, a picture's frame. */
+  readonly inside?: Box;
   /** The box round all of it, the width of its lines included: the quick first test. */
   readonly bounds: Box;
 }
@@ -76,14 +85,15 @@ function boundsOf(lines: readonly Line[]): Box {
 }
 
 /**
- * The lines of a thing as it is drawn now, at `shown`: ink, a box, an arrow or a pin. Any other
- * kind is none, and the eraser leaves it be.
+ * The lines of a thing as it is drawn now, at `shown`: ink, a box, an arrow, a pin or a picture.
+ * Any other kind is none, and the eraser leaves it be.
  */
-function linesOf(where: Where, it: Item, shown: Box, z: number): { lines: Line[]; icon?: Box } | undefined {
+function linesOf(where: Where, it: Item, shown: Box, z: number): { layer: EraseLayer; lines: Line[]; inside?: Box } | undefined {
   switch (it.kind) {
     case 'ink': {
       const [sx, sy] = markScale(it.box, shown);
       return {
+        layer: 'drawing',
         lines: it.strokes.map((s) => ({
           pts: samples(s.pts, sx, sy).map(([x, y]): XY => [shown[0] + x, shown[1] + y]),
           half: inkWidth(s.w ?? PEN.size, sx, sy) / 2,
@@ -93,16 +103,19 @@ function linesOf(where: Where, it: Item, shown: Box, z: number): { lines: Line[]
     case 'box': {
       // The middle of its line runs half the line's width in from the box's edge.
       const i = BOX_LINE / 2;
-      return { lines: [{ pts: closed([shown[0] + i, shown[1] + i, shown[2] - BOX_LINE, shown[3] - BOX_LINE]), half: i }] };
+      return { layer: 'drawing', lines: [{ pts: closed([shown[0] + i, shown[1] + i, shown[2] - BOX_LINE, shown[3] - BOX_LINE]), half: i }] };
     }
     case 'arrow': {
       const [from, to] = arrowEnds(where, it, shown);
-      return { lines: arrowLines(from, to).map((pts) => ({ pts, half: ARROW_LINE / 2 / z })) };
+      return { layer: 'drawing', lines: arrowLines(from, to).map((pts) => ({ pts, half: ARROW_LINE / 2 / z })) };
     }
     case 'pin': {
       const icon = pinIcon(shown, it.at);
-      return { lines: [{ pts: closed(icon), half: 0 }], icon };
+      return { layer: 'drawing', lines: [{ pts: closed(icon), half: 0 }], inside: icon };
     }
+    case 'picture':
+      // Its frame: a sweep that crosses it meets its edge, and one that starts inside it is inside.
+      return { layer: 'picture', lines: [{ pts: closed(shown), half: 0 }], inside: shown };
     default:
       return undefined;
   }
@@ -110,13 +123,16 @@ function linesOf(where: Where, it: Item, shown: Box, z: number): { lines: Line[]
 
 /**
  * Everything the eraser can take off, as it is drawn now: the owner's ink, boxes, arrows and
- * pins, at `shown`, the boxes they are drawn at. Measured once when a press starts: `z` is the
- * zoom then, which an arrow's width on screen is counted in.
+ * pins, and the agent's pictures. `shown` is the boxes they are drawn at; `framed`, the size a
+ * thing in a frame is drawn at (a picture, and a box its words made taller), where it was
+ * measured. Measured once when a press starts: `z` is the zoom then, which an arrow's width on
+ * screen is counted in.
  */
-export function erasables(where: Where, shown: ReadonlyMap<Id, Box>, z: number): Erasable[] {
+export function erasables(where: Where, shown: ReadonlyMap<Id, Box>, z: number, framed: ReadonlyMap<Id, Box> = new Map()): Erasable[] {
   const out: Erasable[] = [];
   for (const s of liveItems(where.state)) {
-    const box = shown.get(s.item.id);
+    const inFrame = s.item.kind === 'picture' || s.item.kind === 'box';
+    const box = (inFrame ? framed.get(s.item.id) : undefined) ?? shown.get(s.item.id);
     const drawn = box && linesOf(where, s.item, box, z);
     if (!drawn) continue;
     out.push({ id: s.item.id, ...drawn, bounds: boundsOf(drawn.lines) });
@@ -150,8 +166,8 @@ const meet = (a: Box, b: Box): boolean => a[0] <= b[0] + b[2] && b[0] <= a[0] + 
 
 /** Does the eraser's piece come within `reach` of this thing? */
 function touches(thing: Erasable, piece: ReadonlyArray<readonly [XY, XY]>, reach: number): boolean {
-  const { icon } = thing;
-  if (icon && piece.some(([a]) => inBox(a[0], a[1], icon))) return true;
+  const { inside } = thing;
+  if (inside && piece.some(([a, b]) => inBox(a[0], a[1], inside) || inBox(b[0], b[1], inside))) return true;
   for (const line of thing.lines) {
     const far = reach + line.half;
     for (const [c, d] of segmentsOf(line.pts)) {

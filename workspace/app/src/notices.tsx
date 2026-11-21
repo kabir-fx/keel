@@ -1,4 +1,5 @@
-import type { BoardState, Box, Id } from '@keel/protocol';
+import type { Elsewhere } from './canvases';
+import type { BoardState, Box, HomeInfo, Id } from '@keel/protocol';
 import { pictureTitle } from '@keel/protocol';
 import { Star } from '@keel/pictures';
 import { useState } from 'react';
@@ -7,6 +8,7 @@ import { useHeldBox } from './select/following';
 import type { MovingStore } from './select/moving';
 import type { Connection } from './source';
 import { REOPEN } from './source';
+import { homeLine } from './tryit';
 
 /**
  * The quiet things the board says at the top of the screen: that the server is gone or has
@@ -84,6 +86,81 @@ export function Nudge({ ids, state, onGo }: { ids: readonly Id[]; state: BoardSt
       </span>
       <span className="notice__go">Show me</span>
     </button>
+  );
+}
+
+/* ------------------------------------------------------------ other canvases */
+
+/**
+ * What happened on a canvas out of view: the agent drew there, an idea there is built, or its
+ * build needs the owner. One press goes there. With news on several, the most recent canvas
+ * is named and the rest are counted.
+ */
+export function ElsewhereNotice({ news, onGo }: { news: readonly Elsewhere[]; onGo: (canvas: Id) => void }) {
+  const first = news[0];
+  if (!first) return null;
+  return (
+    <div className={`notice notice--elsewhere notice--${first.what}`} role="status" data-testid="elsewhere" data-canvas={first.canvas} data-what={first.what}>
+      <span>
+        {first.line}
+        {news.length > 1 ? ` And news on ${news.length - 1} more ${news.length === 2 ? 'canvas' : 'canvases'}, in the Story.` : ''}
+      </span>
+      <span className="notice__actions">
+        <button type="button" className="notice__btn notice__btn--dark" data-testid="elsewhere-go" onClick={() => onGo(first.canvas)}>
+          Go to “{first.name}”
+        </button>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Everything on the canvas in view is built: a note written here starts another idea on the
+ * same branch. Said before it is written, with the way to a separate one.
+ */
+export function CanvasDoneNotice({ branch, onNewCanvas }: { branch: string | undefined; onNewCanvas: () => void }) {
+  return (
+    <div className="notice notice--done" role="status" data-testid="canvas-done">
+      <span>
+        Everything on this canvas is built. A new note here starts another idea on {branch ? `its branch, ${branch}` : 'its branch'}, built together with the rest. For a separate
+        idea, start a new canvas.
+      </span>
+      <span className="notice__actions">
+        <button type="button" className="notice__btn" data-testid="canvas-done-new" onClick={onNewCanvas}>
+          Start a new canvas
+        </button>
+      </span>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ the home branch */
+
+/**
+ * The home branch needs the owner, or its remote did not answer: said once on the board, in
+ * the server's words, with the way to the Story's home line. Nothing when all is well, or it
+ * only has commits to push.
+ */
+export function homeNeeds(home: HomeInfo | undefined): string | undefined {
+  if (!home || (home.sync !== 'behind' && home.sync !== 'diverged' && home.sync !== 'unreachable')) return undefined;
+  return home.note ?? homeLine(home)?.words;
+}
+
+export function HomeNotice({ words, onShow, onDismiss }: { words: string; onShow: () => void; onDismiss: () => void }) {
+  return (
+    <div className="notice notice--home" role="status" data-testid="home-notice">
+      <span>
+        <b>Home branch.</b> {words}
+      </span>
+      <span className="notice__actions">
+        <button type="button" className="notice__btn" data-testid="home-notice-show" onClick={onShow}>
+          Show it in the Story
+        </button>
+        <button type="button" className="notice__btn notice__btn--quiet" data-testid="home-notice-dismiss" aria-label="Dismiss this notice" onClick={onDismiss}>
+          Dismiss
+        </button>
+      </span>
+    </div>
   );
 }
 

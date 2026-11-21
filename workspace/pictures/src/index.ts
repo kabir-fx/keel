@@ -21,5 +21,5 @@ export { measure, wrap } from './measure';
 export { DEFAULT_VIEW } from './Pipeline';
 export { LOOK_ORDER, LOOK_WORD, lookOf } from './theme';
 export type { Look } from './theme';
-export type { PictureAct, PictureProps, PictureView } from './types';
+export type { BuildPlace, PictureAct, PictureProps, PictureView } from './types';
 export { NO_MARKINGS } from './types';

@@ -4,23 +4,28 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { BoardState, BuildJob, BuildResult, Builder, BuilderContext, CreateBuilder } from '@keel/protocol';
-import { STATE_DIR_ENV, oneLine, remarksOnPart, renderBrief } from '@keel/protocol';
-import { stopLeftoverChecks } from './build-tools';
+import type { BoardState, BuildJob, BuildResult, Builder, BuilderContext, CreateBuilder, RefreshRequest, RefreshResult, RunShow, ShowRequest, ShowSession } from '@keel/protocol';
+import { STATE_DIR_ENV, admit, awaitsProof, oneLine, remarksOnPart, renderBrief } from '@keel/protocol';
+import { checkPlaces, keepDependencyFiles, runCheck, stopLeftoverChecks, tailOf } from './build-tools';
 import { BoardClient, BoardError } from './client';
 import { readStarts, recordStart } from './starts';
-import { BUILDER_IDENTITY, GitError, OwnerFilesError, ensureWorktree, folderFiles, git, gitInstalled, gitOk, hasIdentity, headOf, pinEnv, removeWorktree, repoTop, samePath } from './git';
+import { BUILDER_IDENTITY, GitError, OwnerFilesError, branchExists, branchFor, branchNames, dirtyFiles, ensureWorktree, folderFiles, git, gitInstalled, gitOk, hasIdentity, headOf, isAncestor, pinEnv, removeWorktree, repoTop, samePath, shortOf } from './git';
 import { DENIED_FILES, childEnv, realDir, ruleRoot, stateDirOf, stripFrontmatter } from './hosted-link';
-import { RecordPathError, renderDecision, replaceFile, safeDir, writeRecords } from './records';
-import { NO_SANDBOX_NOTE, defaultDenyRead, sandboxKind } from './sandbox';
+import { RecordPathError, freeRecordName, renderDecision, replaceFile, safeDir, writeRecords } from './records';
+import { NO_SANDBOX_NOTE, defaultDenyRead, packageCaches, sandboxKind } from './sandbox';
+import type { ShowPlaces } from './session';
+import { APP_WAIT_MS, endLeftoverShows, startApp, startTerminal } from './session';
 import { makeShow } from './show';
 
 /**
  * The hosted builder: the second seam (`Builder` in the contract). When the owner presses
- * "Build this", the board server calls `run`. The builder makes its own git worktree on its
- * own branch, `board/<chapter>`, in a private folder outside the repository, commits the
- * brief and a decision record there, and then runs a headless Claude Code process in it,
- * one turn per part of the build track.
+ * "Build this", the board server calls `run`. The copy and the branch are the canvas's: the
+ * first build on a canvas makes a git worktree on `board/<the canvas's title>`, from the home
+ * branch's commit, in a private folder outside the repository, and every later idea on that
+ * canvas is built there too. For each idea the builder commits the brief and a decision record,
+ * runs the agreed setup, and then runs a headless Claude Code process, one turn per part of the
+ * build track. The worktree stays when the build is done: the owner tries the build there
+ * (`show`), and an approval brings it level with the home branch there (`refresh`).
  *
  * The process is fenced like the hosted agent (ADR 0006): no settings, hooks or CLAUDE.md of
  * the repository's, the file tools kept inside the worktree, and the secret files denied. It
@@ -97,8 +102,10 @@ export interface BuilderOptions {
   allow: string[];
   /** A part's turns together may run this long. */
   partTimeoutMs: number;
-  /** The agreed check may run this long. */
+  /** The agreed check may run this long, and the setup too. */
   checkTimeoutMs: number;
+  /** An app has this long to answer on its port. */
+  appWaitMs: number;
   transcript: string | undefined;
   debug: boolean;
 }
@@ -120,6 +127,7 @@ export function builderOptions(o: Record<string, string> = {}): BuilderOptions {
     allow: allowList(o['builder-allow']),
     partTimeoutMs: secs(o['builder-timeout'], 1800),
     checkTimeoutMs: secs(o['check-timeout'], 600),
+    appWaitMs: secs(o['app-wait'], APP_WAIT_MS / 1000),
     transcript: o['builder-transcript'] ? path.resolve(o['builder-transcript']) : undefined,
     debug: o.debug === '1' || o.debug === 'true',
   };
@@ -213,14 +221,75 @@ export function grammarSection(grammar: string, kind: string): string {
   return (next < 0 ? rest : rest.slice(0, next + 3)).trim();
 }
 
-/** Where a chapter's build lives: its worktree, the builder's private files beside it, and the copy a finished build shows. */
-export function buildPlaces(stateDir: string, chapter: string): { base: string; tree: string; own: string; show: string } {
-  const base = path.join(stateDir, 'build', chapter);
-  return { base, tree: path.join(base, 'tree'), own: path.join(base, 'own'), show: path.join(base, 'show') };
+/**
+ * Where a canvas's build lives: its worktree, the builder's private files beside it, the copy
+ * a finished page shows, the pid files of its running shows, and its place: the branch, and the
+ * setups the owner agreed to. Every chapter on the canvas is built there.
+ */
+export function buildPlaces(stateDir: string, canvas: string): { base: string; tree: string; own: string; show: string; pids: string; place: string } {
+  const base = path.join(stateDir, 'build', canvas);
+  const own = path.join(base, 'own');
+  return { base, tree: path.join(base, 'tree'), own, show: path.join(base, 'show'), pids: path.join(own, 'shows'), place: path.join(base, 'place.json') };
+}
+
+/** A canvas's branch on this machine, the setups that make its copy ready, and the name of each chapter's records. */
+export interface Place {
+  branch: string;
+  setups: string[];
+  records: Record<string, string>;
+}
+
+/** A link in the file's place is not followed. */
+export function readPlace(stateDir: string, canvas: string): Place | undefined {
+  try {
+    const file = buildPlaces(stateDir, canvas).place;
+    if (!fs.lstatSync(file).isFile()) return undefined;
+    const v = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<Place>;
+    if (typeof v.branch !== 'string' || !v.branch.startsWith('board/')) return undefined;
+    const setups = Array.isArray(v.setups) ? v.setups.filter((x): x is string => typeof x === 'string') : [];
+    const records = v.records && typeof v.records === 'object' ? Object.fromEntries(Object.entries(v.records).filter(([, n]) => typeof n === 'string')) : {};
+    return { branch: v.branch, setups, records };
+  } catch {
+    return undefined;
+  }
+}
+
+function writePlace(stateDir: string, canvas: string, place: Place): void {
+  const file = buildPlaces(stateDir, canvas).place;
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(place)}\n`, { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
+/** The branches the other canvases on this machine hold. */
+function otherBranches(stateDir: string, canvas: string): string[] {
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(path.join(stateDir, 'build'));
+  } catch {
+    return [];
+  }
+  return names.filter((n) => n !== canvas).flatMap((n) => readPlace(stateDir, n)?.branch.toLowerCase() ?? []);
 }
 
 /** The board server clips a run's note at this length, and adds how to try again itself. */
 const NOTE_MAX = 200;
+
+/** In the builder's private folder: the setups that ran in the copy, as a JSON list. A copy made anew has none. */
+const SETUP_FILE = 'setup';
+
+/** A canvas's worktree, ready to run git and commands in. */
+interface Copy {
+  tree: string;
+  /** The board's folder in it. */
+  workdir: string;
+  gitDir: string;
+  /** Git pinned to the worktree's own git folder. */
+  pin: NodeJS.ProcessEnv;
+  /** The same, with who the builder's commits are by. */
+  identity: NodeJS.ProcessEnv;
+}
 
 /**
  * Why a build cannot start from nothing: the folder holds files of the owner's that no commit
@@ -413,9 +482,19 @@ export class HostedBuilder implements Builder {
   private closed = false;
   private proc: BuildProcess | undefined;
   private readonly agent: BoardClient;
-  /** The private folder of the chapter in build: where the checks' pid files are. */
+  /** The board as the system: what only our own code may say, such as `build.proved`. */
+  private readonly system: BoardClient;
+  /** The private folder of the canvas in build: where the checks' pid files are. */
   private own: string | undefined;
   private saidNoSandbox = false;
+  /** The canvas the run builds on now. */
+  private building: string | undefined;
+  /** The canvases a refresh or a discard works on now. */
+  private readonly busy = new Set<string>();
+  /** The shows that run, by canvas. */
+  private readonly shows = new Map<string, Set<ShowSession>>();
+  /** The process of a turn outside a run: joining the home branch. */
+  private side: BuildProcess | undefined;
 
   constructor(
     private readonly ctx: BuilderContext,
@@ -423,12 +502,14 @@ export class HostedBuilder implements Builder {
   ) {
     this.name = opts.off ? 'builder (off)' : `claude builder (${opts.model}, worktree)`;
     this.agent = new BoardClient(() => ({ url: ctx.serverUrl.replace(/\/+$/, ''), token: ctx.agentToken }));
+    this.system = new BoardClient(() => ({ url: ctx.serverUrl.replace(/\/+$/, ''), token: ctx.systemToken }));
   }
 
   run(job: BuildJob): Promise<BuildResult> {
     if (this.running) return Promise.resolve({ outcome: 'failed', note: 'A build runs already. The builder runs one build at a time.' });
     if (this.closed) return Promise.resolve({ outcome: 'failed', note: 'The builder is closed.' });
     this.pauseAsked = false;
+    this.building = job.canvas;
     const r = this.runJob(job)
       .catch((e: unknown): BuildResult => {
         const note = e instanceof Error ? e.message : String(e);
@@ -441,6 +522,7 @@ export class HostedBuilder implements Builder {
         if (this.own) stopLeftoverChecks(this.own);
         this.proc = undefined;
         this.running = undefined;
+        this.building = undefined;
       });
     this.running = r;
     return r;
@@ -453,9 +535,235 @@ export class HostedBuilder implements Builder {
   async close(): Promise<void> {
     this.closed = true;
     this.pauseAsked = true;
+    await Promise.all([...this.shows.keys()].map((ch) => this.stopShows(ch)));
     await this.proc?.stop(2000).catch(() => undefined);
+    await this.side?.stop(2000).catch(() => undefined);
     if (this.own) stopLeftoverChecks(this.own);
     await this.running?.catch(() => undefined);
+  }
+
+  /** End the shows a crash of an earlier server left running, by their pid files. */
+  async endLeftovers(): Promise<void> {
+    const root = path.join(stateDirOf(this.ctx), 'build');
+    let chapters: string[] = [];
+    try {
+      chapters = fs.readdirSync(root);
+    } catch {
+      return;
+    }
+    for (const cv of chapters) {
+      const n = await endLeftoverShows(buildPlaces(stateDirOf(this.ctx), cv).pids);
+      if (n) this.ctx.log(`builder: ended ${plural(n, 'show')} on canvas ${cv} left from before`);
+    }
+  }
+
+  private async stopShows(cv: string): Promise<void> {
+    const set = this.shows.get(cv);
+    if (!set) return;
+    await Promise.all([...set].map((s) => s.stop().catch(() => undefined)));
+    this.shows.delete(cv);
+  }
+
+  /**
+   * The canvas's copy, made again from its branch when it is gone, and made ready with the
+   * agreed setups when it is new (`ready: false` leaves that to the caller). Or why there is
+   * none to run in, as a sentence for the owner.
+   */
+  private async openCopy(cv: string, ready = true): Promise<Copy | string> {
+    const stateDir = stateDirOf(this.ctx);
+    const place = readPlace(stateDir, cv);
+    const top = await repoTop(this.ctx.repoDir);
+    if (!place || !top || !(await branchExists(top, place.branch))) return 'This machine has no copy of this build, and no branch for it.';
+    const places = buildPlaces(stateDir, cv);
+    const sub = path.relative(realDir(top), realDir(this.ctx.repoDir));
+    let made: Awaited<ReturnType<typeof ensureWorktree>>;
+    try {
+      made = await ensureWorktree(top, places.tree, place.branch, { board: sub });
+    } catch (e) {
+      return `The builder could not make its copy of ${place.branch} again: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    fs.mkdirSync(places.own, { recursive: true, mode: 0o700 });
+    if (!made.reused) fs.rmSync(path.join(places.own, SETUP_FILE), { force: true });
+    const copy = await this.copyAt(places.tree, sub, made.gitDir);
+    if (typeof copy === 'string') return copy;
+    for (const cmd of ready ? place.setups : []) {
+      const failed = await this.setUp(cv, undefined, copy, cmd);
+      if (failed) return failed;
+    }
+    return copy;
+  }
+
+  /**
+   * Run what a built chapter shows, in its copy, boxed in with the network on. It rejects, with
+   * a sentence for the owner, when nothing could start: no copy, a setup that fails, a fixed
+   * port that is taken.
+   */
+  async show(req: ShowRequest): Promise<ShowSession> {
+    if (this.closed) throw new Error('The builder is closed.');
+    if (this.building === req.canvas || this.busy.has(req.canvas)) throw new Error('The builder is working on this canvas now. Try it when that is done.');
+    const copy = await this.openCopy(req.canvas);
+    if (typeof copy === 'string') throw new Error(copy);
+    const set = this.shows.get(req.canvas) ?? new Set<ShowSession>();
+    this.shows.set(req.canvas, set);
+    let session: ShowSession | undefined;
+    let ended = false;
+    const h = {
+      onOutput: (t: string) => req.onOutput(t),
+      onExit: (code: number | null) => {
+        ended = true;
+        if (session) set.delete(session);
+        req.onExit(code);
+      },
+    };
+    const places = this.showPlaces(req.canvas, copy);
+    session = req.plan.kind === 'app' ? await startApp(req.plan, places, h, this.opts.appWaitMs) : await startTerminal(req.plan, places, h, { ...(req.cols ? { cols: req.cols } : {}), ...(req.rows ? { rows: req.rows } : {}) });
+    if (!ended) set.add(session);
+    return session;
+  }
+
+  /**
+   * Bring a canvas's branch level with the home branch, in its copy: merge the home commit in,
+   * run the setups and every agreed check on the result. When the two changed the same lines,
+   * the builder gets one turn to join them. A result that does not pass leaves the branch as it
+   * was. Nothing of the owner's moves.
+   */
+  async refresh(req: RefreshRequest): Promise<RefreshResult> {
+    const cv = req.canvas;
+    if (this.closed) return { outcome: 'failed', note: 'The builder is closed.' };
+    if (this.building === cv || this.busy.has(cv)) return { outcome: 'failed', note: 'The builder is working on this canvas now. Approve it again when it is done.' };
+    if (req.checks.length === 0) return { outcome: 'failed', note: 'No agreed check came with the approval, so the joined result cannot be shown to pass.' };
+    this.busy.add(cv);
+    try {
+      return await this.refreshNow(req);
+    } finally {
+      this.busy.delete(cv);
+    }
+  }
+
+  private async refreshNow(req: RefreshRequest): Promise<RefreshResult> {
+    const cv = req.canvas;
+    const home = `${req.home.branch} at ${req.home.commit.slice(0, 7)}`;
+    await this.stopShows(cv);
+    const copy = await this.openCopy(cv, false);
+    if (typeof copy === 'string') return { outcome: 'failed', note: copy };
+    const branch = readPlace(stateDirOf(this.ctx), cv)!.branch;
+    const known = await git(copy.workdir, ['rev-parse', '--verify', '--quiet', `${req.home.commit}^{commit}`], copy.pin);
+    if (known.code !== 0) return { outcome: 'failed', note: `${home} is not in this repository.` };
+    if (await isAncestor(copy.workdir, req.home.commit, 'HEAD', copy.pin)) return { outcome: 'level' };
+    const before = (await headOf(copy.workdir, copy.pin))!;
+    const back = async () => {
+      if ((await git(copy.workdir, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'], copy.pin)).code === 0) await git(copy.workdir, ['merge', '--abort'], copy.pin);
+      await git(copy.workdir, ['reset', '--quiet', '--hard', before], copy.pin);
+    };
+    const merge = await git(copy.workdir, ['merge', '--no-ff', '--no-edit', '-m', `Join ${req.home.branch} (${req.home.commit.slice(0, 7)}) into ${branch}`, req.home.commit], copy.identity);
+    let resolved = false;
+    if (merge.code !== 0) {
+      const conflicted = (await gitOk(copy.workdir, ['diff', '--name-only', '--diff-filter=U'], copy.pin)).split('\n').filter(Boolean);
+      if (conflicted.length === 0) {
+        await back();
+        return { outcome: 'failed', note: clip(`${home} could not be joined into ${branch}: ${merge.stderr || merge.stdout}`, NOTE_MAX) };
+      }
+      const joined = await this.joinTurn(cv, copy, req, branch, conflicted);
+      if (joined) {
+        await back();
+        return { outcome: 'failed', note: clip(`${req.home.branch} and this idea changed the same lines in ${conflicted.slice(0, 3).join(', ')}${conflicted.length > 3 ? ` and ${conflicted.length - 3} more` : ''}. ${joined}`, NOTE_MAX) };
+      }
+      resolved = true;
+    }
+    // Main may need what a setup fetches: each runs again on the joined result.
+    const own = buildPlaces(stateDirOf(this.ctx), cv).own;
+    fs.rmSync(path.join(own, SETUP_FILE), { force: true });
+    for (const cmd of req.setups) {
+      const failed = await this.setUp(cv, undefined, copy, cmd);
+      if (failed) {
+        await back();
+        return { outcome: 'failed', note: failed };
+      }
+    }
+    for (const check of req.checks) {
+      const run = await runCheck(check, copy.workdir, this.opts.checkTimeoutMs, checkPlaces({ tree: copy.tree, workdir: copy.workdir, stateDir: own, denyRead: this.denyRead() }));
+      if (run.code !== 0) {
+        await back();
+        const why = run.timedOut ? `stopped after ${Math.round(this.opts.checkTimeoutMs / 1000)} s` : `exit ${run.code ?? '?'}`;
+        const head = `Joined with ${home}, the check \`${oneLine(check, 60)}\` fails (${why}): `;
+        return { outcome: 'failed', note: `${head}${clip(tailOf(run.output, 3, 400) || 'no output', NOTE_MAX - head.length)}` };
+      }
+    }
+    const commit = await shortOf(copy.workdir, 'HEAD', copy.pin);
+    const passed = req.checks.length === 1 ? `\`${oneLine(req.checks[0]!, 60)}\` passed` : `all ${req.checks.length} checks passed`;
+    return resolved
+      ? { outcome: 'resolved', note: `${req.home.branch} had changed the same lines. The builder joined the two at ${commit}, and ${passed}.` }
+      : { outcome: 'joined', note: `${home} is joined in at ${commit}, and ${passed}.` };
+  }
+
+  /**
+   * One builder turn to join a merge that stopped on conflicts. Returns why it did not, or
+   * undefined when the merge is committed with no conflict left.
+   */
+  private async joinTurn(cv: string, copy: Copy, req: RefreshRequest, branch: string, conflicted: string[]): Promise<string | undefined> {
+    if (this.opts.off) return 'The builder is off, so nobody joined them.';
+    const own = buildPlaces(stateDirOf(this.ctx), cv).own;
+    const check = req.checks[0]!;
+    let files: ReturnType<HostedBuilder['prepare']>;
+    try {
+      // No chapter: the turn builds no part, and board_try runs the first check.
+      files = this.prepare(own, copy.workdir, copy.tree, copy.gitDir, '', check, req.setups);
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+    const before = await headOf(copy.workdir, copy.pin);
+    try {
+      this.side = this.start(files, copy.workdir, copy.identity);
+      const msg = [
+        `JOIN ${req.home.branch} INTO ${branch}. Every part of this idea is built. ${req.home.branch} moved since, to ${req.home.commit.slice(0, 7)}, and git stopped the merge: both changed the same lines in ${conflicted.map((f) => oneLine(f, 200)).join(', ')}.`,
+        `Join them in those files: keep what each side meant, and take out every conflict marker. Try ${req.checks.length === 1 ? 'the check' : 'the first check'} \`${oneLine(check, 300)}\` with board_try. Then git add those files and git commit --no-edit. Do not call board_part or board_check. Then end with: done.`,
+      ].join('\n');
+      const turn = await this.side.send(msg, this.opts.partTimeoutMs);
+      this.ctx.log(`builder: canvas ${cv}: the join turn ended (${turn.ok ? 'ok' : turn.note}), $${(turn.costUsd ?? 0).toFixed(4)}`);
+    } finally {
+      await this.side?.stop().catch(() => undefined);
+      this.side = undefined;
+      fs.rmSync(files.dir, { recursive: true, force: true });
+    }
+    const left = (await gitOk(copy.workdir, ['diff', '--name-only', '--diff-filter=U'], copy.pin)).split('\n').filter(Boolean);
+    if (left.length) return `The builder could not join them: ${left.slice(0, 3).join(', ')} still ${left.length === 1 ? 'has' : 'have'} conflicts.`;
+    const after = await headOf(copy.workdir, copy.pin);
+    const mergeHead = (await git(copy.workdir, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'], copy.pin)).code === 0;
+    if (mergeHead || !after || after === before) return 'The builder did not commit the join.';
+    if (!(await isAncestor(copy.workdir, req.home.commit, after, copy.pin)) || !(await isAncestor(copy.workdir, before!, after, copy.pin))) return 'The builder\'s commit does not hold both sides.';
+    if ((await dirtyFiles(copy.workdir, copy.pin)).length) return 'The builder left changes that are not committed.';
+    return undefined;
+  }
+
+  /**
+   * Take a canvas's build away: its shows, its copy and its private files, and its branch when
+   * asked. Never a branch the owner has checked out.
+   */
+  async discard(req: { canvas: string; branch: boolean }): Promise<{ ok: boolean; note?: string }> {
+    const cv = req.canvas;
+    if (this.building === cv || this.busy.has(cv)) return { ok: false, note: 'The builder is working on this canvas now. Pause it first.' };
+    this.busy.add(cv);
+    try {
+      await this.stopShows(cv);
+      const stateDir = stateDirOf(this.ctx);
+      const places = buildPlaces(stateDir, cv);
+      const top = await repoTop(this.ctx.repoDir);
+      const place = readPlace(stateDir, cv);
+      if (top) await removeWorktree(top, places.tree);
+      stopLeftoverChecks(places.own);
+      for (const p of [places.tree, places.own, places.show]) fs.rmSync(p, { recursive: true, force: true });
+      if (!req.branch) return { ok: true, note: 'The copy is gone. The branch stays.' };
+      const legacy = `board/${cv}`;
+      const branch = place?.branch ?? (top && (await branchExists(top, legacy)) && !otherBranches(stateDir, cv).includes(legacy) ? legacy : undefined);
+      if (top && branch && (await branchExists(top, branch))) {
+        const r = await git(top, ['branch', '--quiet', '-D', branch]);
+        if (r.code !== 0) return { ok: false, note: clip(`The copy is gone, but the branch ${branch} stays: ${r.stderr || r.stdout}`, NOTE_MAX) };
+      }
+      fs.rmSync(places.base, { recursive: true, force: true });
+      return { ok: true, note: branch ? `The copy and the branch ${branch} are gone.` : 'The copy is gone. There was no branch.' };
+    } finally {
+      this.busy.delete(cv);
+    }
   }
 
   /** Say something in the build feed. A lost entry never stops the build. */
@@ -502,36 +810,36 @@ export class HostedBuilder implements Builder {
       madeRepo = true;
     }
     const sub = path.relative(realDir(top), realDir(this.ctx.repoDir));
-    const branch = `board/${ch}`;
-    const places = buildPlaces(stateDirOf(this.ctx), ch);
+    const stateDir = stateDirOf(this.ctx);
+    const cv = job.canvas;
+    const branch = await this.branchOf(top, cv, job.canvasTitle);
+    const places = buildPlaces(stateDir, cv);
     fs.mkdirSync(places.own, { recursive: true, mode: 0o700 });
     let gitDir: string;
     let fromNothing = false;
+    let reused = false;
+    let created = false;
     try {
-      ({ gitDir, fromNothing = false } = await ensureWorktree(top, places.tree, branch, { board: sub }));
+      ({ gitDir, fromNothing = false, reused = false, created } = await ensureWorktree(top, places.tree, branch, { board: sub, ...(job.base ? { base: job.base.commit } : {}) }));
     } catch (e) {
       if (e instanceof OwnerFilesError) return this.fail(ch, filesNote('repo', e.files.slice(0, 3), e.files.length - Math.min(3, e.files.length)));
       return this.fail(ch, `The builder could not make its own copy on ${branch}: ${e instanceof GitError ? e.message : String(e)}`);
     }
-    // The board's folder may be one the commit does not hold, a new folder in the repository:
-    // it is made in the worktree, and never through a link or outside it.
-    let workdir = places.tree;
-    if (sub) {
-      try {
-        workdir = safeDir(places.tree, sub);
-      } catch (e) {
-        if (e instanceof RecordPathError) return this.fail(ch, `The board's folder, ${oneLine(sub, 80)}, would leave the builder's copy or pass through a link in it, so nothing is built.`);
-        throw e;
-      }
+    const had = readPlace(stateDir, cv);
+    const place: Place = { branch, setups: had?.branch === branch ? had.setups : [], records: had?.branch === branch ? had.records : {} };
+    if (job.setup && !place.setups.includes(job.setup)) place.setups.push(job.setup);
+    writePlace(stateDir, cv, place);
+    this.ctx.place?.(cv, { branch });
+    if (!reused) fs.rmSync(path.join(places.own, SETUP_FILE), { force: true });
+    const copy = await this.copyAt(places.tree, sub, gitDir);
+    if (typeof copy === 'string') return this.fail(ch, copy);
+    const { workdir, pin, identity } = copy;
+    // Each chapter's records are named from its title once, when the builder first writes them,
+    // and keep that name: a name in the place is this build's own.
+    if (!place.records[ch]) {
+      place.records[ch] = freeRecordName(workdir, branchFor(job.title, ch, []).slice('board/'.length), new Set(Object.values(place.records)));
+      writePlace(stateDir, cv, place);
     }
-    if (samePath(workdir, this.ctx.repoDir)) return this.fail(ch, 'The builder\'s copy is the owner\'s own folder. It never builds there.');
-    // Every git in the worktree, ours and the builder's own, is told where its git folder is:
-    // it never reads a `.git` the code under test could have written. And no hook runs.
-    const pin = pinEnv(gitDir, places.tree);
-    // The owner is the author when git knows them; the committer is always the builder.
-    const identity: NodeJS.ProcessEnv = (await hasIdentity(workdir, pin))
-      ? { ...pin, GIT_COMMITTER_NAME: BUILDER_IDENTITY.GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL: BUILDER_IDENTITY.GIT_COMMITTER_EMAIL }
-      : { ...pin, ...BUILDER_IDENTITY };
 
     let state = await this.agent.state();
     const c = state.chapters[ch];
@@ -545,11 +853,12 @@ export class HostedBuilder implements Builder {
       return this.fail(ch, `The board names the check "${oneLine(c.check ?? 'none', 120)}", but the owner agreed to "${oneLine(check, 120)}" on this machine. Nothing was built.`);
     }
 
-    // The records, before any code. A resumed build finds them there and writes nothing.
+    // The records, before any code, named like the branch. A resumed build finds them there and writes nothing.
     const date = new Date().toISOString().slice(0, 10);
+    const home = job.base?.branch;
     let rec: ReturnType<typeof writeRecords>;
     try {
-      rec = writeRecords(workdir, ch, job.brief, (brief) => renderDecision(state, ch, { date, track: c.track, check, branch, brief }));
+      rec = writeRecords(workdir, place.records[ch]!, job.brief, (brief) => renderDecision(state, ch, { date, track: c.track, check, branch, brief, ...(home ? { home } : {}) }));
     } catch (e) {
       if (e instanceof RecordPathError) return this.fail(ch, `The records were not written: ${e.message}`);
       throw e;
@@ -570,8 +879,12 @@ export class HostedBuilder implements Builder {
           : `This folder has no commit yet, so the branch ${branch} starts from nothing: an empty first commit, then the build. Your own branch stays as it is.`,
       );
     }
+    const app = job.show?.kind === 'app' ? job.show : undefined;
     if (rec.written) {
-      await this.feed(ch, `The builder started on its own branch, ${branch}, with ${plural(todo.length, 'part')} to build, one commit each. It committed the brief (${rec.brief}) and the decision record (${rec.decision}) first.`);
+      const from = created && job.base ? ` from ${job.base.branch} at ${job.base.commit.slice(0, 7)},` : !created ? ' on top of what the canvas built there before,' : '';
+      await this.feed(ch, `The builder started on the canvas's own branch, ${branch},${from} with ${plural(todo.length, 'part')} to build, one commit each. It committed the brief (${rec.brief}) and the decision record (${rec.decision}) first.`);
+    } else if (app && awaitsProof(state, ch)) {
+      await this.feed(ch, `Every part is built on ${branch}. The builder starts the app once, as you will try it, to see that it answers.`);
     } else {
       await this.feed(ch, `The builder goes on, on ${branch}: ${builtBefore} of ${plural(c.track.length, 'part')} built, ${todo.length} to go.`);
     }
@@ -582,10 +895,16 @@ export class HostedBuilder implements Builder {
       await this.feed(ch, NO_SANDBOX_NOTE);
     }
 
+    // A copy made anew needs every setup the canvas agreed to, not only this idea's.
+    for (const cmd of place.setups) {
+      const failed = await this.setUp(cv, ch, copy, cmd);
+      if (failed) return this.fail(ch, failed);
+    }
+
     // The process, fenced.
     this.own = places.own;
-    const files = this.prepare(places.own, workdir, places.tree, gitDir, ch, check);
-    let cost = 0;
+    const files = this.prepare(places.own, workdir, places.tree, gitDir, ch, check, place.setups);
+    const spend = { usd: 0 };
     let first = true;
     const told = new Set<string>();
     try {
@@ -615,13 +934,13 @@ export class HostedBuilder implements Builder {
         first = false;
         const p0 = Date.now();
         let turn = await this.proc.send(msg, this.opts.partTimeoutMs);
-        cost += turn.costUsd ?? 0;
+        spend.usd += turn.costUsd ?? 0;
         await this.reportDenials(ch, id, turn);
         state = await this.agent.state();
         if (turn.ok && state.model.parts[id]?.state !== 'built' && !this.closed) {
           const left = this.opts.partTimeoutMs - (Date.now() - p0);
           turn = await this.proc.send(this.nudge(state, id), Math.max(left, 60_000));
-          cost += turn.costUsd ?? 0;
+          spend.usd += turn.costUsd ?? 0;
           await this.reportDenials(ch, id, turn);
           state = await this.agent.state();
         }
@@ -630,7 +949,12 @@ export class HostedBuilder implements Builder {
           const why = turn.ok ? `${part.name} is not built: no check passed on a new commit` : `${part.name} is not built: ${turn.note ?? 'the turn failed'}`;
           return this.fail(ch, `${why}. The build stops here. Resume it after a look at the feed.`);
         }
-        this.ctx.log(`builder: ${id} built in ${((Date.now() - p0) / 60_000).toFixed(1)} min, $${cost.toFixed(4)} so far`);
+        this.ctx.log(`builder: ${id} built in ${((Date.now() - p0) / 60_000).toFixed(1)} min, $${spend.usd.toFixed(4)} so far`);
+      }
+      state = await this.agent.state();
+      if (app && awaitsProof(state, ch)) {
+        const why = await this.smokeRun(cv, ch, app, copy, check, files, spend);
+        if (why) return this.fail(ch, why);
       }
     } finally {
       fs.rmSync(files.dir, { recursive: true, force: true });
@@ -639,20 +963,167 @@ export class HostedBuilder implements Builder {
     state = await this.agent.state();
     const done = state.chapters[ch];
     const minutes = ((Date.now() - t0) / 60_000).toFixed(1);
-    if (done?.state !== 'built') {
+    if (!done || (app ? !awaitsProof(state, ch) : done.state !== 'built')) {
       const left = (done?.track ?? []).filter((id) => state.model.parts[id]?.state !== 'built');
       return this.fail(ch, `The track ran out with ${plural(left.length, 'part')} not built: ${left.join(', ')}.`);
     }
-    // The result: the brief again, from the board as it is now, as the branch's last commit.
-    const result = await this.commitResult(workdir, rec.brief, state, ch, `${oneLine(done.title, 72)}: the brief, with the result`, identity);
-    // What the owner can look at, copied out before the worktree goes. It never fails the build.
-    const show = await makeShow({ workdir, env: pin, dest: places.show, log: (m) => this.ctx.log(`builder: ${ch}: ${m}`) }).catch((e: unknown) => {
-      this.ctx.log(`builder: ${ch}: no show: ${e instanceof Error ? e.message : String(e)}`);
-      return undefined;
+    // The result: the brief again, as the branch's last commit, before the board calls the idea
+    // built. For an app it is written from the board as `build.proved` will leave it.
+    const proved = app ? admit(state, { type: 'build.proved', chapter: ch }, 'system', new Date().toISOString()) : undefined;
+    const result = await this.commitResult(workdir, rec.brief, proved?.ok ? proved.state : state, ch, `${oneLine(done.title, 72)}: the brief, with the result`, identity);
+    if (app) {
+      try {
+        await this.system.post([{ type: 'build.proved', chapter: ch }]);
+      } catch (e) {
+        return this.fail(ch, `The app answered, but the board refused to record it: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    // A page that stands alone is copied out, to be served as files. It never fails the build.
+    // An app or a terminal is tried by its command, so no page is looked for.
+    const show = job.show?.kind === 'app' || job.show?.kind === 'terminal'
+      ? undefined
+      : await makeShow({ workdir, env: pin, dest: places.show, log: (m) => this.ctx.log(`builder: ${ch}: ${m}`) }).catch((e: unknown) => {
+          this.ctx.log(`builder: ${ch}: no show: ${e instanceof Error ? e.message : String(e)}`);
+          return undefined;
+        });
+    await this.feed(ch, `Every part is built, on the branch ${branch}${result ? `, with the brief brought up to date (${rec.brief})` : ''}. Try it on the board, then approve it to merge it into ${home ?? 'the main branch'}.`);
+    return { outcome: 'done', note: `${plural(done.track.length, 'part')} built on ${branch} in ${minutes} min, $${spend.usd.toFixed(2)}.`, ...(show ? { show } : {}) };
+  }
+
+  /**
+   * The canvas's branch: the one it has on this machine, else `board/<canvas id>` from before
+   * branches were named, else a new name from the canvas's title that no branch and no other
+   * canvas has. A canvas whose branch was taken away after a merge gets a new one.
+   */
+  private async branchOf(top: string, cv: string, title: string): Promise<string> {
+    const stateDir = stateDirOf(this.ctx);
+    const names = await branchNames(top);
+    const had = readPlace(stateDir, cv)?.branch;
+    if (had && names.includes(had.toLowerCase())) return had;
+    const others = otherBranches(stateDir, cv);
+    const legacy = `board/${cv}`;
+    if (!had && names.includes(legacy) && !others.includes(legacy)) return legacy;
+    return branchFor(title, cv, [...names, ...others]);
+  }
+
+  /** The board's folder in a copy, and the environment git runs with there. Or why there is none. */
+  private async copyAt(tree: string, sub: string, gitDir: string): Promise<Copy | string> {
+    // The board's folder may be one the commit does not hold, a new folder in the repository:
+    // it is made in the worktree, and never through a link or outside it.
+    let workdir = tree;
+    if (sub) {
+      try {
+        workdir = safeDir(tree, sub);
+      } catch (e) {
+        if (e instanceof RecordPathError) return `The board's folder, ${oneLine(sub, 80)}, would leave the builder's copy or pass through a link in it, so nothing is built.`;
+        throw e;
+      }
+    }
+    if (samePath(workdir, this.ctx.repoDir)) return 'The builder\'s copy is the owner\'s own folder. It never builds there.';
+    // Every git in the worktree, ours and the builder's own, is told where its git folder is:
+    // it never reads a `.git` the code under test could have written. And no hook runs.
+    const pin = pinEnv(gitDir, tree);
+    // The owner is the author when git knows them; the committer is always the builder.
+    const identity: NodeJS.ProcessEnv = (await hasIdentity(workdir, pin))
+      ? { ...pin, GIT_COMMITTER_NAME: BUILDER_IDENTITY.GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL: BUILDER_IDENTITY.GIT_COMMITTER_EMAIL }
+      : { ...pin, ...BUILDER_IDENTITY };
+    return { tree, workdir, gitDir, pin, identity };
+  }
+
+  /**
+   * Run an agreed setup in the canvas's copy, unless it ran there already. It has the network,
+   * and may write to the copy, a temp folder and the package managers' caches. Said in the
+   * chapter's feed when there is one. Returns why it failed.
+   */
+  private async setUp(cv: string, ch: string | undefined, copy: Copy, cmd: string): Promise<string | undefined> {
+    const own = buildPlaces(stateDirOf(this.ctx), cv).own;
+    const marker = path.join(own, SETUP_FILE);
+    let ran: string[] = [];
+    try {
+      if (fs.lstatSync(marker).isFile()) ran = JSON.parse(fs.readFileSync(marker, 'utf8')) as string[];
+    } catch {
+      // None ran in this copy yet.
+    }
+    if (ran.includes(cmd)) return undefined;
+    const run = await runCheck(cmd, copy.workdir, this.opts.checkTimeoutMs, {
+      ...checkPlaces({ tree: copy.tree, workdir: copy.workdir, stateDir: own, denyRead: this.denyRead() }),
+      network: true,
+      write: packageCaches(),
     });
-    await this.feed(ch, `Every part is built, on the branch ${branch}${result ? `, with the brief brought up to date (${rec.brief})` : ''}. Merge it when you are ready: git merge ${branch}.`);
-    await removeWorktree(top, places.tree).catch(() => undefined);
-    return { outcome: 'done', note: `${plural(done.track.length, 'part')} built on ${branch} in ${minutes} min, $${cost.toFixed(2)}.`, ...(show ? { show } : {}) };
+    if (run.code !== 0) {
+      const why = run.timedOut ? `stopped after ${Math.round(this.opts.checkTimeoutMs / 1000)} s` : `exit ${run.code ?? '?'}`;
+      const head = `The setup \`${oneLine(cmd, 60)}\` failed (${why}): `;
+      return `${head}${clip(tailOf(run.output, 3, 400) || 'no output', NOTE_MAX - head.length)}`;
+    }
+    fs.writeFileSync(marker, JSON.stringify([...ran, cmd]), { mode: 0o600 });
+    await keepDependencyFiles(copy.workdir, copy.pin, own);
+    if (ch) await this.feed(ch, `The builder made its copy ready: \`${oneLine(cmd, 120)}\` ran in ${run.seconds} s.`);
+    return undefined;
+  }
+
+  /** Start the app as the owner would try it, wait for it to answer, and stop it. */
+  private async tryApp(plan: Extract<RunShow, { kind: 'app' }>, cv: string, copy: Copy): Promise<{ ok: true } | { ok: false; why: string; output: string }> {
+    let output = '';
+    try {
+      const s = await startApp(plan, this.showPlaces(cv, copy), { onOutput: (t) => (output = (output + t).slice(-64 * 1024)), onExit: () => undefined }, this.opts.appWaitMs);
+      try {
+        await s.ready;
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, why: e instanceof Error ? e.message : String(e), output };
+      } finally {
+        await s.stop();
+      }
+    } catch (e) {
+      return { ok: false, why: e instanceof Error ? e.message : String(e), output };
+    }
+  }
+
+  /**
+   * The smoke run of a finished app: it must start and answer once. When it does not, the
+   * builder gets one turn to put it right, with what the app printed; the fix must pass the
+   * agreed check. Returns why the build stops, or undefined when the app answered. The board
+   * says that it answered, from `build.proved`.
+   */
+  private async smokeRun(cv: string, ch: string, plan: Extract<RunShow, { kind: 'app' }>, copy: Copy, check: string, files: { mcpConfig: string; promptFile: string; settingsFile: string }, spend: { usd: number }): Promise<string | undefined> {
+    this.ctx.presence({ state: 'building', note: 'starting the app once, as you will try it' });
+    const first = await this.tryApp(plan, cv, copy);
+    if (first.ok) return undefined;
+    await this.feed(ch, `The app did not start as you will try it (\`${oneLine(plan.run, 120)}\`): ${first.why} The builder gets one turn to put it right.`, 'problem');
+    const before = await headOf(copy.workdir, copy.pin);
+    this.proc ??= this.start(files, copy.workdir, copy.identity);
+    const turn = await this.proc.send(this.startMessage(plan, first.why, first.output), this.opts.partTimeoutMs);
+    spend.usd += turn.costUsd ?? 0;
+    const after = await headOf(copy.workdir, copy.pin);
+    const doesNot = (r: { why: string; output: string }, fix = '') => {
+      const head = `The app does not start: \`${oneLine(plan.run, 60)}\`. ${r.why}${fix}`;
+      const tail = tailOf(r.output, 2, 400).replace(/\s+/g, ' ').trim();
+      return clip(tail ? `${head} It printed: "${clip(tail, Math.max(40, NOTE_MAX - head.length - 16))}".` : `${head} It printed nothing.`, NOTE_MAX);
+    };
+    if (!after || after === before) return doesNot(first, ' The builder\'s turn made no fix.');
+    if ((await dirtyFiles(copy.workdir, copy.pin)).length) return `The app does not start: \`${oneLine(plan.run, 80)}\`. The builder's fix left changes that are not committed.`;
+    const own = buildPlaces(stateDirOf(this.ctx), cv).own;
+    const run = await runCheck(check, copy.workdir, this.opts.checkTimeoutMs, checkPlaces({ tree: copy.tree, workdir: copy.workdir, stateDir: own, denyRead: this.denyRead() }));
+    if (run.code !== 0) return `The builder's fix for the app's start fails the check \`${oneLine(check, 60)}\`. The build stops here.`;
+    const second = await this.tryApp(plan, cv, copy);
+    if (!second.ok) return doesNot(second, ' The builder\'s fix did not change that.');
+    return undefined;
+  }
+
+  private startMessage(plan: Extract<RunShow, { kind: 'app' }>, why: string, output: string): string {
+    const port = plan.port !== undefined ? `on port ${plan.port}` : 'on the port in PORT';
+    return [
+      `THE APP DOES NOT START. Every part is built. The owner will try it with \`${oneLine(plan.run, 300)}\`, run in this copy, and it must answer at http://127.0.0.1 ${port}.`,
+      `It was started that way: ${why} The end of what it printed:`,
+      '',
+      tailOf(output, 30, 3000) || '(nothing)',
+      '',
+      'Make it start and answer there: fix the code, try the check with board_try, and commit. Do not call board_part or board_check: every part is built. Then end with: done.',
+    ].join('\n');
+  }
+
+  private showPlaces(cv: string, copy: Copy): ShowPlaces {
+    return { workdir: copy.workdir, tree: copy.tree, denyRead: this.denyRead(), pids: buildPlaces(stateDirOf(this.ctx), cv).pids };
   }
 
   /**
@@ -758,7 +1229,7 @@ export class HostedBuilder implements Builder {
   }
 
   /** The private files of one run: the tools' config with the tokens, the settings, the instructions. */
-  private prepare(own: string, workdir: string, tree: string, gitDir: string, chapter: string, check: string): { dir: string; mcpConfig: string; promptFile: string; settingsFile: string } {
+  private prepare(own: string, workdir: string, tree: string, gitDir: string, chapter: string, check: string, setups: readonly string[]): { dir: string; mcpConfig: string; promptFile: string; settingsFile: string } {
     for (const [what, file] of [['board tools', this.opts.mcp], ['builder\'s instructions', this.opts.prompt]] as const) {
       if (!fs.existsSync(file)) throw new BoardError(`The ${what} are missing at ${file}. Build the plugin: npm run build -w @keel/board-plugin.`);
     }
@@ -777,6 +1248,7 @@ export class HostedBuilder implements Builder {
       KEEL_BUILD_STATE: own,
       KEEL_BUILD_DENY_READ: JSON.stringify(this.denyRead()),
       KEEL_BUILD_CHECK_TIMEOUT: String(Math.round(this.opts.checkTimeoutMs / 1000)),
+      KEEL_BUILD_SETUPS: JSON.stringify(setups),
       // The tools decide the box. They must decide as this process did, or the feed would say one thing and the check do another.
       ...(process.env.KEEL_SANDBOX ? { KEEL_SANDBOX: process.env.KEEL_SANDBOX } : {}),
     };
@@ -808,4 +1280,8 @@ export class HostedBuilder implements Builder {
 }
 
 /** What the board server loads, beside `createLink`, from the same module. */
-export const createBuilder: CreateBuilder = (ctx) => new HostedBuilder(ctx, builderOptions(ctx.options));
+export const createBuilder: CreateBuilder = async (ctx) => {
+  const b = new HostedBuilder(ctx, builderOptions(ctx.options));
+  await b.endLeftovers();
+  return b;
+};

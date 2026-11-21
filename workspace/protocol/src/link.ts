@@ -1,4 +1,5 @@
 import type { Digest } from './digest';
+import type { ShowPlan } from './pictures';
 import type { PresenceUpdate } from './wire';
 
 /**
@@ -79,6 +80,12 @@ export type CreateLink = (ctx: LinkContext) => AgentLink | Promise<AgentLink>;
  */
 export interface BuildJob {
   chapter: string;
+  /**
+   * The canvas the chapter is on, and what the canvas is called. The build's copy and its
+   * branch belong to the canvas: every chapter on it is built there, one after another.
+   */
+  canvas: string;
+  canvasTitle: string;
   title: string;
   /** The parts to build, in order, one commit each. Parts already built are left out. */
   track: Array<{ id: string; name: string; plain?: string }>;
@@ -88,6 +95,15 @@ export interface BuildJob {
   brief: string;
   /** True when this run carries on after a pause or a restart. */
   resume: boolean;
+  /** The setup command the owner agreed to, when the idea has one. The build's tools run it once, before the first part. */
+  setup?: string;
+  /** How the owner will try the result. The builder makes sure it works before it says done. */
+  show?: ShowPlan;
+  /**
+   * Where a new branch starts: the home branch and its commit, as the server just read them.
+   * Left out in a repository with no commit, where the branch starts from nothing.
+   */
+  base?: { branch: string; commit: string };
 }
 
 /**
@@ -110,8 +126,74 @@ export interface BuildResult {
   /** `done`: every part on the track is built. `paused`: stopped when asked. `failed`: it could not go on. */
   outcome: 'done' | 'paused' | 'failed';
   note?: string;
-  /** With `done` only: what the owner can look at now. */
+  /** With `done` only: a page that stands alone, copied out to be served as files. */
   show?: BuildShow;
+}
+
+/** A show that runs a command: an app or a terminal. A page runs nothing and is not started. */
+export type RunShow = Exclude<ShowPlan, { kind: 'page' }>;
+
+/** What the server asks for when the owner presses to try a built chapter. */
+export interface ShowRequest {
+  chapter: string;
+  /** The canvas the chapter is on: the show runs in that canvas's copy. */
+  canvas: string;
+  /** What to run, as the owner agreed to it on the press. */
+  plan: RunShow;
+  /** The size of the terminal, in characters. */
+  cols?: number;
+  rows?: number;
+  /** What the command prints, as it comes. For a terminal it is the terminal's own bytes, as text. */
+  onOutput(chunk: string): void;
+  /** The command ended, by itself or because it was stopped. Called once. */
+  onExit(code: number | null): void;
+}
+
+/** A command that runs to show a built chapter, in the build's own copy, boxed in. */
+export interface ShowSession {
+  /** False when this machine has no box and the command runs with only the short environment. Left out when it is boxed in. */
+  boxed?: false;
+  /**
+   * For an app: resolves with its address, `http://127.0.0.1:<port>/`, once it answers
+   * there, and rejects when the command ends or the wait runs out first. Left out for a terminal.
+   */
+  ready?: Promise<string>;
+  /** What the owner typed. A terminal takes it; an app's command reads nothing. */
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  /** End the command and everything it started. Resolves when all of it is gone. */
+  stop(): Promise<void>;
+}
+
+/** What the server asks for before it moves the home branch to a canvas's build. */
+export interface RefreshRequest {
+  canvas: string;
+  /** The home branch as the server just read it. */
+  home: { branch: string; commit: string };
+  /**
+   * The checks the owner agreed to for the built chapters on this canvas, each once. The
+   * joined result must pass every one. And their setup commands, each once.
+   */
+  checks: string[];
+  setups: string[];
+}
+
+export interface RefreshResult {
+  /**
+   * `level`: the branch holds the home commit already, nothing was done. `joined`: the home
+   * branch was merged in with no conflict, and the checks passed on the result. `resolved`:
+   * the two had changed the same lines, the builder joined them, and the checks passed: the
+   * owner should try it again before it is merged. `failed`: it could not be joined, or a
+   * check does not pass. Nothing of the owner's moved in any case.
+   */
+  outcome: 'level' | 'joined' | 'resolved' | 'failed';
+  note?: string;
+}
+
+/** Where a canvas's build lives in the repository. */
+export interface BuildPlace {
+  /** The build's branch: `board/<name>`. */
+  branch: string;
 }
 
 export interface Builder {
@@ -121,12 +203,26 @@ export interface Builder {
   /** Stop after the current step. The run then resolves with `paused`. */
   pause(): Promise<void>;
   close(): Promise<void>;
+  /**
+   * Start what a built chapter shows. A builder that keeps no copy to run in leaves this
+   * out, and the board then shows a page only.
+   */
+  show?(req: ShowRequest): Promise<ShowSession>;
+  /** Bring a canvas's branch level with the home branch, and run the checks on the result. */
+  refresh?(req: RefreshRequest): Promise<RefreshResult>;
+  /**
+   * Take a canvas's build away: its copy always, and its branch when `branch` is true, with
+   * every commit on it. The server calls it after a merge, and when the owner deletes a canvas.
+   */
+  discard?(req: { canvas: string; branch: boolean }): Promise<{ ok: boolean; note?: string }>;
 }
 
 /** What the server gives a builder: the link's context, and the token of the build's own tools. */
 export interface BuilderContext extends LinkContext {
   /** The token for what the build's tools report: a commit, a check that passed. */
   systemToken: string;
+  /** Report where a canvas's build lives, as soon as its branch is there. The server keeps it for this machine. */
+  place?(canvas: string, place: BuildPlace): void;
 }
 
 /** What an adapter module may also export, as `createBuilder`. */

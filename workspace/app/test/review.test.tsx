@@ -131,12 +131,12 @@ function twoChapters() {
 describe('a fit with two chapters', () => {
   it('a fit of the whole board keeps the chapter the owner works in, and the done build panel stays out of its way', () => {
     render(<App source={localSource({ events: twoChapters().events })} show={['n9']} />);
-    expect(screen.getByTestId('board-name').textContent).toBe('demo · The next idea');
+    expect(screen.getByTestId('board-name').textContent).toBe('demo · One engine · The next idea');
     fireEvent.keyDown(window, { key: '1' });
-    expect(screen.getByTestId('board-name').textContent).toBe('demo · The next idea');
+    expect(screen.getByTestId('board-name').textContent).toBe('demo · One engine · The next idea');
     expect(screen.queryByTestId('watch')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Fit the board' }));
-    expect(screen.getByTestId('board-name').textContent).toBe('demo · The next idea');
+    expect(screen.getByTestId('board-name').textContent).toBe('demo · One engine · The next idea');
   });
 
   it('a built chapter shows its panel while no other chapter is in work, and not once a newer one is', () => {

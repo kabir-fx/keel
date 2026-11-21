@@ -1,5 +1,5 @@
 import type { BoardInfo, BoardState, Check, ChapterState, FeedEntry, Id, PartState } from '@keel/protocol';
-import { alreadyThere, remarksOnPart, trackProgress } from '@keel/protocol';
+import { alreadyThere, awaitsProof, remarksOnPart, trackProgress } from '@keel/protocol';
 
 /**
  * Watching a build (storyboard screen 6), as plain data: the build track, the feed, what the
@@ -123,7 +123,7 @@ export interface BuildStatus {
   state: BuildWord;
   /** What it means, in plain words. */
   words: string;
-  /** For `stopped`: the feed entry that says why. */
+  /** For `stopped`: the feed entry that says why. The panel offers one press that tries again. */
   problem?: string;
   /** For `unagreed`: the check the owner agrees to run here by pressing Resume. */
   check?: string;
@@ -181,6 +181,7 @@ export function buildStatus(state: BoardState, chapter: Id, server?: ServerBuild
   const st: ServerBuild['state'] = said ?? (c.paused ? 'paused' : open.length > 0 ? 'waiting' : 'running');
   switch (st) {
     case 'running': {
+      if (awaitsProof(state, chapter)) return { state: st, words: 'Every part is built. The builder is starting the app once, as you will try it, to see that it answers.' };
       const part = server?.chapter === chapter && server.part ? server.part : undefined;
       return { state: st, words: part ? `Building ${part} now.` : 'Building now.' };
     }
@@ -198,7 +199,8 @@ export function buildStatus(state: BoardState, chapter: Id, server?: ServerBuild
       return { state: st, words: 'Paused. Nothing is built while it is paused.' };
     case 'stopped': {
       const p = lastProblem(state, chapter);
-      return { state: st, words: 'Stopped before it finished. Pause and resume to try again.', ...(p ? { problem: p.id } : {}) };
+      const words = awaitsProof(state, chapter) ? 'Stopped. Every part is built, and the app did not answer when the builder started it.' : 'Stopped before it finished.';
+      return { state: st, words, ...(p ? { problem: p.id } : {}) };
     }
     case 'unagreed': {
       const check = (server?.chapter === chapter ? server.check : undefined) ?? c.check;

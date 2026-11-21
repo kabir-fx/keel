@@ -1,4 +1,4 @@
-import type { Actor, BoardEvent, BoardInfo, BoardState, ForeignRange, Id, Presence, PresenceUpdate, RuleId, ServerMessage } from '@keel/protocol';
+import type { Actor, BoardEvent, BoardInfo, BoardState, CanvasWork, ForeignRange, HomeInfo, Id, Presence, PresenceUpdate, RuleId, ServerMessage, ShowAsk, ShowInfo } from '@keel/protocol';
 import { ROUTES, admit, isMark, reduce, replay } from '@keel/protocol';
 import type { Draft } from './drafts';
 import { cleanAssetName } from './marks';
@@ -21,11 +21,29 @@ export interface BoardSource {
    */
   readonly build?: BuildInfo | undefined;
   /**
-   * What the owner can look at: for each built chapter that has something to show, the address
-   * of its page. It comes in `init` and in a `shows` message whenever it changes, and is said to
-   * the owner's page only. Every address here passed `safeShowUrl`. Empty when there is nothing.
+   * What this machine's repository holds for each canvas, by canvas id: its branch, how it
+   * stands with the home branch, what the server does with it. It comes in `init` and in a
+   * `works` message whenever it changes, and is said to the owner's page only. Empty when
+   * there is nothing.
    */
-  readonly shows: ReadonlyMap<string, string>;
+  readonly works: ReadonlyMap<string, CanvasWork>;
+  /** What the owner can try, by chapter id, and whether it runs. Every address here passed `safeShowUrl`. */
+  readonly shows: ReadonlyMap<string, ShowInfo>;
+  /**
+   * The whole board, when `state` is one canvas of it (`canvasSource`). New ids are made from
+   * it, so they are free on every canvas.
+   */
+  readonly whole?: BoardState;
+  /** The home branch, as the server last looked at it. Undefined where the folder is no repository, or no server speaks. */
+  readonly home?: HomeInfo | undefined;
+  /** Start or stop what a built chapter shows (`ROUTES.show`). Left out where nothing can run a show. */
+  show?(ask: ShowAsk): Promise<Reply>;
+  /** The stream of a running show (`ROUTES.showWs`): what it printed so far, then what it prints. */
+  showStream?(chapter: Id): SocketLike | undefined;
+  /** Push the home branch to the remote it follows (`ROUTES.push`). The new `home` comes with the answer. */
+  push?(): Promise<Reply>;
+  /** Look at the remote again (`ROUTES.sync`). The new `home` comes with the answer. */
+  sync?(): Promise<Reply>;
   /**
    * The runs of events that came with the log from outside (a clone, a pull, a change to the
    * file outside the board) and that the owner has not kept yet. Undefined when there are none,
@@ -64,11 +82,15 @@ export type PostResult =
 
 export type UploadResult = { ok: true; asset: string } | { ok: false; reason: string };
 
+/** What the server answered to a press that is not an event: a show, a push, a look at the remote. */
+export type Reply = { ok: true; note?: string } | { ok: false; reason: string };
+
 /** What the server says about the build it drives (`BoardInfo.build`). */
 export type BuildInfo = NonNullable<BoardInfo['build']>;
 
-/** No page to show: one map, so a page that shows nothing keeps the same value. */
-const NO_SHOWS: ReadonlyMap<string, string> = new Map();
+/** Nothing here: one map each, so a page told nothing keeps the same value. */
+const NO_WORKS: ReadonlyMap<string, CanvasWork> = new Map();
+const NO_SHOWS: ReadonlyMap<string, ShowInfo> = new Map();
 
 /**
  * The address of a built page, when it is one the board may link to: plain http on this
@@ -88,19 +110,47 @@ export function safeShowUrl(address: unknown): string | undefined {
   return url.href;
 }
 
-/**
- * The map the server sent, with only the addresses `safeShowUrl` keeps. A `Map`, not an object,
- * so a chapter named like an object's own key (`constructor`) finds nothing it was not given.
- */
-function keptShows(shows: Record<string, string> | undefined): ReadonlyMap<string, string> {
-  const kept = new Map<string, string>();
+/** A show as the server said it, with an address only when `safeShowUrl` keeps it. A page with no such address is nothing to show. */
+function keptShow(show: unknown): ShowInfo | undefined {
+  if (!show || typeof show !== 'object') return undefined;
+  const s = show as ShowInfo;
+  if (s.kind === 'page') {
+    const url = safeShowUrl(s.url);
+    return url ? { kind: 'page', url } : undefined;
+  }
+  if (s.kind === 'app') {
+    const { url: said, ...rest } = s;
+    const url = safeShowUrl(said);
+    return url ? { ...rest, url } : rest;
+  }
+  return s.kind === 'terminal' ? s : undefined;
+}
+
+/** The canvases' works as the server sent them. A `Map`, not an object, so a canvas named like an object's own key (`constructor`) finds nothing it was not given. */
+function keptWorks(works: Record<string, CanvasWork> | undefined): ReadonlyMap<string, CanvasWork> {
+  const kept = new Map<string, CanvasWork>();
+  if (works && typeof works === 'object') for (const [canvas, work] of Object.entries(works)) if (work && typeof work === 'object') kept.set(canvas, work);
+  return kept.size > 0 ? kept : NO_WORKS;
+}
+
+/** The shows as the server sent them, with only the addresses `safeShowUrl` keeps. A page with no such address is nothing to show. */
+function keptShows(shows: Record<string, ShowInfo> | undefined): ReadonlyMap<string, ShowInfo> {
+  const kept = new Map<string, ShowInfo>();
   if (shows && typeof shows === 'object') {
-    for (const [chapter, address] of Object.entries(shows)) {
-      const safe = safeShowUrl(address);
-      if (safe) kept.set(chapter, safe);
+    for (const [chapter, said] of Object.entries(shows)) {
+      const show = keptShow(said);
+      if (show) kept.set(chapter, show);
     }
   }
   return kept.size > 0 ? kept : NO_SHOWS;
+}
+
+/** The stream of one chapter's show, on the server whose board socket is at `boardSocket`, with the same token. */
+export function showSocketUrl(boardSocket: string, chapter: string): string {
+  const url = new URL(boardSocket);
+  url.pathname = ROUTES.showWs;
+  url.searchParams.set('chapter', chapter);
+  return url.href;
 }
 
 /** The largest file the board server takes. */
@@ -218,8 +268,33 @@ export class LocalSource implements BoardSource {
 
   build: BuildInfo | undefined = undefined;
   foreign: readonly ForeignRange[] | undefined = undefined;
-  /** A played fixture has nothing to show: no server built anything. */
-  shows: ReadonlyMap<string, string> = NO_SHOWS;
+  /** A played fixture has no repository: nothing is built here. */
+  works: ReadonlyMap<string, CanvasWork> = NO_WORKS;
+  shows: ReadonlyMap<string, ShowInfo> = NO_SHOWS;
+  home: HomeInfo | undefined = undefined;
+  /** Every press that went to the server's routes, in order: for tests. */
+  readonly asked: Array<{ route: 'show' | 'push' | 'sync'; body?: unknown }> = [];
+  /** What the server answers to each of them: a test sets it. */
+  answer: (route: 'show' | 'push' | 'sync', body?: unknown) => Reply = () => ({ ok: true });
+  /** The stream a test hands the page for a running show. */
+  stream: ((chapter: Id) => SocketLike) | undefined = undefined;
+
+  show = async (ask: ShowAsk): Promise<Reply> => {
+    this.asked.push({ route: 'show', body: ask });
+    return this.answer('show', ask);
+  };
+
+  push = async (): Promise<Reply> => {
+    this.asked.push({ route: 'push' });
+    return this.answer('push');
+  };
+
+  sync = async (): Promise<Reply> => {
+    this.asked.push({ route: 'sync' });
+    return this.answer('sync');
+  };
+
+  showStream = (chapter: Id): SocketLike | undefined => this.stream?.(chapter);
 
   /** Say which events came from outside, as a server would: for tests. A fixture has none. */
   setForeign(ranges: readonly ForeignRange[] | undefined): void {
@@ -239,9 +314,11 @@ export class LocalSource implements BoardSource {
     this.listeners.emit();
   }
 
-  /** Say what the server would say there is to show, checked as the server's would be: for tests. */
-  setShows(shows: Record<string, string> | undefined): void {
+  /** Say what the server would say about each canvas's branch, each chapter's show and the home branch, checked as the server's would be: for tests. */
+  setWorks(works: Record<string, CanvasWork> | undefined, shows?: Record<string, ShowInfo>, home?: HomeInfo): void {
+    this.works = keptWorks(works);
     this.shows = keptShows(shows);
+    this.home = home;
     this.listeners.emit();
   }
 
@@ -340,7 +417,9 @@ export class ServerSource implements BoardSource {
   connection: Connection = 'connecting';
   build: BuildInfo | undefined = undefined;
   foreign: readonly ForeignRange[] | undefined = undefined;
-  shows: ReadonlyMap<string, string> = NO_SHOWS;
+  works: ReadonlyMap<string, CanvasWork> = NO_WORKS;
+  shows: ReadonlyMap<string, ShowInfo> = NO_SHOWS;
+  home: HomeInfo | undefined = undefined;
   readonly snapshots = true;
   /** How many reconnects have been tried since the last good `init`. */
   attempts = 0;
@@ -407,8 +486,10 @@ export class ServerSource implements BoardSource {
         this.presence = msg.presence;
         // A page that (re)connects learns the build from `init`: none there means none goes.
         this.build = msg.build ?? undefined;
-        // And what there is to show: none there means nothing.
+        // And what the repository holds: none there means nothing.
+        this.works = keptWorks(msg.works);
         this.shows = keptShows(msg.shows);
+        this.home = msg.home;
         this.connection = 'open';
         this.attempts = 0;
         this.startPing();
@@ -432,9 +513,11 @@ export class ServerSource implements BoardSource {
         // The server's build driver changed what it does: `null` when no build goes any more.
         this.build = msg.build ?? undefined;
         break;
-      case 'shows':
-        // What there is to show changed: the whole map comes each time, empty when nothing is left.
+      case 'works':
+        // The whole map comes each time, empty when nothing is left, and the home branch with it.
+        this.works = keptWorks(msg.works);
         this.shows = keptShows(msg.shows);
+        this.home = msg.home;
         break;
       case 'pong':
         return;
@@ -483,8 +566,10 @@ export class ServerSource implements BoardSource {
     this.connection = 'closed';
     this.presence = { state: 'away', note: 'the board server is not reachable', since: nowIso() };
     // What a build shows is served by that server, at an address that is new for each start:
-    // a link to it now may lead nowhere. The next `init` says what there is to show.
+    // a link to it now may lead nowhere. The next `init` says what the repository holds.
+    this.works = NO_WORKS;
     this.shows = NO_SHOWS;
+    this.home = undefined;
     for (const done of this.pending.values()) done(OFFLINE);
     this.pending.clear();
     if (this.ping !== undefined) this.opts.timers.clear(this.ping);
@@ -562,6 +647,63 @@ export class ServerSource implements BoardSource {
       return false;
     }
   };
+
+  /** POST JSON to one of the owner's routes. Undefined when no server answered. */
+  private async call(route: string, body?: unknown): Promise<{ status: number; json: Record<string, unknown> } | undefined> {
+    const http = this.opts.http;
+    if (!http) return undefined;
+    try {
+      const res = await this.opts.fetch(`${http.base}${route}`, {
+        method: 'POST',
+        credentials: 'omit',
+        cache: 'no-store',
+        headers: { ...this.auth(), 'content-type': 'application/json' },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      });
+      const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      return { status: res.status, json: json && typeof json === 'object' ? json : {} };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** A reply the server refused, in the owner's words: its own reason when it gave one. */
+  private refusal(r: { status: number; json: Record<string, unknown> }): Reply {
+    if (r.status === 401) return { ok: false, reason: `The board did not accept this page. ${REOPEN}` };
+    const said = [r.json.reason, r.json.note, r.json.error].find((x): x is string => typeof x === 'string' && x.length > 0);
+    return { ok: false, reason: said ?? `The board server answered ${r.status}.` };
+  }
+
+  show = async (ask: ShowAsk): Promise<Reply> => {
+    const r = await this.call(ROUTES.show, ask);
+    if (!r) return { ok: false, reason: 'The board server is not reachable, so nothing changed.' };
+    return r.status >= 200 && r.status < 300 ? { ok: true } : this.refusal(r);
+  };
+
+  push = async (): Promise<Reply> => {
+    const r = await this.call(ROUTES.push);
+    if (!r) return { ok: false, reason: 'The board server is not reachable, so nothing was pushed.' };
+    this.takeHome(r.json.home);
+    if (r.status < 200 || r.status >= 300 || r.json.ok !== true) return this.refusal(r);
+    return typeof r.json.note === 'string' ? { ok: true, note: r.json.note } : { ok: true };
+  };
+
+  /** A home branch the server answered with, when it answered one. */
+  private takeHome(home: unknown): void {
+    if (!home || typeof home !== 'object') return;
+    this.home = home as HomeInfo;
+    this.listeners.emit();
+  }
+
+  sync = async (): Promise<Reply> => {
+    const r = await this.call(ROUTES.sync);
+    if (!r) return { ok: false, reason: 'The board server is not reachable.' };
+    if (r.status < 200 || r.status >= 300) return this.refusal(r);
+    this.takeHome(r.json.home);
+    return { ok: true };
+  };
+
+  showStream = (chapter: Id): SocketLike | undefined => (this.closed ? undefined : this.opts.socket(showSocketUrl(this.opts.url, chapter)));
 
   /** A stored file, read back at `/api/assets/<name>` with the token in a header. */
   readAsset = async (asset: string): Promise<Blob | undefined> => {

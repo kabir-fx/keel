@@ -89,8 +89,42 @@ export function nextRecordNumber(dir: string): string {
   return String(max + 1).padStart(4, '0');
 }
 
+const RECORD = /^\d{3,5}[-_](.+)\.md$/;
+
+/** The names records already have in the repository: each brief's, and each decision record's after its number. Lower case. */
+function namesInTree(root: string): Set<string> {
+  const places = recordPlaces(root);
+  const out = new Set<string>();
+  const list = (rel: string) => {
+    try {
+      return fs.readdirSync(path.join(root, rel));
+    } catch {
+      return [];
+    }
+  };
+  for (const f of list(places.briefs)) if (f.endsWith('.md')) out.add(f.slice(0, -3).toLowerCase());
+  for (const f of list(places.decisions)) {
+    const m = RECORD.exec(f);
+    if (m) out.add(m[1]!.toLowerCase());
+  }
+  return out;
+}
+
+/**
+ * A name for new records: `stem`, else `stem-2`, `stem-3`, and on, the first that is not in
+ * `taken` and that no brief or decision record in the repository has. A record already there
+ * is someone else's, so it is never taken for this build's own.
+ */
+export function freeRecordName(root: string, stem: string, taken: ReadonlySet<string>): string {
+  const there = namesInTree(root);
+  const free = (n: string) => !taken.has(n) && !there.has(n.toLowerCase());
+  let name = stem;
+  for (let n = 2; !free(name); n++) name = `${stem}-${n}`;
+  return name;
+}
+
 /** The decision record of a chapter, in keel's format, from the board. Adds no decision. */
-export function renderDecision(state: BoardState, chapter: string, o: { date: string; track: readonly string[]; check?: string; branch: string; brief?: string }): string {
+export function renderDecision(state: BoardState, chapter: string, o: { date: string; track: readonly string[]; check?: string; branch: string; brief?: string; home?: string }): string {
   const c = state.chapters[chapter];
   const bp = findBlueprint(state, chapter);
   // Every piece of board text goes in on one line: a line break in it must not stand as a line of its own.
@@ -126,7 +160,7 @@ export function renderDecision(state: BoardState, chapter: string, o: { date: st
   }
   lines.push('**Consequences**', '');
   if (o.brief) lines.push(`- The brief, \`${o.brief}\`, is the same idea in plain words.`);
-  lines.push(`- The code is built on the branch \`${o.branch}\`, in its own worktree. Nothing reaches your branch until you merge it.`);
+  lines.push(`- The code is built on the branch \`${o.branch}\`, in its own copy. It goes into ${o.home ? `\`${o.home}\`` : 'the main branch'} when you approve it on the board, after you try it.`);
   lines.push(`- The board is where this was decided: chapter \`${chapter}\`.`);
   return `${lines.join('\n').trimEnd()}\n`;
 }
@@ -198,8 +232,10 @@ const exists = (p: string) => {
 
 /**
  * Write the brief and the decision record into the repository's folder in the worktree,
- * unless the brief is there already. Returns their paths, relative to that folder. Throws
- * `RecordPathError` when a records folder leaves the worktree or passes through a link.
+ * unless the brief is there already. `chapter` is a name this build chose with
+ * `freeRecordName`, so a brief of that name is its own. Returns their paths, relative to that
+ * folder. Throws `RecordPathError` when a records folder leaves the worktree or passes through
+ * a link.
  */
 export function writeRecords(root: string, chapter: string, brief: string, decision: (briefPath: string) => string): WrittenRecords {
   const places = recordPlaces(root);
@@ -208,7 +244,7 @@ export function writeRecords(root: string, chapter: string, brief: string, decis
   const decisionsDir = safeDir(root, places.decisions);
   const briefAbs = path.join(briefsDir, `${chapter}.md`);
   if (exists(briefAbs)) {
-    const prior = fs.readdirSync(decisionsDir).find((f) => f.endsWith(`-${chapter}.md`));
+    const prior = fs.readdirSync(decisionsDir).find((f) => RECORD.exec(f)?.[1] === chapter);
     return { brief: briefRel, decision: prior ? `${places.decisions}/${prior}` : '', written: false };
   }
   const name = `${nextRecordNumber(decisionsDir)}-${chapter}.md`;

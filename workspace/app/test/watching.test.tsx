@@ -152,9 +152,30 @@ describe('the build panel', () => {
     render(<App source={src} />);
     expect(screen.getByTestId('watch').dataset.state).toBe('stopped');
     expect(screen.getByTestId('watch-status').textContent).toContain('Stopped before it finished.');
+    expect(screen.getByTestId('watch').textContent).not.toContain('Pause and resume');
     expect(screen.getByRole('button', { name: 'See why in the feed' })).toBeTruthy();
     act(() => src.setBuild({ chapter: 'c1', title: 'One engine', state: 'queued', built: 0, total: 3 }));
     expect(screen.getByTestId('watch').dataset.state).toBe('queued');
+    expect(screen.queryByTestId('watch-again')).toBeNull();
+  });
+
+  it('stopped: one press tries again, as pause then resume', async () => {
+    const b = building();
+    b.must('system', { type: 'feed.add', chapter: 'c1', kind: 'problem', text: 'The builder failed: no disk.' });
+    const src = localSource({ events: b.events });
+    src.setBuild({ chapter: 'c1', title: 'One engine', state: 'stopped', built: 0, total: 3 });
+    render(<App source={src} />);
+    // One button: a build that stopped has nothing to pause.
+    expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull();
+    const n = src.events.length;
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('watch-again'));
+    });
+    expect(screen.getByTestId('watch-again').textContent).toBe('Try again');
+    expect(posted(src, n).map((e) => [e.type, e.by])).toEqual([
+      ['build.pause', 'owner'],
+      ['build.resume', 'owner'],
+    ]);
   });
 
   it('unagreed: says nothing is built here, shows the check, and one Resume posts pause then resume', async () => {
@@ -263,84 +284,134 @@ function built() {
 }
 
 const SHOW = 'http://127.0.0.1:4791/?key=k1';
+const HOME = { branch: 'main', commit: 'abc1234', upstream: 'origin/main', sync: 'level' as const };
 
-describe('seeing what was built', () => {
-  it('a built chapter with a page to show: "See it" in the head, a link to a tab of its own', () => {
+describe('trying what was built, from the panel', () => {
+  it('a built chapter: "Try it" in the head, then "Approve: merge into main" in the body', () => {
     const src = localSource({ events: built().events });
-    src.setShows({ c1: SHOW });
+    src.setWorks({ c1: { branch: 'board/one-engine', ahead: 4 } }, { c1: { kind: 'page', url: SHOW } }, HOME);
     render(<App source={src} />);
     expect(screen.getByTestId('watch').dataset.state).toBe('built');
-    const link = screen.getByTestId('watch-show');
-    expect(link.tagName).toBe('A');
-    expect(link.textContent).toBe('See it');
-    expect(link.getAttribute('href')).toBe(SHOW);
-    expect(link.getAttribute('target')).toBe('_blank');
-    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
-    expect(link.className).toBe('watch__btn watch__btn--go');
-    expect(link.closest('.watch__head')).toBeTruthy();
-    // A link is reached by Tab like the buttons: nothing takes it out of the order.
-    expect(link.getAttribute('tabindex')).toBeNull();
+    const tryIt = screen.getByTestId('watch-try');
+    expect(tryIt.tagName).toBe('BUTTON');
+    expect(tryIt.textContent).toBe('Try it');
+    expect(tryIt.closest('.watch__head')).toBeTruthy();
+    const approve = screen.getByTestId('approve-press');
+    expect(approve.textContent).toBe('Approve: merge into main');
+    expect(screen.getByTestId('approve').textContent).toContain('Approve merges board/one-engine into main on this machine. Pushing it is a second press.');
+    // Try it comes first in the order of the page.
+    expect(tryIt.compareDocumentPosition(approve) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('is there when the panel is folded too', () => {
+  it('Try it is there when the panel is folded too, and opens the try room', () => {
     const src = localSource({ events: built().events });
-    src.setShows({ c1: SHOW });
+    src.setWorks({ c1: { branch: 'board/one-engine' } }, { c1: { kind: 'page', url: SHOW } }, HOME);
     render(<App source={src} />);
     fireEvent.click(screen.getByRole('button', { name: 'Fold the build away' }));
-    expect(screen.queryByTestId('feed')).toBeNull();
-    expect(screen.getByTestId('watch-show').getAttribute('href')).toBe(SHOW);
-    fireEvent.click(screen.getByRole('button', { name: 'Show the build' }));
-    expect(screen.getByTestId('watch-show').getAttribute('href')).toBe(SHOW);
+    fireEvent.click(screen.getByTestId('watch-try'));
+    expect(screen.getByTestId('try-room').dataset.chapter).toBe('c1');
   });
 
-  it('comes when the server says there is something to show, and goes when it says there is nothing', () => {
-    const src = localSource({ events: built().events });
-    render(<App source={src} />);
-    expect(screen.queryByTestId('watch-show')).toBeNull();
-    act(() => src.setShows({ c1: SHOW }));
-    expect(screen.getByTestId('watch-show')).toBeTruthy();
-    act(() => src.setShows({}));
-    expect(screen.queryByTestId('watch-show')).toBeNull();
-  });
-
-  it('none while the chapter builds, even with an address for it: Pause stays as it was', () => {
+  it('none while the chapter builds: Pause stays as it was', () => {
     const src = localSource({ events: building().events });
-    src.setShows({ c1: SHOW });
+    src.setWorks({ c1: { branch: 'board/one-engine' } }, {}, HOME);
     render(<App source={src} />);
     expect(screen.getByTestId('watch').dataset.state).toBe('running');
-    expect(screen.queryByTestId('watch-show')).toBeNull();
+    expect(screen.queryByTestId('watch-try')).toBeNull();
+    expect(screen.queryByTestId('approve')).toBeNull();
     expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
   });
 
-  it('none for a built chapter with no address, or an address for another chapter only', () => {
+  it('Approve posts canvas.approve as the owner, and while the server works the panel says what it does', async () => {
     const src = localSource({ events: built().events });
+    src.setWorks({ c1: { branch: 'board/one-engine', ahead: 4, behind: 2 } }, {}, HOME);
     render(<App source={src} />);
-    expect(screen.getByTestId('watch').dataset.state).toBe('built');
-    expect(screen.queryByTestId('watch-show')).toBeNull();
-    act(() => src.setShows({ c2: SHOW }));
-    expect(screen.queryByTestId('watch-show')).toBeNull();
+    expect(screen.getByTestId('approve').textContent).toContain('main has 2 commits this build does not: they are joined in first, and the checks run again.');
+    const n = src.events.length;
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('approve-press'));
+    });
+    expect(posted(src, n).map((e) => [e.type, (e as { canvas?: string }).canvas, e.by])).toEqual([['canvas.approve', 'c1', 'owner']]);
+    act(() => src.setWorks({ c1: { branch: 'board/one-engine', ahead: 4, behind: 2, busy: 'joining' } }, {}, HOME));
+    expect(screen.getByTestId('approve-busy').textContent).toBe('main has moved since this build began. Joining its new commits into board/one-engine and running the check again.');
+    expect((screen.getByTestId('approve-press') as HTMLButtonElement).disabled).toBe(true);
+    act(() => src.setWorks({ c1: { branch: 'board/one-engine', ahead: 4, busy: 'merging' } }, {}, HOME));
+    expect(screen.getByTestId('approve-busy').textContent).toBe('Merging board/one-engine into main.');
   });
 
-  it('never a link to an address the check drops', () => {
-    const src = localSource({ events: built().events });
+  it('merged: where it went and when, and Push when main is ahead of origin', async () => {
+    const b = built();
+    b.must('owner', { type: 'canvas.approve', canvas: 'c1' });
+    // The server says the whole commit; the owner reads it short, as everywhere else.
+    b.must('system', { type: 'canvas.merged', canvas: 'c1', commit: 'abc1234ffeeddccbbaa998877665544332211000', into: 'main' });
+    const src = localSource({ events: b.events });
+    src.setWorks({}, {}, { ...HOME, sync: 'ahead', ahead: 1 });
+    src.answer = () => ({ ok: true, note: 'main is level with origin.' });
     render(<App source={src} />);
-    for (const bad of ['javascript:alert(1)', 'https://example.com/', 'file:///etc/hosts', 'not a url']) {
-      act(() => src.setShows({ c1: bad }));
-      expect(screen.queryByTestId('watch-show')).toBeNull();
-    }
-    expect(document.querySelector('a[href^="javascript"]')).toBeNull();
+    expect(screen.getByTestId('merged-line').textContent).toMatch(/^Merged into main at abc1234 · \d+ Nov \d\d:\d\d$/);
+    expect(screen.queryByTestId('watch-try')).toBeNull();
+    expect(screen.queryByTestId('approve-press')).toBeNull();
+    const push = screen.getByTestId('push');
+    expect(push.textContent).toBe('Push main to origin');
+    expect(screen.getByTestId('approve').textContent).toContain('main has 1 commit that origin does not have. A push cannot be taken back.');
+    await act(async () => {
+      fireEvent.click(push);
+    });
+    expect(src.asked).toEqual([{ route: 'push' }]);
+    expect(screen.getByTestId('approve-said').textContent).toBe('Pushed. main is level with origin.');
+  });
+
+  it('merged and level with origin: no Push', () => {
+    const b = built();
+    b.must('owner', { type: 'canvas.approve', canvas: 'c1' });
+    b.must('system', { type: 'canvas.merged', canvas: 'c1', commit: 'abc1234', into: 'main' });
+    const src = localSource({ events: b.events });
+    src.setWorks({}, {}, HOME);
+    render(<App source={src} />);
+    expect(screen.getByTestId('approve').dataset.state).toBe('merged');
+    expect(screen.queryByTestId('push')).toBeNull();
+  });
+
+  it('main had changed the same lines: the panel says plainly to try it again and approve again', () => {
+    const b = built();
+    b.must('owner', { type: 'canvas.approve', canvas: 'c1' });
+    b.must('system', {
+      type: 'feed.add',
+      chapter: 'c1',
+      kind: 'problem',
+      text: 'main had changed the same places. The builder joined them and the check passed. Try it again, then approve it again.',
+    } as never);
+    const src = localSource({ events: b.events });
+    src.setWorks({ c1: { branch: 'board/one-engine', ahead: 5 } }, {}, HOME);
+    render(<App source={src} />);
+    expect(screen.getByTestId('approve').dataset.state).toBe('again');
+    expect(screen.getByTestId('approve-again').textContent).toBe(
+      'Not merged. main had changed the same places. The builder joined them and the check passed. Try it again, then approve it again.',
+    );
+    expect(screen.getByTestId('approve-press').textContent).toBe('Approve: merge into main');
   });
 
   it('opens nothing by itself', () => {
     const open = vi.fn();
     vi.stubGlobal('open', open);
     const src = localSource({ events: built().events });
-    src.setShows({ c1: SHOW });
+    src.setWorks({ c1: { branch: 'board/one-engine' } }, { c1: { kind: 'app', run: 'npm start', state: 'on', url: 'http://127.0.0.1:5173/' } }, HOME);
     render(<App source={src} />);
-    act(() => src.setShows({ c1: 'http://localhost:4792/' }));
-    expect(screen.getByTestId('watch-show').getAttribute('href')).toBe('http://localhost:4792/');
     expect(open).not.toHaveBeenCalled();
     expect(document.querySelector('iframe')).toBeNull();
+    expect(src.asked).toEqual([]);
+  });
+
+  it('a build not agreed here shows every command it would run before Resume', () => {
+    const b = solid();
+    b.must('owner', { type: 'build.start', chapter: 'c1', track: ['door', 'queue', 'loop'], blueprint: 'bp', check: 'make check' });
+    const src = localSource({ events: b.events });
+    // The same chapter, as a log from elsewhere could hold it: with a setup and a show.
+    src.state = { ...src.state, chapters: { ...src.state.chapters, c1: { ...src.state.chapters.c1!, setup: 'npm ci', show: { kind: 'app', run: 'npm start' } } } };
+    src.setBuild({ chapter: 'c1', title: 'One engine', state: 'unagreed', built: 0, total: 3, check: 'make check' });
+    render(<App source={src} />);
+    expect([...screen.getByTestId('watch-agree').querySelectorAll('code')].map((c) => c.textContent)).toEqual(['make check', 'npm ci', 'npm start']);
+    expect(screen.getByTestId('watch-commands').textContent).toContain('and, when you press Try it, this command to run the app:');
   });
 });
 
@@ -477,7 +548,8 @@ describe('the board after the journey', () => {
     localStorage.clear();
     // With nothing kept, the first view is the chapter in work: the new idea, not the old build.
     const first = render(<App source={localSource({ events: b.events })} remember />);
-    expect(screen.getByTestId('board-name').textContent).toBe('demo · The next idea');
+    // One canvas, two ideas on it: the pill names the canvas, then the idea in view.
+    expect(screen.getByTestId('board-name').textContent).toBe('demo · One engine · The next idea');
     expect(screen.queryByTestId('watch')).toBeNull();
     first.unmount();
     // Kept: the camera on the old chapter. A reload comes back there.
@@ -499,7 +571,7 @@ describe('the Story', () => {
     expect(screen.getByTestId('board-name').textContent).toBe('demo · the story');
     expect(screen.queryByTestId('watch')).toBeNull();
     expect(story.querySelector('[data-moment]')!.textContent).toContain('1 · The blueprint');
-    expect(story.querySelector('[data-chapter="c1"]')!.textContent).toContain('0 of 3 parts built');
+    expect(story.querySelector('[data-canvas="c1"] [data-chapter="c1"]')!.textContent).toContain('building part 1 of 3');
     expect(screen.getByTestId('progress-chapters').textContent).toBe('0 of 1 idea built');
     await act(async () => {
       fireEvent.click(story.querySelector('[data-moment]')!);
@@ -515,24 +587,25 @@ describe('the Story', () => {
     expect(screen.queryByTestId('story')).toBeNull();
   });
 
-  it('the next idea: one note, posted beyond everything on the board, in a new chapter', async () => {
+  it('Start a new canvas: posts canvas.open, and the board goes to it, blank, ready for a first note', async () => {
     const src = localSource({ events: building().events });
-    render(<App source={src} mode="story" />);
+    const { container } = render(<App source={src} mode="story" />);
     const n = src.events.length;
-    fireEvent.change(screen.getByRole('textbox', { name: 'Start the next idea' }), { target: { value: 'Batches of many' } });
+    expect(screen.getByTestId('new-canvas').textContent).toContain('Each canvas gets a branch of its own');
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Start it' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Start a new canvas' }));
     });
-    const [open, add] = posted(src, n);
-    expect(open).toMatchObject({ type: 'chapter.open', chapter: 'batches-of-many', title: 'Batches of many', by: 'owner' });
-    expect(add).toMatchObject({ type: 'item.add', chapter: 'batches-of-many', item: { kind: 'note', text: 'Batches of many' } });
-    const box = (add as unknown as { item: { box: number[] } }).item.box;
-    // Right of the blueprint (the rightmost item, 400 + 300), level with the top of the board.
-    expect(box[0]).toBeGreaterThan(700);
-    expect(box[1]).toBe(0);
+    expect(posted(src, n).map((e) => [e.type, (e as { canvas?: string }).canvas, e.by])).toEqual([['canvas.open', 'canvas-2', 'owner']]);
     expect(screen.queryByTestId('story')).toBeNull();
-    expect(screen.getByTestId('chapter-state').textContent).toBe('idea');
+    expect(screen.getByTestId('canvas-name').textContent).toBe(' · Untitled canvas');
+    // Nothing of the other canvas is on this one: no item, no label, no watch panel.
+    expect(container.querySelectorAll('[data-item]')).toHaveLength(0);
+    expect(container.querySelectorAll('[data-chapter-label]')).toHaveLength(0);
+    expect(screen.queryByTestId('watch')).toBeNull();
+    expect(screen.getByTestId('item-count').dataset.n).toBe('0');
+    expect(screen.getByTestId('hint').textContent).toContain('Write it, draw it');
   });
+
 });
 
 describe('what the server says about the build', () => {

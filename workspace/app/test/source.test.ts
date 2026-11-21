@@ -1,8 +1,10 @@
 import type { BoardEvent, ServerMessage } from '@keel/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import type { Probe, SocketLike } from '../src/source';
-import { BACKOFF, forgetToken, localSource, probeBoard, REOPEN, safeShowUrl, serverSource, socketUrl, takeCode, takeToken, tradeCode } from '../src/source';
+import { BACKOFF, forgetToken, localSource, probeBoard, REOPEN, safeShowUrl, serverSource, showSocketUrl, socketUrl, takeCode, takeToken, tradeCode } from '../src/source';
 import { openBoard } from './helpers';
+
+const HOME = { branch: 'main', commit: 'abc1234', upstream: 'origin/main', sync: 'level' as const };
 
 describe('the local source', () => {
   it('admits a legal draft as the owner, numbers it, and tells its listeners', async () => {
@@ -27,17 +29,31 @@ describe('the local source', () => {
     expect(src.state).toBe(before);
   });
 
-  it('has nothing to show until a test says so, keeps only safe addresses, and tells its listeners', () => {
+  it('holds no works and no shows until a test says so, keeps only safe addresses, and tells its listeners', () => {
     const src = localSource({ events: openBoard().events });
+    expect(src.works.size).toBe(0);
     expect(src.shows.size).toBe(0);
+    expect(src.home).toBeUndefined();
     const heard = vi.fn();
     src.subscribe(heard);
-    src.setShows({ 'engine-loop': 'http://127.0.0.1:4791/', other: 'javascript:alert(1)' });
-    expect([...src.shows]).toEqual([['engine-loop', 'http://127.0.0.1:4791/']]);
+    src.setWorks({ 'engine-loop': { branch: 'board/engine' } }, { 'engine-loop': { kind: 'page', url: 'http://127.0.0.1:4791/' }, other: { kind: 'page', url: 'javascript:alert(1)' } }, HOME);
+    expect([...src.works]).toEqual([['engine-loop', { branch: 'board/engine' }]]);
+    expect([...src.shows]).toEqual([['engine-loop', { kind: 'page', url: 'http://127.0.0.1:4791/' }]]);
+    expect(src.home).toEqual(HOME);
     expect(heard).toHaveBeenCalledTimes(1);
-    src.setShows(undefined);
+    src.setWorks(undefined);
+    expect(src.works.size).toBe(0);
     expect(src.shows.size).toBe(0);
+    expect(src.home).toBeUndefined();
     expect(heard).toHaveBeenCalledTimes(2);
+  });
+
+  it('writes down each press for the server, and answers as the test says', async () => {
+    const src = localSource({ events: openBoard().events });
+    expect(await src.show({ action: 'start', chapter: 'engine-loop', run: 'npm start' })).toEqual({ ok: true });
+    src.answer = (route) => (route === 'push' ? { ok: false, reason: 'origin did not take the push of main: rejected' } : { ok: true });
+    expect(await src.push()).toEqual({ ok: false, reason: 'origin did not take the push of main: rejected' });
+    expect(src.asked).toEqual([{ route: 'show', body: { action: 'start', chapter: 'engine-loop', run: 'npm start' } }, { route: 'push' }]);
   });
 
   it('never dates an event before the last one in the log', async () => {
@@ -272,62 +288,82 @@ describe('the server source', () => {
     expect(h.timers.filter((x) => x.live && x.ms !== 25_000)).toHaveLength(0);
   });
 
-  it('takes what there is to show from init, follows each shows message, and an empty map clears it', () => {
+  it('takes the works, the shows and the home branch from init, follows each works message, and empty maps clear them', () => {
     const h = harness();
     const heard = vi.fn();
     h.src.subscribe(heard);
     h.sock().open();
-    h.sock().receive({ t: 'init', name: 'uLLM', role: 'owner', events: openBoard().events, presence: h.presence, shows: { 'engine-loop': 'http://127.0.0.1:4791/?key=k1' } });
-    expect(h.src.shows.get('engine-loop')).toBe('http://127.0.0.1:4791/?key=k1');
+    h.sock().receive({ t: 'init', name: 'uLLM', role: 'owner', events: openBoard().events, presence: h.presence, works: { 'engine-loop': { branch: 'board/engine', ahead: 3 } }, shows: {}, home: HOME });
+    expect(h.src.works.get('engine-loop')).toEqual({ branch: 'board/engine', ahead: 3 });
+    expect(h.src.home).toEqual(HOME);
     heard.mockClear();
-    h.sock().receive({ t: 'shows', shows: { 'engine-loop': 'http://127.0.0.1:4791/?key=k1', next: 'http://localhost:4792/' } });
-    expect([...h.src.shows]).toEqual([
-      ['engine-loop', 'http://127.0.0.1:4791/?key=k1'],
-      ['next', 'http://localhost:4792/'],
-    ]);
+    const app = { kind: 'app' as const, run: 'npm start', state: 'on' as const, url: 'http://127.0.0.1:5173/' };
+    h.sock().receive({ t: 'works', works: { 'engine-loop': { branch: 'board/engine', busy: 'merging' } }, shows: { c1: app }, home: { ...HOME, sync: 'ahead', ahead: 1 } });
+    expect(h.src.works.get('engine-loop')).toEqual({ branch: 'board/engine', busy: 'merging' });
+    expect(h.src.shows.get('c1')).toEqual(app);
+    expect(h.src.home?.sync).toBe('ahead');
     expect(heard).toHaveBeenCalledTimes(1);
-    h.sock().receive({ t: 'shows', shows: {} });
+    // No home in the message: the folder is no repository any more.
+    h.sock().receive({ t: 'works', works: {}, shows: {} });
+    expect(h.src.works.size).toBe(0);
     expect(h.src.shows.size).toBe(0);
+    expect(h.src.home).toBeUndefined();
     expect(heard).toHaveBeenCalledTimes(2);
   });
 
-  it('drops an address it may not link to, and keeps the rest of the map', () => {
+  it('drops a show address it may not link to, and keeps the rest', () => {
     const h = harness();
     h.init();
+    const page = (url: string) => ({ kind: 'page' as const, url });
     h.sock().receive({
-      t: 'shows',
-      shows: { a: 'javascript:alert(1)', b: 'https://example.com/', c: 'file:///etc/passwd', d: 'not a url', e: 'http://127.0.0.1:4791/' },
+      t: 'works',
+      works: {},
+      shows: {
+        a: page('javascript:alert(1)'),
+        b: page('https://example.com/'),
+        c: { kind: 'app', run: 'npm start', state: 'on', url: 'file:///etc/passwd' },
+        d: page('not a url'),
+        e: page('http://127.0.0.1:4791/'),
+        f: { kind: 'terminal', run: 'node cli.js', state: 'ended', code: 2 },
+      },
     });
-    expect([...h.src.shows]).toEqual([['e', 'http://127.0.0.1:4791/']]);
+    expect([...h.src.shows]).toEqual([
+      ['c', { kind: 'app', run: 'npm start', state: 'on' }],
+      ['e', page('http://127.0.0.1:4791/')],
+      ['f', { kind: 'terminal', run: 'node cli.js', state: 'ended', code: 2 }],
+    ]);
   });
 
-  it('an init with no shows means nothing to show, and a chapter named like an object key finds nothing', () => {
+  it('an init with no works means none, and a canvas named like an object key finds nothing', () => {
     const h = harness();
     h.init();
-    h.sock().receive({ t: 'shows', shows: { 'engine-loop': 'http://127.0.0.1:4791/' } });
-    expect(h.src.shows.size).toBe(1);
+    h.sock().receive({ t: 'works', works: { 'engine-loop': { branch: 'board/engine' } }, shows: {}, home: HOME });
+    expect(h.src.works.size).toBe(1);
     h.sock().close();
     h.timers.filter((x) => x.live && x.ms !== 25_000).pop()!.fn();
     h.init();
-    expect(h.src.shows.size).toBe(0);
-    expect(h.src.shows.get('constructor')).toBeUndefined();
+    expect(h.src.works.size).toBe(0);
+    expect(h.src.home).toBeUndefined();
+    expect(h.src.works.get('constructor')).toBeUndefined();
   });
 
-  it('a lost connection takes the addresses away at once: the server that served them may be gone', () => {
+  it('a lost connection takes the works and shows away at once: the server that served the addresses may be gone', () => {
     const h = harness();
     h.init();
-    h.sock().receive({ t: 'shows', shows: { 'engine-loop': 'http://127.0.0.1:4791/k1/engine-loop/index.html' } });
+    h.sock().receive({ t: 'works', works: { 'engine-loop': { branch: 'board/engine' } }, shows: { c1: { kind: 'page', url: 'http://127.0.0.1:4791/k1/index.html' } }, home: HOME });
     expect(h.src.shows.size).toBe(1);
     const heard = vi.fn();
     h.src.subscribe(heard);
     h.sock().close();
+    expect(h.src.works.size).toBe(0);
     expect(h.src.shows.size).toBe(0);
+    expect(h.src.home).toBeUndefined();
     expect(heard).toHaveBeenCalled();
     // The server is back, on a new port and with a new key: the page links to that one.
     h.timers.filter((x) => x.live && x.ms !== 25_000).pop()!.fn();
     h.sock().open();
-    h.sock().receive({ t: 'init', name: 'uLLM', role: 'owner', events: openBoard().events, presence: h.presence, shows: { 'engine-loop': 'http://127.0.0.1:4802/k2/engine-loop/index.html' } });
-    expect(h.src.shows.get('engine-loop')).toBe('http://127.0.0.1:4802/k2/engine-loop/index.html');
+    h.sock().receive({ t: 'init', name: 'uLLM', role: 'owner', events: openBoard().events, presence: h.presence, shows: { c1: { kind: 'page', url: 'http://127.0.0.1:4802/k2/index.html' } } });
+    expect(h.src.shows.get('c1')).toEqual({ kind: 'page', url: 'http://127.0.0.1:4802/k2/index.html' });
   });
 
   it('a page that reconnects gets the build again in init, and an init with none means none goes', () => {
@@ -522,5 +558,68 @@ describe('the address of a page to show', () => {
     ]) {
       expect(safeShowUrl(bad)).toBeUndefined();
     }
+  });
+});
+
+describe('the presses that go to the server, not the log', () => {
+  const routes = (reply: (url: string, body: unknown) => Response) => {
+    FakeSocket.all = [];
+    const calls: Array<{ url: string; init: RequestInit; body: unknown }> = [];
+    const fetcher = (async (url: string, init: RequestInit) => {
+      const body = typeof init.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined;
+      calls.push({ url, init, body });
+      return reply(url, body);
+    }) as unknown as typeof fetch;
+    const src = serverSource({ url: 'ws://127.0.0.1:4790/ws?token=t', http: { base: 'http://127.0.0.1:4790', token: 't' }, fetch: fetcher, socket: (u) => new FakeSocket(u), probe: async () => 'ok' });
+    return { src, calls };
+  };
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
+
+  it('a start goes to the show route with the token and the command as shown, and a 409 says its reason', async () => {
+    const h = routes((_url, body) => ((body as { run?: string }).run === 'npm start' ? json(200, {}) : json(409, { reason: 'That is not this idea’s command.' })));
+    expect(await h.src.show({ action: 'start', chapter: 'engine-loop', run: 'npm start', cols: 100, rows: 30 })).toEqual({ ok: true });
+    expect(h.calls[0]!.url).toBe('http://127.0.0.1:4790/api/show');
+    expect(h.calls[0]!.init.method).toBe('POST');
+    expect((h.calls[0]!.init.headers as Record<string, string>).authorization).toBe('Bearer t');
+    expect(h.calls[0]!.init.credentials).toBe('omit');
+    expect(h.calls[0]!.body).toEqual({ action: 'start', chapter: 'engine-loop', run: 'npm start', cols: 100, rows: 30 });
+    expect(await h.src.show({ action: 'start', chapter: 'engine-loop', run: 'rm -rf /' })).toEqual({ ok: false, reason: 'That is not this idea’s command.' });
+    h.src.close();
+  });
+
+  it('a 401 says how to open the board again, and no answer says the server is not reachable', async () => {
+    const h = routes(() => json(401, {}));
+    expect(await h.src.show({ action: 'stop', chapter: 'engine-loop' })).toEqual({ ok: false, reason: `The board did not accept this page. ${REOPEN}` });
+    h.src.close();
+    FakeSocket.all = [];
+    const down = serverSource({ url: 'ws://x/ws?token=t', http: { base: 'http://x', token: 't' }, fetch: (async () => Promise.reject(new Error('no'))) as unknown as typeof fetch, socket: (u) => new FakeSocket(u), probe: async () => 'down' });
+    expect(await down.push()).toEqual({ ok: false, reason: 'The board server is not reachable, so nothing was pushed.' });
+    down.close();
+  });
+
+  it('push says git’s words either way and takes the home branch it answers with, and so does sync', async () => {
+    const h = routes((url) =>
+      url.endsWith('/api/push')
+        ? json(200, { ok: false, note: 'origin did not take the push of main: fetch first', home: { branch: 'main', commit: 'abc1234', sync: 'diverged' } })
+        : json(200, { home: { branch: 'main', commit: 'def5678', sync: 'level' } }),
+    );
+    expect(await h.src.push()).toEqual({ ok: false, reason: 'origin did not take the push of main: fetch first' });
+    expect(h.calls[0]!.body).toBeUndefined();
+    expect(h.src.home?.sync).toBe('diverged');
+    const heard = vi.fn();
+    h.src.subscribe(heard);
+    expect(await h.src.sync()).toEqual({ ok: true });
+    expect(h.src.home).toEqual({ branch: 'main', commit: 'def5678', sync: 'level' });
+    expect(heard).toHaveBeenCalledTimes(1);
+    h.src.close();
+  });
+
+  it('a show’s stream opens on the same server, with the same token, for that chapter', () => {
+    const h = routes(() => json(200, {}));
+    const sock = h.src.showStream('engine-loop') as FakeSocket;
+    expect(sock.url).toBe('ws://127.0.0.1:4790/ws/show?token=t&chapter=engine-loop');
+    expect(showSocketUrl('ws://localhost:4790/ws?token=a%2Bb', 'x y')).toBe('ws://localhost:4790/ws/show?token=a%2Bb&chapter=x+y');
+    h.src.close();
+    expect(h.src.showStream('engine-loop')).toBeUndefined();
   });
 });

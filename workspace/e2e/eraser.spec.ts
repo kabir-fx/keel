@@ -59,7 +59,7 @@ test('one sweep of the eraser over two strokes: both fade, both go when it lifts
   const n0 = (await admitted(page)).length;
 
   await page.keyboard.press('e');
-  await expect(page.getByRole('button', { name: 'Erase your ink, boxes, arrows and pins' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Erase your ink, boxes, arrows and pins, or a picture' })).toHaveAttribute('aria-pressed', 'true');
   // A fast sweep: three samples, each far from the last, crossing both strokes between them.
   await page.mouse.move(820, 640);
   await page.mouse.down();
@@ -224,6 +224,44 @@ for (const z of [0.25, 1, 4]) {
     await page.mouse.up();
   });
 }
+
+test('the eraser takes the agent’s picture off as Delete does, and Undo puts it back; a sweep over a line drawn on it takes only the line', async ({ page }) => {
+  await open(page);
+  const card = (await page.locator('[data-item="a1"]').boundingBox())!;
+  // A line of the owner's across the lower part of the card.
+  const y = card.y + card.height - 30;
+  const line = await ink(page, Array.from({ length: 9 }, (_, i): [number, number] => [card.x + 40 + i * 20, y]));
+  await page.keyboard.press('e');
+
+  // Down across the line: the line fades, the card under it does not, and only the line goes.
+  let n = (await admitted(page)).length;
+  const x = card.x + 100;
+  await page.mouse.move(x, y - 40);
+  await page.mouse.down();
+  await page.mouse.move(x, y + 10, { steps: 6 });
+  await nextFrame(page);
+  await expect(page.locator(`[data-item="${line}"]`)).toHaveAttribute('data-erasing', '');
+  await expect(page.locator('[data-item="a1"]')).not.toHaveAttribute('data-erasing');
+  await page.mouse.up();
+  await expect.poll(() => since(page, n)).toEqual([['item.remove', line]]);
+
+  // A sweep inside the card, on nothing of the owner's: the card fades, and goes when the pointer lifts.
+  n = (await admitted(page)).length;
+  await page.mouse.move(card.x + card.width - 60, card.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(card.x + card.width - 30, card.y + 40, { steps: 4 });
+  await nextFrame(page);
+  await expect(page.locator('[data-item="a1"]')).toHaveAttribute('data-erasing', '');
+  await page.mouse.up();
+  await expect.poll(() => since(page, n)).toEqual([['item.remove', 'a1']]);
+  await expect(page.locator('[data-item="a1"]')).toHaveCount(0);
+  await expect(page.getByText(/^Taken off the board\. Undo \(.+\) puts it back\.$/)).toBeVisible();
+
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(async () => (await since(page, n)).slice(1)).toEqual([['item.restore', 'a1']]);
+  await expect(page.locator('[data-item="a1"]')).toBeVisible();
+  await expect(page.locator('[data-item="a1"]')).not.toHaveAttribute('data-erasing');
+});
 
 test('in the focus view the eraser reaches only what stands above the dim', async ({ page }) => {
   await open(page, 'engine-loop&at=4');

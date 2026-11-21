@@ -1,14 +1,17 @@
 import type { Anchor, BoardState, Box, EventDraft, Id, NoteItem, Target } from '@keel/protocol';
-import { currentChapter } from '@keel/protocol';
+import { chapterInWorkOn } from '@keel/protocol';
 
 /** A draft as the app sends it: the server sets `by` from the connection. */
 export type Draft = EventDraft extends infer T ? (T extends unknown ? Omit<T, 'by'> : never) : never;
 
-/** The chapter a new mark belongs to, or undefined when no chapter is in work. */
+/**
+ * The chapter a new mark belongs to, or undefined when no chapter is in work: the one in work
+ * on the canvas the state shows (`chapterInWorkOn`). An open mark on a built idea does not
+ * hide an idea there that is not built.
+ */
 export function chapterInWork(state: BoardState): Id | undefined {
-  const c = currentChapter(state);
-  if (!c) return undefined;
-  return state.chapters[c]?.state === 'built' ? undefined : c;
+  const canvas = state.canvasOrder[state.canvasOrder.length - 1];
+  return canvas ? chapterInWorkOn(state, canvas) : undefined;
 }
 
 /** A chapter's title from a note: its first six words. */
@@ -29,10 +32,12 @@ export function chapterId(title: string, state: BoardState): Id {
       .replace(/^-+|-+$/g, '')
       .slice(0, 40)
       .replace(/-+$/, '') || 'idea';
-  if (!state.chapters[base]) return base;
+  // A deleted idea's id is used once (record 0014): a new one never takes it.
+  const taken = (id: Id) => !!state.chapters[id] || !!state.removedChapters[id];
+  if (!taken(base)) return base;
   for (let n = 2; ; n++) {
     const id = `${base}-${n}`;
-    if (!state.chapters[id]) return id;
+    if (!taken(id)) return id;
   }
 }
 

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { BoardState } from '@keel/protocol';
-import { PICTURE_KINDS, PictureSpec, admitAll, checkPicture, emptyState } from '@keel/protocol';
+import { PICTURE_KINDS, PictureSpec, ShowPlan, admitAll, checkPicture, emptyState } from '@keel/protocol';
 import { grammarSignatures, signatureOf } from '../src/signature';
 import { ModelBody, modelOps } from '../src/tools';
 
@@ -96,6 +96,16 @@ describe('the grammar file', () => {
       seen.add(name);
     }
     expect([...seen].sort()).toEqual(Object.keys(want).sort());
+  });
+
+  it('gives one example of each kind of show, and each passes the contract\'s schema', () => {
+    const shows = all.filter((b) => b.info === 'json show').flatMap((b) => JSON.parse(b.body) as unknown[]);
+    const kinds = shows.map((v) => {
+      const parsed = ShowPlan.safeParse(v);
+      expect(parsed.success, `the show ${JSON.stringify(v)}: ${parsed.error?.message}`).toBe(true);
+      return parsed.data!.kind;
+    });
+    expect(kinds.sort()).toEqual(['app', 'page', 'terminal']);
   });
 
   it('names no picture kind the contract does not have', () => {

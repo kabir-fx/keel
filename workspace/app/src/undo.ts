@@ -34,6 +34,9 @@ import type { BoardCtx, UndoStep } from './tools/types';
  * events on the log.
  */
 
+/** What the board says when the owner takes a picture off, with Delete or the eraser: it is not lost. */
+export const pictureTakenOff = () => `Taken off the board. Undo (${keyWords('undo')}) puts it back.`;
+
 /* ------------------------------------------------------------ what a step did */
 
 /**
@@ -584,7 +587,7 @@ export function createUndo(board: BoardCtx, pen: Pick<PenTool, 'dropStroke'>, po
       board.together(ids);
       const pictures = ids.filter((id) => state.items[id]!.item.kind === 'picture');
       void Promise.all(ids.map((id) => board.send({ type: 'item.remove', item: id }))).then((rs) => {
-        if (rs.some((r, i) => r.ok && pictures.includes(ids[i]!))) board.say(`Taken off the board. Undo (${keyWords('undo')}) puts it back.`);
+        if (rs.some((r, i) => r.ok && pictures.includes(ids[i]!))) board.say(pictureTakenOff());
       });
     },
     record(hand) {

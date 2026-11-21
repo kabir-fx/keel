@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { ShowPlan } from '@keel/protocol';
 import { FakeBoard } from './fake-board';
 
 /** A board with one chapter the owner solidified and started: `parts` on the track, `check` agreed. */
@@ -23,6 +24,9 @@ export interface BuildBoardOptions {
   pick?: string;
   /** What the owner pins on a part after the idea is decided. */
   remark?: { part: string; text: string };
+  /** The blueprint's setup and show, agreed to with "Build this". */
+  setup?: string;
+  show?: ShowPlan;
 }
 
 export async function buildBoard(o: BuildBoardOptions = {}): Promise<FakeBoard> {
@@ -59,11 +63,13 @@ export async function buildBoard(o: BuildBoardOptions = {}): Promise<FakeBoard> 
         proof: ['make check passes.'],
         parts,
         check: o.check ?? 'true',
+        ...(o.setup ? { setup: o.setup } : {}),
+        ...(o.show ? { show: o.show } : {}),
       },
     },
   });
   b.must('owner', { type: 'solidify', chapter: BCH, picks: ['bp'], parts });
-  if (!o.noStart) b.must('owner', { type: 'build.start', chapter: BCH, track: parts, blueprint: 'bp', check: o.check ?? 'true' });
+  if (!o.noStart) b.must('owner', { type: 'build.start', chapter: BCH, track: parts, blueprint: 'bp', check: o.check ?? 'true', ...(o.setup ? { setup: o.setup } : {}), ...(o.show ? { show: o.show } : {}) });
   if (o.remark) {
     b.must('owner', { type: 'item.add', chapter: BCH, item: { id: 'pin1', kind: 'pin', box: [0, 0, 9, 9], at: [1, 1], on: { item: 'bp', sub: `part:${o.remark.part}` }, text: o.remark.text } });
   }

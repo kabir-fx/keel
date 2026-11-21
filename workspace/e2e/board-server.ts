@@ -45,6 +45,10 @@ export async function startBoard(opts: {
   name?: string;
   linkOptions?: Record<string, string>;
   files?: Record<string, string>;
+  /** More of the server's environment: what a stand-in agent reads. */
+  env?: Record<string, string>;
+  /** Run on the repository folder after its first commit and before the server opens it. */
+  prepare?: (repo: string) => void;
 }): Promise<RunningBoard> {
   mkdirSync(SHOTS, { recursive: true });
   const repo = join(mkdtempSync(join(tmpdir(), 'keel-live-')), opts.name ?? 'demo-repo');
@@ -52,7 +56,7 @@ export async function startBoard(opts: {
   // The server keeps the owner's token in a private folder under the home directory unless
   // told otherwise: each run gets its own, and leaves none behind.
   const stateDir = mkdtempSync(join(tmpdir(), 'keel-state-'));
-  const env = { ...process.env, KEEL_STATE_DIR: stateDir };
+  const env = { ...process.env, ...opts.env, KEEL_STATE_DIR: stateDir };
   for (const [name, text] of Object.entries(opts.files ?? {})) {
     mkdirSync(dirname(join(repo, name)), { recursive: true });
     (await import('node:fs')).writeFileSync(join(repo, name), text);
@@ -67,6 +71,7 @@ export async function startBoard(opts: {
     git('add', 'README.md');
     git('commit', '-q', '-m', 'The first commit');
   }
+  opts.prepare?.(repo);
   const linkOpts = Object.entries(opts.linkOptions ?? {}).flatMap(([k, v]) => ['--link-opt', `${k}=${v}`]);
   const builderOpts = opts.builder ? ['--builder', opts.builder] : [];
   const server: ChildProcess = spawn('node', [BIN, 'open', repo, '--no-browser', '--port', '0', '--app-dir', APP, '--link', opts.link, ...builderOpts, ...linkOpts], {

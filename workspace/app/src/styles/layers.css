@@ -4,7 +4,7 @@
  *
  * Over the board, in the page: the ground, the world (every item, under one transform), the
  * overlay (what keeps its size at any zoom), the hint line, the "drop here" sheet, the Story,
- * the panels, the notices, the tooltip and the toast.
+ * the panels, the notices, the try room, the question before a delete, the tooltip and the toast.
  *
  * Inside the world the items keep their own small numbers, among themselves (styles/canvas.css,
  * styles/focus.css): the world is one layer of the page. The editor of a note or a label lies
@@ -19,6 +19,8 @@
   --layer-story: 35;
   --layer-panels: 40;
   --layer-notices: 41;
+  --layer-room: 45;
+  --layer-confirm: 47;
   --layer-tooltip: 50;
   --layer-toast: 60;
 

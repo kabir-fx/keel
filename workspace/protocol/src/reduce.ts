@@ -6,7 +6,8 @@ import { withAnchor, withArrowEnd } from './items';
 import type { ModelOp } from './model';
 import type { ActType } from './events';
 import type { BoardState, Chapter, FeedEntry, ModelState, PartRecord } from './state';
-import { emptyState } from './state';
+import { dueParts, emptyState } from './state';
+import { showRun } from './pictures';
 
 /**
  * The reducer. It assumes the event passed the rules (see rules.ts), and it never throws:
@@ -56,8 +57,12 @@ export function step(s: BoardState, ev: BoardEvent): void {
 function shallowCopy(s: BoardState): BoardState {
   return {
     ...s,
+    canvases: { ...s.canvases },
+    canvasOrder: [...s.canvasOrder],
     chapters: { ...s.chapters },
     chapterOrder: [...s.chapterOrder],
+    removedCanvases: { ...s.removedCanvases },
+    removedChapters: { ...s.removedChapters },
     items: { ...s.items },
     itemOrder: [...s.itemOrder],
     model: copyModel(s.model),
@@ -101,10 +106,20 @@ function apply(s: BoardState, ev: BoardEvent, n: number): void {
       return;
     }
 
+    case 'canvas.open': {
+      openCanvas(s, ev.canvas, ev.at, ev.title);
+      return;
+    }
+
     case 'chapter.open': {
-      if (s.chapters[ev.chapter]) return;
+      if (s.chapters[ev.chapter] || s.removedChapters[ev.chapter]) return;
+      // With no canvas named: the board's first canvas, made now when the board has none.
+      const canvas = ev.canvas ?? s.canvasOrder[0] ?? ev.chapter;
+      if (s.removedCanvases[canvas]) return;
+      openCanvas(s, canvas, ev.at);
       s.chapters[ev.chapter] = {
         id: ev.chapter,
+        canvas,
         title: ev.title,
         state: 'idea',
         paused: false,
@@ -276,14 +291,17 @@ function apply(s: BoardState, ev: BoardEvent, n: number): void {
     }
 
     case 'build.start': {
-      const c = s.chapters[ev.chapter];
-      if (!c) return;
+      const was = s.chapters[ev.chapter];
+      if (!was) return;
+      const { proved: _proved, ...c } = was;
       s.chapters[ev.chapter] = {
         ...c,
         state: 'building',
         paused: false,
         track: [...ev.track],
         check: ev.check,
+        ...(ev.setup !== undefined ? { setup: ev.setup } : {}),
+        ...(ev.show !== undefined ? { show: ev.show } : {}),
         ...(ev.blueprint !== undefined ? { blueprint: ev.blueprint } : {}),
       };
       settleChapter(s, ev.chapter, ev.at);
@@ -304,6 +322,40 @@ function apply(s: BoardState, ev: BoardEvent, n: number): void {
       if (!c) return;
       s.chapters[ev.chapter] = { ...c, paused: false };
       pushStateFeed(s, ev, 'Resumed by the owner.');
+      return;
+    }
+
+    case 'build.proved': {
+      const c = s.chapters[ev.chapter];
+      if (!c) return;
+      s.chapters[ev.chapter] = { ...c, proved: true };
+      const run = showRun(c.show);
+      s.feed.push({ id: ev.id, at: ev.at, by: ev.by, chapter: ev.chapter, kind: 'state', text: run ? `The app started and answered, as you will try it: \`${run}\`.` : 'The app started and answered.' });
+      settleChapter(s, ev.chapter, ev.at);
+      return;
+    }
+
+    case 'canvas.approve': {
+      for (const id of unmergedOn(s, ev.canvas)) s.feed.push({ id: ev.id, at: ev.at, by: ev.by, chapter: id, kind: 'state', text: 'Approved by the owner.' });
+      return;
+    }
+
+    case 'canvas.merged': {
+      for (const id of unmergedOn(s, ev.canvas)) {
+        s.chapters[id] = { ...s.chapters[id]!, merged: { commit: ev.commit, into: ev.into, at: ev.at } };
+        s.feed.push({ id: ev.id, at: ev.at, by: ev.by, chapter: id, kind: 'state', text: `Merged into ${ev.into}.`, commit: ev.commit });
+      }
+      return;
+    }
+
+    case 'canvas.remove': {
+      const canvas = s.canvases[ev.canvas];
+      if (!canvas) return;
+      for (const id of [...s.chapterOrder]) if (s.chapters[id]?.canvas === ev.canvas) removeChapter(s, id, ev.at);
+      const { [ev.canvas]: _gone, ...rest } = s.canvases;
+      s.canvases = rest;
+      s.canvasOrder = s.canvasOrder.filter((id) => id !== ev.canvas);
+      s.removedCanvases[ev.canvas] = { ...canvas, removedAt: ev.at };
       return;
     }
 
@@ -398,17 +450,77 @@ function settleChaptersOf(s: BoardState, part: Id, at: string): void {
  * when one is not. A part the owner put off counts as off the track.
  */
 function settleChapter(s: BoardState, chapter: Id, at: string): void {
-  const c = s.chapters[chapter];
+  let c = s.chapters[chapter];
   if (!c || (c.state !== 'building' && c.state !== 'built') || c.track.length === 0) return;
-  const due = c.track.filter((id) => {
-    const p = s.model.parts[id];
-    return p !== undefined && !p.dropped && p.state !== 'later';
-  });
-  const done = due.length > 0 && due.every((id) => s.model.parts[id]?.state === 'built');
+  const due = dueParts(s, c);
+  const parts = due.length > 0 && due.every((id) => s.model.parts[id]?.state === 'built');
+  if (!parts && c.proved) {
+    // What answered was the parts as they were.
+    const { proved: _proved, ...rest } = c;
+    c = rest;
+    s.chapters[chapter] = c;
+  }
+  // An app is built when it has answered once (record 0013), not when its last part is.
+  const done = parts && (c.show?.kind !== 'app' || c.proved === true);
   if (done && c.state !== 'built') s.chapters[chapter] = { ...c, state: 'built', builtAt: at };
   else if (!done && c.state === 'built') {
-    const { builtAt: _dropped, ...rest } = c;
+    // What is built again is not what the home branch has.
+    const { builtAt: _dropped, merged: _merged, ...rest } = c;
     s.chapters[chapter] = { ...rest, state: 'building' };
+  }
+}
+
+/** Make a canvas, unless it is there already or was deleted. */
+function openCanvas(s: BoardState, canvas: Id, at: string, title?: string): void {
+  if (s.canvases[canvas] || s.removedCanvases[canvas]) return;
+  s.canvases[canvas] = { id: canvas, openedAt: at, ...(title !== undefined ? { title } : {}) };
+  s.canvasOrder.push(canvas);
+}
+
+/** The built chapters on a canvas that the home branch does not have yet, oldest first. */
+function unmergedOn(s: BoardState, canvas: Id): Id[] {
+  return s.chapterOrder.filter((id) => {
+    const c = s.chapters[id];
+    return c !== undefined && c.canvas === canvas && c.state === 'built' && !c.merged;
+  });
+}
+
+/**
+ * An idea goes with its canvas. The chapter leaves `chapters` for `removedChapters`, its items
+ * go off the board, and what waited on it waits no more. The parts it added go with it,
+ * unless the home branch has its work or another idea builds them: a part that was never
+ * merged is not part of the project. A part of another idea's that it was building is set
+ * down, still decided.
+ */
+function removeChapter(s: BoardState, chapter: Id, at: string): void {
+  const c = s.chapters[chapter];
+  if (!c) return;
+  const { [chapter]: _gone, ...rest } = s.chapters;
+  s.chapters = rest;
+  s.chapterOrder = s.chapterOrder.filter((id) => id !== chapter);
+  s.removedChapters[chapter] = { ...c, removedAt: at };
+
+  for (const id of s.itemOrder) {
+    const it = s.items[id];
+    if (it && it.chapter === chapter && !it.removed) s.items[id] = { ...it, removed: true };
+  }
+  for (const act of Object.values(s.acts)) {
+    if (act.chapter !== chapter) continue;
+    const { [act.id]: _act, ...others } = s.acts;
+    s.acts = others;
+  }
+  s.feed = s.feed.filter((f) => f.chapter !== chapter);
+  s.moments = s.moments.filter((m) => m.chapter !== chapter);
+
+  const onAnotherTrack = (part: Id) => s.chapterOrder.some((id) => s.chapters[id]?.track.includes(part));
+  for (const id of s.model.partOrder) {
+    const p = s.model.parts[id];
+    if (!p || p.dropped) continue;
+    if (p.chapter === chapter && !c.merged && !p.shelf && !p.external && !onAnotherTrack(id)) {
+      applyModelOp(s.model, { op: 'part.drop', id }, undefined);
+    } else if (p.state === 'building' && c.track.includes(id) && !onAnotherTrack(id)) {
+      s.model.parts[id] = { ...p, state: 'solid' };
+    }
   }
 }
 

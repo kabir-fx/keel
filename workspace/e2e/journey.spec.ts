@@ -98,22 +98,26 @@ test('a reload keeps the owner’s place: the pill and the panel follow where th
   await standIn(page, upTo('e88'));
   await page.goto('/?token=owner-token');
   await settle(page);
-  // Nothing kept yet: the first view is the idea in work, not the old build.
+  // Nothing kept yet: the first view is the idea in work, not the old build. The log is from
+  // before canvases, so both ideas are on one canvas, and the pill names the one in view after it.
+  const pill = page.locator('header.pill--board');
   await expect(page.getByTestId('board-name')).toContainText('API server');
+  await expect(pill).toHaveAttribute('data-chapter', 'api-server');
   await expect(page.getByTestId('watch')).toHaveCount(0);
   await page.reload();
   await settle(page);
-  await expect(page.getByTestId('board-name')).toContainText('API server');
+  await expect(pill).toHaveAttribute('data-chapter', 'api-server');
   await expect(page.getByTestId('watch')).toHaveCount(0);
-  // The owner goes to the old chapter, and reloads there.
+  // The owner goes to the old idea, at its blueprint, and reloads there.
   await page.getByRole('button', { name: 'Story' }).click();
-  await page.locator('article[data-chapter="engine-loop"] .chapter__head').click();
+  await page.locator('[data-moment="e53"]').click();
+  await expect(pill).toHaveAttribute('data-chapter', 'engine-loop');
   await expect(page.getByTestId('board-name')).toContainText('The engine loop');
   await page.waitForTimeout(600);
   const before = await page.locator('.world').getAttribute('style');
   await page.reload();
   await settle(page);
-  await expect(page.getByTestId('board-name')).toContainText('The engine loop');
+  await expect(pill).toHaveAttribute('data-chapter', 'engine-loop');
   // The engine loop is built and the API server is in work: the done build's panel stays out of the way.
   await expect(page.getByTestId('watch')).toHaveCount(0);
   expect(await page.locator('.world').getAttribute('style')).toBe(before);

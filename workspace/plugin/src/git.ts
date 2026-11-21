@@ -278,8 +278,9 @@ async function onBranch(dir: string, gitDir: string, branch: string): Promise<bo
 }
 
 /**
- * The builder's worktree for one chapter, on its own branch, made from the owner's HEAD the
- * first time and reused after. `dir` is the builder's private folder: anything there that is
+ * The builder's worktree for one chapter, on its own branch, made from `base` the first time
+ * (the home branch's commit, as the server read it; the owner's HEAD when none is given) and
+ * reused after (`reused`). `dir` is the builder's private folder: anything there that is
  * not this worktree is the builder's own leftover, and is cleared. So is a worktree whose
  * `.git` was changed: its commits are on the branch, and it is made again from there.
  * `gitDir` is the worktree's own git folder: run every git in the worktree with `pinEnv`.
@@ -288,11 +289,11 @@ async function onBranch(dir: string, gitDir: string, branch: string): Promise<bo
  * holds nothing of the owner's; `board` is where the board's folder is inside it. When it does
  * hold files, this throws `OwnerFilesError`.
  */
-export async function ensureWorktree(repo: string, dir: string, branch: string, o: { board?: string } = {}): Promise<{ created: boolean; base?: string; gitDir: string; fromNothing?: boolean }> {
+export async function ensureWorktree(repo: string, dir: string, branch: string, o: { board?: string; base?: string } = {}): Promise<{ created: boolean; base?: string; gitDir: string; fromNothing?: boolean; reused?: boolean }> {
   if (fs.existsSync(dir)) {
     const known = await worktreeGitDir(repo, dir);
     if (known !== undefined && linkIntact(dir, known) && (await onBranch(dir, known, branch))) {
-      return { created: false, gitDir: known };
+      return { created: false, gitDir: known, reused: true };
     }
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -306,6 +307,12 @@ export async function ensureWorktree(repo: string, dir: string, branch: string, 
   if (await branchExists(repo, branch)) {
     await gitOk(repo, ['worktree', 'add', '--quiet', dir, branch]);
     return made(false);
+  }
+  if (o.base !== undefined) {
+    const r = await git(repo, ['rev-parse', '--verify', '--quiet', `${o.base}^{commit}`]);
+    if (r.code !== 0) throw new GitError(`The home branch's commit ${o.base.slice(0, 12)} is not in this repository.`);
+    await gitOk(repo, ['worktree', 'add', '--quiet', '-b', branch, dir, r.stdout.trim()]);
+    return made(true, r.stdout.trim());
   }
   const head = await headOf(repo);
   if (!head) {
@@ -321,12 +328,43 @@ export async function ensureWorktree(repo: string, dir: string, branch: string, 
   return made(true, head);
 }
 
-/** Take the worktree away and keep its branch: the branch is what the owner merges. */
+/** Take the worktree away and keep its branch: the branch is what the owner approves. */
 export async function removeWorktree(repo: string, dir: string): Promise<void> {
   if (!fs.existsSync(dir)) return;
   const r = await git(repo, ['worktree', 'remove', dir]);
   if (r.code !== 0) await git(repo, ['worktree', 'remove', '--force', dir]);
   await git(repo, ['worktree', 'prune']);
+}
+
+/** Every branch name in the repository, in lower case: a Mac's disk does not tell `A` from `a`. */
+export async function branchNames(repo: string): Promise<string[]> {
+  const out = await gitOk(repo, ['for-each-ref', '--format=%(refname:short)', 'refs/heads/']);
+  return out ? out.split('\n').map((b) => b.toLowerCase()) : [];
+}
+
+/** The longest branch name a build gets. */
+export const BRANCH_MAX = 60;
+
+/**
+ * The branch of a build, from the idea's title: `board/<slug>`, ASCII, at most `BRANCH_MAX`
+ * characters, with `-2`, `-3` when the name is taken. A name is taken when a branch has it, or
+ * lies under it, or `taken` names it. A title with no letter or digit in ASCII gives `fallback`.
+ */
+export function branchFor(title: string, fallback: string, taken: readonly string[]): string {
+  const slug = (s: string) =>
+    s
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  const stem = slug(title) || slug(fallback) || 'idea';
+  const busy = (name: string) => taken.some((t) => t === name || t.startsWith(`${name}/`));
+  for (let n = 1; ; n++) {
+    const tail = n === 1 ? '' : `-${n}`;
+    const name = `board/${stem.slice(0, BRANCH_MAX - 'board/'.length - tail.length).replace(/-+$/, '')}${tail}`;
+    if (!busy(name)) return name;
+  }
 }
 
 export function samePath(a: string, b: string): boolean {

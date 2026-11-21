@@ -84,3 +84,6 @@ a.watch__btn { display: inline-flex; align-items: center; text-decoration: none;
 .feed__line--lit { box-shadow: 0 0 0 3px rgba(194, 65, 12, 0.35); }
 .feed__empty { padding: 10px 2px; color: var(--text-2); }
 .watch__leave { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--fill); color: #fff; }
+.watch__commands { flex: 1 1 100%; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.watch__commands dt { color: var(--owner-text); font-weight: 600; }
+.watch__commands dd { margin: 0; display: flex; }

@@ -28,7 +28,13 @@ Open the board in a folder for the project, not in your home folder: the agent c
 
 1. **Ideate.** You mark the board: a note, a sketch, a circle, a cross, a dropped file. There is no send button. When you pause, the agent answers in pictures, with two to four approaches side by side.
 2. **Solidify.** You lasso the pictures you pick and press Solidify. The agent reads the idea back as one picture, the blueprint, with the parts to build and one check command.
-3. **Watch.** You press "Build this". A builder writes the code on its own branch, one commit per part. A part fills in only when the agreed check passes. When the result is a page a browser can open by itself, the board opens it for you.
+3. **Watch.** You press "Build this". A builder writes the code on its own branch, one commit per part. A part fills in only when the agreed check passes.
+4. **Try it.** When the build says done, press "Try it". The board runs what the blueprint named, in the build's own copy: a web app in a frame on the board, a command in a terminal on the board, or a page. Nothing runs before you press. An app is built only once the builder has started it and it answered. When it does not answer, the build stops with what it printed, and "Try again" runs that step again.
+5. **Approve.** Press "Approve: merge into main" when the build says done. The board merges the branch into your main branch on your machine. Push is a second press. When origin has commits that main does not have, it does not take the push, and the board says so: one `git pull` in the folder joins the two.
+
+A board has many canvases. Each canvas is a blank place for an idea, with a branch of its own. Ideas on one canvas are built together, on its branch. Start a new canvas from the Story. A canvas can be deleted there too, with its branch.
+
+When the board opens, it brings your main branch level with its remote when that is a fast-forward, and every build starts from it. You never type a git command.
 
 ## Commands
 
@@ -46,8 +52,10 @@ Open the board in a folder for the project, not in your home folder: the agent c
 
 - The server listens on 127.0.0.1 only, and every request for the board's data needs a token that is new for each start.
 - The agent is a headless Claude Code process on your own sign-in, so it uses your Claude usage. It may read files inside the folder, and it may not run commands or write files. It may not read files with secret names, such as `.env` files and keys.
-- The builder starts only when you press "Build this". It works in its own copy, on the branch `board/<name>`, and never touches your checkout. Merging that branch is your act: `git merge board/<name>`.
-- The one check you agreed to runs in a sandbox with no network.
+- The builder starts only when you press "Build this". It works in its own copy, on the branch `board/<canvas name>`, and never touches your checkout.
+- The one check you agreed to runs in a sandbox with no network. The setup, such as `npm ci`, runs once in the copy, with the network.
+- Try it runs the command you agreed to on the blueprint, in the copy, boxed in, with the network. An app gets `PORT` and is told to listen on 127.0.0.1. On macOS the box cannot hold it to that: an app that listens on every address can be reached from your network while it runs. Where the system has no box, as on Windows, it runs with a short environment and no box, and the board says so. An app that needs a secret the repository does not hold, such as an `.env` file, will not start: the board shows what it printed. The terminal needs the `script` command, which macOS and most Linux systems have.
+- Approve moves main by fast-forward only, after the agreed check passed on what is merged. When main moved meanwhile, the builder joins it in first and runs the check again. Your uncommitted changes are never stashed or overwritten: when they are in the way, the board names the files and waits. A push is never forced, and never done without your press. A push origin refuses leaves both sides as they were.
 - The board's log is `.keel/board/log.jsonl` in your folder, and it is meant to be committed. Tokens and the builder's copies stay outside it, in `~/.keel/boards/`.
 
 The full list of limits, and what they do not cover, is in the [README on GitHub](https://github.com/kabir-fx/keel#what-runs-on-your-machine-and-what-it-may-do).

@@ -31,7 +31,9 @@ export function stateReads(state: BoardState, item: PictureItem): readonly unkno
     case 'blueprint': {
       const own = state.items[item.id];
       const chapter = own?.chapter ? state.chapters[own.chapter] : undefined;
-      return [...modelReads(state), own, chapter, ...p.picks.flatMap((pick) => (pick.from ? chainReads(state, pick.from) : []))];
+      // Every chapter: the blueprint names the ideas that are built and not merged yet.
+      const chapters = state.chapterOrder.map((id) => state.chapters[id]);
+      return [...modelReads(state), own, chapter, ...chapters, ...p.picks.flatMap((pick) => (pick.from ? chainReads(state, pick.from) : []))];
     }
     default:
       return [];
@@ -41,7 +43,7 @@ export function stateReads(state: BoardState, item: PictureItem): readonly unkno
 /**
  * What a picture reads of how the owner looks at the board (its `view`), by its kind: the step
  * being played of the walk it shows, how pipelines are drawn, whether it is the picture shown
- * large. So a step of a walk is news only to the pictures that show that walk.
+ * large, where a build starts. So a step of a walk is news only to the pictures that show that walk.
  *
  * As with `stateReads`: a renderer that starts to read more of the view must be listed here.
  */
@@ -55,6 +57,8 @@ export function viewReads(view: PictureView, item: PictureItem): readonly unknow
       return [view.pipeline, stepPlayed(view, p.walk)];
     case 'focus':
       return [view.focus === item.id];
+    case 'blueprint':
+      return [view.build?.home?.branch, view.build?.home?.commit, view.build?.branch, ...(view.build?.waiting.flatMap((w) => [w.chapter, w.title]) ?? [])];
     default:
       return [];
   }

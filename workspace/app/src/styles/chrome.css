@@ -20,14 +20,19 @@
 }
 .pill--board {
   left: 24px;
-  max-width: calc(50vw - 140px);
+  /* Up to the view switch in the middle (half its width and a gap). */
+  max-width: calc(50vw - 110px);
   padding: 0 16px 0 12px;
   background: #fff;
   border: 1px solid var(--line);
   box-shadow: var(--shadow-chrome);
 }
 .pill--board svg { flex: none; }
-.pill__name { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 15px/20px var(--font-ui); }
+.pill__name { margin: 0; min-width: 0; display: flex; overflow: hidden; white-space: pre; font: 600 15px/20px var(--font-ui); }
+/* The board's name and the canvas's share the room: the canvas's is cut first, down to a few letters, then the board's. */
+.pill__name > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pill__name > .pill__board { flex: 0 1 auto; }
+.pill__name > .pill__where { flex: 0 1000 auto; min-width: 5ch; }
 .pill__chapter { font-weight: 600; }
 .sep { flex: none; width: 1px; height: 20px; background: var(--line); }
 .pill__count { flex: none; color: var(--text-2); white-space: nowrap; }

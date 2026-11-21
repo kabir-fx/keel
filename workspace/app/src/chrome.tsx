@@ -11,10 +11,11 @@ import { NO_SPEECH } from './speech';
 const CHIP: Record<ChapterState, string> = { idea: 'idea', solid: 'solid', building: 'building', built: 'built' };
 
 /**
- * The board pill: the board's name, the chapter in view with its state, the items and the open
- * marks. In the Story it says how many ideas there are and how many are built.
+ * The board pill: the board's name, the canvas in view (else the chapter in view) with the
+ * chapter's state, the items and the open marks. In the Story it says how many ideas there are
+ * and how many are built.
  */
-export function BoardPill({ state, chapter: inView, mode = 'board' }: { state: BoardState; chapter?: Id | undefined; mode?: ViewMode }) {
+export function BoardPill({ state, chapter: inView, mode = 'board', canvas }: { state: BoardState; chapter?: Id | undefined; mode?: ViewMode; canvas?: string | undefined }) {
   const chapterId = inView && state.chapters[inView] ? inView : currentChapter(state);
   const chapter = chapterId ? state.chapters[chapterId] : undefined;
   const items = liveItems(state).length;
@@ -28,9 +29,35 @@ export function BoardPill({ state, chapter: inView, mode = 'board' }: { state: B
         <rect width="28" height="28" rx="7" fill="#0F1B2D" />
         <path d="M6 10 H22 C21 16 18 19 14 20 C10 19 7 16 6 10 Z M14 6 V20" fill="none" stroke="#FFFFFF" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
       </svg>
-      <h1 className="pill__name" data-testid="board-name">
-        {state.name || 'Board'}
-        {story ? <span className="pill__chapter"> · the story</span> : chapter && <span className="pill__chapter"> · {chapter.title}</span>}
+      <h1
+        className="pill__name"
+        data-testid="board-name"
+        data-tip={`${state.name || 'Board'} · ${story ? 'the story' : canvas !== undefined ? `${canvas}${chapter && chapter.title !== canvas ? ` · ${chapter.title}` : ''}` : (chapter?.title ?? '')}`}
+      >
+        <span className="pill__board">{state.name || 'Board'}</span>
+        <span className="pill__where">
+          {story ? (
+            <span className="pill__chapter">
+              <span className="pill__dot"> · </span>the story
+            </span>
+          ) : canvas !== undefined ? (
+            <>
+              <span className="pill__chapter" data-testid="canvas-name">
+                <span className="pill__dot"> · </span>
+                {canvas}
+              </span>
+              {/* A canvas holds one idea or several: the one in view is named when it is not the canvas's own name. */}
+              {chapter && chapter.title !== canvas && <span className="pill__idea"> · {chapter.title}</span>}
+            </>
+          ) : (
+            chapter && (
+              <span className="pill__chapter">
+                <span className="pill__dot"> · </span>
+                {chapter.title}
+              </span>
+            )
+          )}
+        </span>
       </h1>
       {!story && chapter && (
         <span className={`k-state k-state--${chapter.state}`} data-testid="chapter-state">
@@ -194,7 +221,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     id: 'eraser',
-    label: 'Erase your ink, boxes, arrows and pins',
+    label: 'Erase your ink, boxes, arrows and pins, or a picture',
     word: 'Erase',
     shortcut: 'tool.eraser',
     owner: true,
