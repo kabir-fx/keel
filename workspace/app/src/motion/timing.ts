@@ -32,11 +32,61 @@ export const CURSOR_TRAVEL_BY_DISTANCE: readonly (readonly [px: number, ms: numb
 /** The first time on a board, the cursor comes in from the nearest edge of the view over this long. */
 export const CURSOR_ENTER_MS = 600;
 
-/** At rest the cursor stays bright this long before it dims: the end of a turn is seen, then it quietens. */
+/** At rest the cursor stays bright this long before it dims and the drop closes its eyes: the end of a turn is seen, then it quietens. */
 export const CURSOR_REST_HOLD_MS = 1200;
 
-/** How long the cursor takes to dim once the hold is over. */
+/** How long the cursor takes to dim, and the drop to close its eyes, once the hold is over. */
 export const CURSOR_DIM_MS = 400;
+
+/* ------------------------------------------------------------------ the figure */
+
+/** The drop turns into a pose (a lean, its pupils' look) over this long, and opens its eyes as fast. */
+export const DROP_POSE_MS = 200;
+
+/** Reading, the drop leans this far toward the mark it reads, which is on its left. */
+export const DROP_LEAN_DEG = 5;
+
+/** Reading, its pupils go left to right over two lines in this long, then start again. */
+export const DROP_READ_MS = 1800;
+
+/** How far its pupils look, in pixels of the drop's own drawing: up while it thinks, at the tip while it draws, along a line while it reads. */
+export const DROP_LOOK_PX = 1;
+
+/** Thinking, it bobs once up and down in this long. */
+export const DROP_BOB_MS = 2000;
+
+/** How far it bobs, in pixels. */
+export const DROP_BOB_PX = 3;
+
+/** Thinking, its three dots come one after another and go, in this long. */
+export const DROP_DOTS_MS = 1500;
+
+/** Drawing or writing, its tip scribbles one way in this long, and back in as long again. */
+export const DROP_SCRIBBLE_MS = 160;
+
+/** How far the scribble turns it each way about its tip. */
+export const DROP_SCRIBBLE_DEG = 3;
+
+/** A droplet comes out of the drop over this long. */
+export const DROP_SPLIT_MS = 280;
+
+/** Coming out, a droplet grows this much past its size before it settles: the one small overshoot. */
+export const DROP_SPLIT_OVERSHOOT = 1.08;
+
+/** Merging, a droplet goes into the drop over this last share of its flight: it is gone as it lands. */
+export const DROP_SINK_SHARE = 0.25;
+
+/** The droplets in, the drop swells once by about a seventh and settles over this long. */
+export const DROP_SWELL_MS = 320;
+
+/** How much the drop swells once the droplets are in. */
+export const DROP_SWELL = 8 / 7;
+
+/** New words in the cursor's tag, and the title under it, rise in over this long: not swapped. */
+export const CURSOR_WORDS_MS = 180;
+
+/** How far new words rise as they come in, in pixels. */
+export const CURSOR_WORDS_RISE_PX = 3;
 
 /** A trip's curve bends to one side by this share of its length. */
 export const ARC_BEND = 0.12;
@@ -146,11 +196,8 @@ export const PULL_SHORT_PX = 200;
 /** A pull this long, in pixels, or longer, takes the longest time. */
 export const PULL_LONG_PX = 1200;
 
-/** The picture's paper fades in over this share of its pull: seen from its first frames, as a rectangle being dragged out. */
-export const PULL_FADE_SHARE = 0.3;
-
-/** What is on the picture starts to come in once this share of the pull has gone: when the picture is mostly out (the pull is near 90% of its size by then). */
-export const FILL_AFTER_SHARE = 0.65;
+/** Once the band is dragged out whole, the picture shows in place and the band goes over this long. */
+export const BAND_OUT_MS = 120;
 
 /** The cursor rests this far past the picture's bottom right corner, in pixels: on nothing the picture shows. */
 export const REST_PX = 8;
@@ -188,12 +235,21 @@ export const RATE_MAX = 3;
 /** How long an arrival that waits its turn is reckoned to take, before it is planned. */
 export const ARRIVAL_GUESS_MS = ARRIVAL_SMALL_MS;
 
+/** The pictures of one post are drawn at once, each by its own cursor, each this long after the one before began: a beat apart, not in a burst. */
+export const HAND_STAGGER_MS = 140;
+
+/** At most this many pictures are drawn at once, each by its own cursor: more wait for a cursor to be free. */
+export const HANDS_MAX = 4;
+
+/** The pictures of a post wait for the camera to stop before they are drawn on, but never longer than this: a little over the camera's reveal. */
+export const GATE_MAX_MS = 700;
+
 /* ------------------------------------------------------------------ the board */
 
 /** The camera brings a new picture into view over this long, easing both ways: nobody holds it. */
 export const CAMERA_REVEAL_MS = 560;
 
-/** After an arrival, the board is still this long before the next one starts. */
+/** After a film, its cursor is still this long before it takes the next picture that waits. */
 export const STILL_AFTER_MS = 150;
 
 /* ------------------------------------------------------------------ durations by size */

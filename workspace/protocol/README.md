@@ -68,8 +68,8 @@ The subs each picture kind offers:
 ## Pictures and placement
 
 - The agent never gives coordinates. A picture item has no `box` when it is added.
-- The app measures the rendered picture, finds room for it, and posts `item.place` with the `box`. `place` on the item says what it belongs next to: an item (`near`), and optionally one thing inside it (`sub`). A picture is placed once: a second `item.place` is refused under R8, so two open tabs cannot both place it, and the app ignores that refusal. A later move or resize is an `item.update`.
-- `status: "drawing"` is a placeholder the owner sees at once. The agent replaces it with the finished picture through `item.update`.
+- The app measures the rendered picture, finds room for it, and posts `item.place` with the `box`. `place` on the item says what it belongs next to: an item (`near`), optionally one thing inside it (`sub`), and optionally on which side of it (`side`: `right`, `below`, `left` or `above`). With no `place`, a small picture goes right of what it answers and a wide one below what it belongs to; when the spot is taken it slides down, or up for `above`. A picture is placed once: a second `item.place` is refused under R8, so two open tabs cannot both place it, and the app ignores that refusal. A later move or resize is an `item.update`.
+- `status: "drawing"` is a placeholder the owner sees at once. The agent replaces it with the finished picture through `item.update`. The page that showed the placeholder places the finished picture at the top left corner the placeholder stood at: a `place` in that update does not move it.
 - A blueprint always names its `check`: the one command the owner agrees to by pressing "Build this". It lists in `assumed` everything the agent decided that the owner did not say, so the owner reads it before the press.
 - `pipeline`, `walk`, `focus` and `blueprint` name parts and walks of the board's model. The agent patches the model first, then posts the picture. A `pipeline` with no `model` of its own stays live: it redraws when a part changes state.
 
@@ -115,7 +115,7 @@ The subs each picture kind offers:
 - The plugin and the `keel-board` command use HTTP: `ROUTES` in `src/wire.ts`.
 - Each connection has a token, and the token sets the actor. The draft's own `by` is ignored.
 - `build.start` names the check its blueprint shows, word for word, when it names a blueprint.
-- Presence (`listening`, `drawing`, `waiting`, `building`, `away`) is live and never logged.
+- Presence (`listening`, `drawing`, `waiting`, `building`, `away`) is live and never logged. While it is `drawing` it may also say what the agent does (`doing`: `reading`, `thinking`, `drawing` or `writing`) and which picture is being written (`picture`: its kind, and its title once that is whole).
 
 ## No secret on the board (R9)
 

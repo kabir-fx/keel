@@ -105,9 +105,11 @@ Two fingers on a trackpad, or the wheel, move the view. A pinch, or the wheel wi
 
 Tap a part or a lane of a pipeline picture, and the agent opens it in focus. Press Esc to go back. Arrow keys step through a selected walk.
 
-The board is built and tried for a browser on a Mac, with a trackpad, a mouse and a keyboard. How it behaves under the hand follows [Excalidraw](https://github.com/excalidraw/excalidraw): its rules for the pointer, the wheel, the camera, ink, selection, arrows, text and keys, written again for the board ([0004](docs/adr/0004-a-hand-built-canvas.md)). [workspace/THIRD_PARTY_NOTICES.md](workspace/THIRD_PARTY_NOTICES.md) lists what was adapted.
+The board is built and tried for Chrome on a Mac, with a trackpad, a mouse and a keyboard. How it behaves under the hand follows [Excalidraw](https://github.com/excalidraw/excalidraw): its rules for the pointer, the wheel, the camera, ink, selection, arrows, text and keys, written again for the board ([0004](docs/adr/0004-a-hand-built-canvas.md)). [workspace/THIRD_PARTY_NOTICES.md](workspace/THIRD_PARTY_NOTICES.md) lists what was adapted.
 
 Every mark is open until the agent answers it with something you can see: a picture, or one sentence beside the mark that says how it read you ([0008](docs/adr/0008-a-mark-is-closed-only-by-something-the-owner-can-see.md)). The pill at the top left counts the open marks. The pill at the top right shows what the agent does: listening, drawing, waiting for your go, building, or away. The agent wakes about 1.5 s after you stop drawing, and about 0.3 s after you close a note.
+
+The agent is on the board too, as a small blue drop with two eyes. Its eyes are shut while it listens. When it wakes it goes to your mark and reads it, and its tag says what it does. It draws its answer where you can watch: a small picture right of what it answers, a wide one below, each dragged out to its size and then filled in. Several pictures in one answer are drawn at once, by one cursor each, and the cursors merge when the last is done ([0010](docs/adr/0010-motion-shows-what-the-log-and-presence-say.md), [0016](docs/adr/0016-the-agent-is-a-figure-and-draws-with-several-cursors.md)).
 
 ## What runs on your machine, and what it may do
 

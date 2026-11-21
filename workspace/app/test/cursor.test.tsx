@@ -11,9 +11,10 @@ import { FrameLoop } from '../src/frame';
 import { EASE } from '../src/motion/ease';
 import type { Point } from '../src/motion/path';
 import { arc, at as along, distance } from '../src/motion/path';
-import { CURSOR_ENTER_MS, CURSOR_TRAVEL_MAX_MS, travelMs } from '../src/motion/timing';
-import { CURSOR_BESIDE, CURSOR_DOWN, CURSOR_SIZE, CURSOR_TAG_FROM, cursorLook, cursorPoint, cursorSays, entryPoint, placeCursor, tagWords } from '../src/overlay/cursorPlace';
+import { CURSOR_ENTER_MS, CURSOR_TRAVEL_MAX_MS, DROP_SINK_SHARE, travelMs } from '../src/motion/timing';
+import { CURSOR_BESIDE, CURSOR_DOWN, CURSOR_SIZE, CURSOR_TAG_FROM, cursorPoint, cursorSays, dropPose, entryPoint, placeCursor, tagWords } from '../src/overlay/cursorPlace';
 import { AgentCursor } from '../src/overlay/cursor';
+import type { Lead } from '../src/overlay/cursorStore';
 import { AgentCursorStore } from '../src/overlay/cursorStore';
 import { localSource } from '../src/source';
 import { note, openBoard } from './helpers';
@@ -48,10 +49,10 @@ describe('where the agent’s cursor is drawn', () => {
 
   it('its tag hangs right of the point when it fits inside the board, and left of it when it does not', () => {
     const at1 = { x: 0, y: 0, z: 1 };
-    // From the point, the tag starts past the arrow: 24 px, then 60 px of tag.
+    // From the point, the tag starts past the drop: 32 px, then 60 px of tag.
     expect(CURSOR_TAG_FROM).toBe(CURSOR_SIZE + 2);
-    expect(placeCursor([916, 300], at1, size, 60).flip).toBe(false);
-    expect(placeCursor([917, 300], at1, size, 60).flip).toBe(true);
+    expect(placeCursor([908, 300], at1, size, 60).flip).toBe(false);
+    expect(placeCursor([909, 300], at1, size, 60).flip).toBe(true);
     // A wider tag needs more room; one not measured yet goes where it always did.
     expect(placeCursor([800, 300], at1, size, 200).flip).toBe(true);
     expect(placeCursor([990, 300], at1, size).flip).toBe(false);
@@ -89,13 +90,29 @@ describe('where the agent’s cursor is drawn', () => {
     expect(cursorPoint(presence({ state: 'away', cursor: { at: [5, 6] } }), boxOf)).toEqual([5, 6]);
   });
 
-  it('works while the agent draws or something leads it, rests while it listens, waits or builds, and is away when away', () => {
-    expect(cursorLook('drawing', false)).toBe('working');
-    for (const s of ['listening', 'waiting', 'building'] as const) {
-      expect(cursorLook(s, false), s).toBe('rest');
-      expect(cursorLook(s, true), s).toBe('working');
+  it('its pose: led whenever something leads it, what the agent does while it works, asleep while it listens, waits or builds, away when away', () => {
+    const free = { led: false, count: 1 };
+    for (const state of ['listening', 'waiting', 'building', 'away', 'drawing'] as const) {
+      expect(dropPose(presence({ state, doing: 'reading' }), { led: true, count: 1 }), state).toBe('led');
+      // Cursors split off it still draw or fly back to it: it is at work.
+      expect(dropPose(presence({ state, doing: 'reading' }), { led: false, count: 3 }), state).toBe('led');
     }
-    expect(cursorLook('away', false)).toBe('away');
+    expect(dropPose(presence({ state: 'drawing', doing: 'reading' }), free)).toBe('reading');
+    expect(dropPose(presence({ state: 'drawing', doing: 'thinking' }), free)).toBe('thinking');
+    expect(dropPose(presence({ state: 'drawing', doing: 'drawing' }), free)).toBe('drawing');
+    // Writing words is drawn as drawing is: one scribble.
+    expect(dropPose(presence({ state: 'drawing', doing: 'writing' }), free)).toBe('drawing');
+    // Working, and nobody knows at what: it thinks.
+    expect(dropPose(presence({ state: 'drawing' }), free)).toBe('thinking');
+    for (const state of ['listening', 'waiting', 'building'] as const) {
+      expect(dropPose(presence({ state, doing: 'thinking' }), free), state).toBe('asleep');
+    }
+    expect(dropPose(presence({ state: 'away' }), free)).toBe('away');
+  });
+
+  it('the drop is about 30 px, its tip the point; the tag starts past it', () => {
+    expect(CURSOR_SIZE).toBe(30);
+    expect(CURSOR_TAG_FROM).toBe(CURSOR_SIZE + 2);
   });
 
   it('its tag says a short note, and not a long one or a chapter’s title', () => {
@@ -164,11 +181,13 @@ function handFrames() {
 }
 
 /** A cursor store on hand-stepped frames, on a 1000 × 800 board, with every place it was drawn at. */
-function store({ reduced = false, zoom = 1 } = {}) {
+function store({ reduced = false, zoom = 1, hidden = false } = {}) {
   const f = handFrames();
   const camera = new CameraStore({ x: 0, y: 0, z: zoom }, { loop: f.loop, reduced: () => reduced });
-  const cursor = new AgentCursorStore(f.loop, camera, { reduced: () => reduced });
+  const cursor = new AgentCursorStore(f.loop, camera, { reduced: () => reduced, hidden: () => hidden });
   const drawn: Point[] = [];
+  /** Every cursor drawn, at each draw. */
+  const all: { id: number; at: Point; share: number }[][] = [];
   const told = { n: 0 };
   cursor.subscribe(() => (told.n += 1));
   cursor.attach({
@@ -176,6 +195,7 @@ function store({ reduced = false, zoom = 1 } = {}) {
     draw: () => {
       const p = cursor.at();
       if (p) drawn.push(p);
+      all.push(cursor.drawnAll().map((d) => ({ ...d })));
     },
   });
   /** Step frames until the cursor asks for none; how many it took. */
@@ -193,7 +213,7 @@ function store({ reduced = false, zoom = 1 } = {}) {
     settle();
     drawn.length = 0;
   };
-  return { cursor, camera, f, drawn, told, settle, placeAt };
+  return { cursor, camera, f, drawn, all, told, settle, placeAt };
 }
 
 describe('the cursor’s store: where the cursor is, outside React', () => {
@@ -201,7 +221,7 @@ describe('the cursor’s store: where the cursor is, outside React', () => {
     const { cursor, f, told } = store();
     cursor.goTo(undefined);
     expect(cursor.at()).toBeUndefined();
-    expect(cursor.shown()).toEqual({ placed: false, led: false });
+    expect(cursor.shown()).toEqual({ placed: false, led: false, count: 1 });
     expect(f.asked()).toBe(0);
     expect(told.n).toBe(0);
   });
@@ -213,7 +233,7 @@ describe('the cursor’s store: where the cursor is, outside React', () => {
     expect(cursor.shown().placed).toBe(false);
     camera.set({ x: 0, y: 100, z: 1 });
     f.step();
-    expect(cursor.shown()).toEqual({ placed: true, led: false });
+    expect(cursor.shown()).toEqual({ placed: true, led: false, count: 1 });
     expect(told.n).toBe(1);
     // In from the left edge of the view as it is on that frame, level with the place.
     expect(drawn[0]).toEqual([0, 300]);
@@ -323,7 +343,7 @@ describe('the cursor’s store: where the cursor is, outside React', () => {
     let x = 200;
     told.n = 0;
     cursor.lead(() => [x, 50]);
-    expect(cursor.shown()).toEqual({ placed: true, led: true });
+    expect(cursor.shown()).toEqual({ placed: true, led: true, count: 1 });
     expect(told.n).toBe(1);
     expect(cursor.travelling()).toBe(false);
     expect(cursor.at()).toEqual([200, 50]);
@@ -347,7 +367,7 @@ describe('the cursor’s store: where the cursor is, outside React', () => {
     a.cursor.lead(() => [300, 300]);
     a.f.step();
     a.cursor.lead(null);
-    expect(a.cursor.shown()).toEqual({ placed: true, led: false });
+    expect(a.cursor.shown()).toEqual({ placed: true, led: false, count: 1 });
     expect(a.cursor.at()).toEqual([300, 300]);
     expect(a.f.asked()).toBe(0);
 
@@ -427,7 +447,7 @@ describe('the cursor’s store: where the cursor is, outside React', () => {
   it('a lead puts a cursor that was nowhere on the board, where the lead says', () => {
     const { cursor } = store();
     cursor.lead(() => [5, 6]);
-    expect(cursor.shown()).toEqual({ placed: true, led: true });
+    expect(cursor.shown()).toEqual({ placed: true, led: true, count: 1 });
     expect(cursor.at()).toEqual([5, 6]);
   });
 
@@ -444,6 +464,301 @@ describe('the cursor’s store: where the cursor is, outside React', () => {
     cursor.lead(null);
     // It stays where the lead left it: presence named [400, 0] before the lead, not during it.
     expect(cursor.at()).toEqual([1, 1]);
+    settle();
+    expect(f.asked()).toBe(0);
+  });
+});
+
+describe('the cursor’s store: a trip of its own, and several cursors', () => {
+  /** The time every cursor's flight into a merge takes: the longest of their trips on the screen. */
+  const mergeMs = (from: Point[], to: Point) => Math.max(...from.map((p) => travelMs(distance(p, to))));
+
+  it('travelTo goes to a board point on the usual curve, not led; presence does not call it back to the place it names', () => {
+    const { cursor, drawn, settle, placeAt } = store();
+    placeAt([100, 100]);
+    cursor.travelTo([700, 500]);
+    expect(cursor.shown().led).toBe(false);
+    expect(cursor.travelling()).toBe(true);
+    const ms = travelMs(distance([100, 100], [700, 500]));
+    expect(settle()).toBe(Math.ceil(ms / 16));
+    const path = arc([100, 100], [700, 500]);
+    const [x, y] = along(path, EASE.move(16 / ms));
+    expect(drawn[0]![0]).toBeCloseTo(x, 9);
+    expect(drawn[0]![1]).toBeCloseTo(y, 9);
+    expect(cursor.at()).toEqual([700, 500]);
+    // Presence still names [100, 100]: no trip back.
+    cursor.goTo([100, 100]);
+    expect(cursor.travelling()).toBe(false);
+  });
+
+  it('travelTo ends a lead and sets off from where the lead left it; a place named during the lead is forgotten', () => {
+    const { cursor, f, drawn, settle, placeAt } = store();
+    placeAt([100, 100]);
+    cursor.lead(() => [400, 400]);
+    cursor.goTo([900, 100]);
+    cursor.travelTo([400, 700]);
+    expect(cursor.shown().led).toBe(false);
+    drawn.length = 0;
+    f.step();
+    expect(distance([400, 400], drawn[0]!)).toBeLessThan(20);
+    settle();
+    expect(cursor.at()).toEqual([400, 700]);
+    expect(f.asked()).toBe(0);
+  });
+
+  it('with reduced motion travelTo jumps, with no frame', () => {
+    const { cursor, f, placeAt } = store({ reduced: true });
+    placeAt([100, 100]);
+    cursor.travelTo([700, 500]);
+    expect(cursor.at()).toEqual([700, 500]);
+    expect(f.asked()).toBe(0);
+  });
+
+  it('split: n more cursors where the agent’s own is now, drawn after it, each told to React once, and no frame asked for', () => {
+    const { cursor, f, told, placeAt } = store();
+    placeAt([100, 100]);
+    told.n = 0;
+    const hands = cursor.split(2);
+    expect(hands).toHaveLength(2);
+    expect(hands.map((h) => h.at())).toEqual([
+      [100, 100],
+      [100, 100],
+    ]);
+    expect(cursor.shown()).toEqual({ placed: true, led: false, count: 3 });
+    expect(told.n).toBe(1);
+    const all = cursor.drawnAll();
+    expect(all.map((d) => d.at)).toEqual([
+      [100, 100],
+      [100, 100],
+      [100, 100],
+    ]);
+    expect(all.map((d) => d.share)).toEqual([1, 1, 1]);
+    expect(new Set(all.map((d) => d.id)).size).toBe(3);
+    expect(f.asked()).toBe(0);
+    expect(cursor.split(0)).toEqual([]);
+  });
+
+  it('a split cursor is led like the agent’s own, on every frame; let go, it stays where it was left until the merge', () => {
+    const { cursor, f, settle, placeAt } = store();
+    placeAt([100, 100]);
+    const [hand] = cursor.split(1);
+    let x = 200;
+    hand!.lead(() => [x, 300]);
+    expect(hand!.at()).toEqual([200, 300]);
+    expect(cursor.shown().led).toBe(false);
+    for (let i = 0; i < 3; i++) {
+      x += 10;
+      f.step();
+      expect(cursor.drawnAll()[1]!.at).toEqual([x, 300]);
+    }
+    // The agent's own stays where it was.
+    expect(cursor.at()).toEqual([100, 100]);
+    hand!.lead(null);
+    expect(f.asked()).toBe(0);
+    settle();
+    expect(hand!.at()).toEqual([x, 300]);
+    expect(cursor.shown().count).toBe(2);
+  });
+
+  it('split before the cursor was ever on the board: the split ones have no place either, are not drawn, and a lead puts each where it says', () => {
+    const { cursor, told } = store();
+    const [a, b] = cursor.split(2);
+    expect(a!.at()).toBeUndefined();
+    expect(cursor.drawnAll()).toEqual([]);
+    expect(cursor.shown()).toEqual({ placed: false, led: false, count: 1 });
+    expect(told.n).toBe(0);
+    b!.lead(() => [50, 60]);
+    expect(b!.at()).toEqual([50, 60]);
+    expect(cursor.shown()).toEqual({ placed: false, led: false, count: 2 });
+    expect(cursor.drawnAll().map((d) => d.at)).toEqual([[50, 60]]);
+  });
+
+  it('split twice: more cursors, each with its own id, the second ones from where the agent’s own is then', () => {
+    const { cursor, settle, placeAt } = store();
+    placeAt([100, 100]);
+    const first = cursor.split(1);
+    cursor.lead(() => [300, 300]);
+    cursor.lead(null);
+    const second = cursor.split(2);
+    expect(second.map((h) => h.at())).toEqual([
+      [300, 300],
+      [300, 300],
+    ]);
+    expect(first[0]!.at()).toEqual([100, 100]);
+    expect(cursor.shown().count).toBe(4);
+    expect(new Set(cursor.drawnAll().map((d) => d.id)).size).toBe(4);
+    settle();
+  });
+
+  it('merge: every cursor flies to the point on the usual curve in one time, the split ones go into the drop over the end of it and are gone on arrival', () => {
+    const { cursor, f, all, told, settle, placeAt } = store();
+    placeAt([100, 100]);
+    const [a, b] = cursor.split(2);
+    a!.lead(() => [500, 100]);
+    b!.lead(() => [100, 600]);
+    a!.lead(null);
+    b!.lead(null);
+    all.length = 0;
+    told.n = 0;
+    cursor.merge([600, 600]);
+    const ms = mergeMs(
+      [
+        [100, 100],
+        [500, 100],
+        [100, 600],
+      ],
+      [600, 600],
+    );
+    const n = settle();
+    expect(n).toBe(Math.ceil(ms / 16));
+    expect(cursor.at()).toEqual([600, 600]);
+    expect(cursor.drawnAll()).toEqual([{ id: 0, at: [600, 600], share: 1 }]);
+    expect(cursor.shown()).toEqual({ placed: true, led: false, count: 1 });
+    expect(told.n).toBe(1);
+    expect(f.asked()).toBe(0);
+    // Each split one on its own curve, whole until the last share of the flight, then less and less of it.
+    const pathA = arc([500, 100], [600, 600]);
+    const frames = all.filter((list) => list.length === 3);
+    expect(frames.length).toBe(n - 1);
+    frames.forEach((list, i) => {
+      const t = ((i + 1) * 16) / ms;
+      const [x, y] = along(pathA, EASE.move(t));
+      expect(list[1]!.at[0]).toBeCloseTo(x, 9);
+      expect(list[1]!.at[1]).toBeCloseTo(y, 9);
+      expect(list[1]!.share).toBeCloseTo(Math.min(1, (1 - t) / DROP_SINK_SHARE), 9);
+      expect(list[0]!.share).toBe(1);
+    });
+    expect(frames[0]![1]!.share).toBe(1);
+    expect(frames[frames.length - 1]![1]!.share).toBeLessThan(0.25);
+    // Gone: a lead on a split one does nothing now.
+    expect(a!.at()).toBeUndefined();
+    a!.lead(() => [1, 1]);
+    expect(cursor.shown().count).toBe(1);
+    expect(f.asked()).toBe(0);
+  });
+
+  it('merge while a split one is still led: its lead ends, and it flies from where it is', () => {
+    const { cursor, f, all, settle, placeAt } = store();
+    placeAt([100, 100]);
+    const [a] = cursor.split(1);
+    a!.lead(() => [500, 100]);
+    cursor.merge([100, 100]);
+    all.length = 0;
+    f.step();
+    const first = all[0]!.find((d) => d.id !== 0)!;
+    expect(distance([500, 100], first.at)).toBeLessThan(20);
+    settle();
+    expect(cursor.shown().count).toBe(1);
+    expect(cursor.at()).toEqual([100, 100]);
+  });
+
+  it('merge when not split is travelTo; when it is there already, nothing moves', () => {
+    const { cursor, f, settle, placeAt } = store();
+    placeAt([100, 100]);
+    cursor.merge([100, 100]);
+    expect(f.asked()).toBe(0);
+    cursor.merge([400, 100]);
+    expect(settle()).toBe(Math.ceil(travelMs(300) / 16));
+    expect(cursor.at()).toEqual([400, 100]);
+  });
+
+  it('merge with reduced motion: every cursor jumps there, the split ones are gone at once, with no frame', () => {
+    const { cursor, f, told, placeAt } = store({ reduced: true });
+    placeAt([100, 100]);
+    const [a] = cursor.split(2);
+    a!.lead(() => [500, 100]);
+    told.n = 0;
+    cursor.merge([300, 300]);
+    expect(cursor.at()).toEqual([300, 300]);
+    expect(cursor.drawnAll()).toEqual([{ id: 0, at: [300, 300], share: 1 }]);
+    expect(cursor.shown().count).toBe(1);
+    expect(told.n).toBe(1);
+    expect(f.asked()).toBe(0);
+  });
+
+  it('a place presence names while split does not move the agent’s own until the merge is over: then it travels there, as after a single film', () => {
+    const { cursor, f, settle, placeAt } = store();
+    placeAt([100, 100]);
+    const [a] = cursor.split(1);
+    a!.lead(() => [500, 100]);
+    a!.lead(null);
+    cursor.goTo([900, 700]);
+    expect(cursor.travelling()).toBe(false);
+    // Nor once a lead of its own, during which presence named a place, lets go.
+    cursor.lead(() => [200, 200]);
+    cursor.goTo([800, 100]);
+    cursor.lead(null);
+    expect(cursor.travelling()).toBe(false);
+    cursor.merge([300, 300]);
+    // The merge over, the split one gone, it goes on to the place presence names now.
+    for (let i = 0; i < 1000 && cursor.shown().count > 1; i++) f.step();
+    expect(distance(cursor.at()!, [300, 300])).toBeLessThan(1);
+    expect(cursor.travelling()).toBe(true);
+    settle();
+    expect(cursor.at()).toEqual([800, 100]);
+    expect(f.asked()).toBe(0);
+  });
+
+  it('a place named while split is where the agent’s own goes after a merge with reduced motion too, at once', () => {
+    const { cursor, f, placeAt } = store({ reduced: true });
+    placeAt([100, 100]);
+    cursor.split(1)[0]!.lead(() => [500, 100]);
+    cursor.goTo([800, 100]);
+    cursor.merge([300, 300]);
+    expect(cursor.at()).toEqual([800, 100]);
+    expect(f.asked()).toBe(0);
+  });
+
+  it('a split one on its way into the drop cannot be led again: it flies on and is gone', () => {
+    const { cursor, f, all, settle, placeAt } = store();
+    placeAt([100, 100]);
+    const [a] = cursor.split(1);
+    a!.lead(() => [500, 100]);
+    a!.lead(null);
+    cursor.merge([300, 300]);
+    f.step();
+    a!.lead(() => [900, 900]);
+    all.length = 0;
+    f.step();
+    const hand = all[all.length - 1]!.find((d) => d.id !== 0)!;
+    expect(distance(hand.at, [900, 900])).toBeGreaterThan(400);
+    settle();
+    expect(cursor.shown().count).toBe(1);
+    expect(f.asked()).toBe(0);
+  });
+
+  it('on a page nobody is looking at, a trip, travelTo and a merge are jumps, with no frame', () => {
+    const { cursor, f, placeAt } = store({ hidden: true });
+    placeAt([100, 100]);
+    cursor.goTo([700, 500]);
+    expect(cursor.at()).toEqual([700, 500]);
+    cursor.travelTo([200, 200]);
+    expect(cursor.at()).toEqual([200, 200]);
+    cursor.split(2)[0]!.lead(() => [500, 100]);
+    cursor.merge([300, 300]);
+    expect(cursor.at()).toEqual([300, 300]);
+    expect(cursor.shown().count).toBe(1);
+    expect(f.asked()).toBe(0);
+  });
+
+  it('a lead on the agent’s own during a merge takes it out of the merge: the split ones still fly to the point and are gone', () => {
+    const { cursor, f, settle, placeAt } = store();
+    placeAt([100, 100]);
+    const [a] = cursor.split(1);
+    a!.lead(() => [500, 100]);
+    cursor.merge([300, 300]);
+    cursor.lead(() => [50, 50]);
+    expect(cursor.travelling()).toBe(false);
+    expect(cursor.at()).toEqual([50, 50]);
+    let last: Point | undefined;
+    for (let i = 0; i < 100 && cursor.shown().count > 1; i++) {
+      last = cursor.drawnAll()[1]!.at;
+      f.step();
+    }
+    expect(distance(last!, [300, 300])).toBeLessThan(5);
+    expect(cursor.shown().count).toBe(1);
+    expect(cursor.at()).toEqual([50, 50]);
+    cursor.lead(null);
     settle();
     expect(f.asked()).toBe(0);
   });
@@ -593,17 +908,19 @@ describe('the agent’s cursor on the board', () => {
     expect(cursor().querySelector('.agent-cursor__said')).toBeNull();
   });
 
-  it('led, its tag is its name and the dots only, and it says no note beside it: the pill says it, and words would hang over what it draws', () => {
+  it('led, its tag is its name only, and it says no note beside it: the pill says it, and words would hang over what it draws', () => {
     const long = 'reading the three marks you made on the queue, then drawing the two ways it could go';
     const src = localSource({ presence: { state: 'drawing', note: 'drawing a card', cursor: { at: [400, 300] } } });
     const f = handFrames();
     const cam = new CameraStore({ x: 0, y: 0, z: 1 }, { loop: f.loop });
     const store = new AgentCursorStore(f.loop, cam);
-    render(<AgentCursor source={src} cursor={store} state={src.state} boxOf={() => undefined} titles={[]} camera={cam} rect={() => ({ left: 0, top: 0, width: 1000, height: 800 })} />);
+    render(<AgentCursor source={src} cursor={store} state={src.state} boxOf={() => undefined} titles={[]} camera={cam} rect={() => ({ left: 0, top: 0, width: 1000, height: 800 })} waiting={false} />);
     act(() => store.lead(() => [420, 310]));
     const tag = () => cursor().querySelector('.agent-cursor__tag')!;
+    expect([...tag().children].map((c) => c.className)).toEqual(['agent-cursor__name']);
     expect(tag().textContent).toBe('agent');
-    expect(tag().querySelectorAll('.presence-sign i')).toHaveLength(3);
+    // That it works, the drop shows: no dots in the tag, nor anywhere on the cursor.
+    expect(cursor().querySelector('.presence-sign')).toBeNull();
     act(() => src.setPresence({ state: 'drawing', note: long, cursor: { at: [400, 300] } }));
     expect(cursor().querySelector('.agent-cursor__said')).toBeNull();
     // Let go, it says what the agent does again.
@@ -622,7 +939,7 @@ describe('the agent’s cursor on the board', () => {
     const store = new AgentCursorStore(f.loop, cam);
     render(
       <>
-        <AgentCursor source={src} cursor={store} state={src.state} boxOf={() => undefined} titles={[]} camera={cam} rect={() => ({ left: 0, top: 0, width: 1000, height: 800 })} />
+        <AgentCursor source={src} cursor={store} state={src.state} boxOf={() => undefined} titles={[]} camera={cam} rect={() => ({ left: 0, top: 0, width: 1000, height: 800 })} waiting={false} />
         <AgentPill source={src} cursor={store} boxOf={() => undefined} titles={[]} />
       </>,
     );
@@ -648,10 +965,10 @@ describe('the agent’s cursor on the board', () => {
       const commits = { n: 0 };
       render(
         <Profiler id="cursor" onRender={() => (commits.n += 1)}>
-          <AgentCursor source={src} cursor={store} state={src.state} boxOf={() => undefined} titles={[]} camera={cam} rect={() => ({ left: 0, top: 0, width: 1000, height: 800 })} />
+          <AgentCursor source={src} cursor={store} state={src.state} boxOf={() => undefined} titles={[]} camera={cam} rect={() => ({ left: 0, top: 0, width: 1000, height: 800 })} waiting={false} />
         </Profiler>,
       );
-      // 950 + 24 + 80 is past the board's 1000 px.
+      // 950 + 32 + 80 is past the board's 1000 px.
       expect(cursor().hasAttribute('data-flip')).toBe(true);
       commits.n = 0;
       act(() => cam.set({ x: -200, y: 0, z: 1 }));
@@ -674,7 +991,7 @@ describe('the agent’s cursor on the board', () => {
       const f = handFrames();
       const cam = new CameraStore({ x: 0, y: 0, z: 1 }, { loop: f.loop });
       const store = new AgentCursorStore(f.loop, cam, { reduced: () => true });
-      render(<AgentCursor source={src} cursor={store} state={src.state} boxOf={() => undefined} titles={[]} camera={cam} rect={() => ({ left: 0, top: 0, width: 1000, height: 800 })} />);
+      render(<AgentCursor source={src} cursor={store} state={src.state} boxOf={() => undefined} titles={[]} camera={cam} rect={() => ({ left: 0, top: 0, width: 1000, height: 800 })} waiting={false} />);
       expect(cursor().hasAttribute('data-off')).toBe(true);
       // Panned so its point is at 950: on the board, with no room for 80 px of tag on its right.
       act(() => cam.set({ x: -200, y: 0, z: 1 }));
@@ -685,12 +1002,13 @@ describe('the agent’s cursor on the board', () => {
     }
   });
 
-  it('working, its tag says its name, the short note and the pill’s three dots', () => {
+  it('working and not led, its tag says its name and the short note, and nothing else: the drop shows that it works', () => {
     open({ state: 'drawing', note: 'reading your marks', cursor: { item: 'm1' } });
     const tag = cursor().querySelector('.agent-cursor__tag')!;
+    expect([...tag.children].map((c) => c.className)).toEqual(['agent-cursor__name', 'agent-cursor__words']);
     expect(tag.querySelector('.agent-cursor__name')!.textContent).toBe('agent');
     expect(tag.querySelector('.agent-cursor__words')!.textContent).toBe('reading your marks');
-    expect(tag.querySelectorAll('.presence-sign i')).toHaveLength(3);
+    expect(cursor().querySelector('.presence-sign')).toBeNull();
     expect(cursor().hasAttribute('data-rest')).toBe(false);
     expect(cursor().hasAttribute('data-away')).toBe(false);
   });
@@ -818,6 +1136,199 @@ describe('the agent’s cursor on the board', () => {
     expect(at()[0]).toBeGreaterThan(100 * c.z + c.x);
     await landed();
     expect(at()).toEqual([100 * c.z + c.x, 100 * c.z + c.y]);
+  });
+
+  /** The cursor alone on a 1000 × 800 board, on hand-stepped frames, with motion. */
+  function mount(p: Omit<Presence, 'since'>, waiting = false) {
+    reduceMotion(false);
+    const src = localSource({ presence: p });
+    const f = handFrames();
+    const cam = new CameraStore({ x: 0, y: 0, z: 1 }, { loop: f.loop });
+    const store = new AgentCursorStore(f.loop, cam);
+    const commits = { n: 0 };
+    render(
+      <Profiler id="cursor" onRender={() => (commits.n += 1)}>
+        <AgentCursor source={src} cursor={store} state={src.state} boxOf={() => undefined} titles={[]} camera={cam} rect={() => ({ left: 0, top: 0, width: 1000, height: 800 })} waiting={waiting} />
+      </Profiler>,
+    );
+    /** Step frames until none is asked for. */
+    const settle = () => {
+      for (let i = 0; i < 1000 && f.asked() > 0; i++) act(() => f.step());
+    };
+    settle();
+    return { src, store, f, cam, commits, settle };
+  }
+  const placeOf = (el: HTMLElement) => {
+    const m = /^translate\(([-\d.e]+)px, ([-\d.e]+)px\)/.exec(el.style.transform);
+    if (!m) throw new Error(`not a place: "${el.style.transform}"`);
+    return [Number(m[1]), Number(m[2])];
+  };
+
+  it('wears the pose of what the agent does, by attribute: reading, thinking, drawing; led while led; asleep at rest; away', () => {
+    const { src, store } = mount({ state: 'drawing', doing: 'reading', cursor: { at: [400, 300] } });
+    const pose = () => cursor().getAttribute('data-pose');
+    expect(pose()).toBe('reading');
+    const cases: [Omit<Presence, 'since'>, string][] = [
+      [{ state: 'drawing', doing: 'thinking' }, 'thinking'],
+      [{ state: 'drawing' }, 'thinking'],
+      [{ state: 'drawing', doing: 'drawing' }, 'drawing'],
+      [{ state: 'drawing', doing: 'writing' }, 'drawing'],
+      [{ state: 'listening' }, 'asleep'],
+      [{ state: 'waiting' }, 'asleep'],
+      [{ state: 'building' }, 'asleep'],
+      [{ state: 'away' }, 'away'],
+    ];
+    for (const [p, want] of cases) {
+      act(() => src.setPresence({ ...p, cursor: { at: [400, 300] } }));
+      expect(pose(), JSON.stringify(p)).toBe(want);
+    }
+    act(() => store.lead(() => [420, 310]));
+    expect(pose()).toBe('led');
+    // The drop is one inline drawing, as big as the cursor keeps inside the board.
+    expect(cursor().querySelectorAll('svg')).toHaveLength(1);
+    expect(cursor().querySelector('.agent-cursor__drop')).not.toBeNull();
+  });
+
+  it('under the tag, the title of the picture being written, while nothing leads it and it works', () => {
+    const { src, store } = mount({ state: 'drawing', doing: 'drawing', note: 'drawing a card', picture: { kind: 'card' }, cursor: { at: [400, 300] } });
+    const title = () => cursor().querySelector('.agent-cursor__title')?.textContent;
+    expect(title()).toBeUndefined();
+    act(() => src.setPresence({ state: 'drawing', doing: 'drawing', note: 'drawing a card', picture: { kind: 'card', title: 'How a refund moves' }, cursor: { at: [400, 300] } }));
+    expect(title()).toBe('How a refund moves');
+    // Not inside the pill: under it.
+    expect(cursor().querySelector('.agent-cursor__tag')!.textContent).not.toContain('How a refund moves');
+    act(() => store.lead(() => [420, 310]));
+    expect(title()).toBeUndefined();
+    act(() => store.lead(null));
+    expect(title()).toBe('How a refund moves');
+    act(() => src.setPresence({ state: 'listening', picture: { kind: 'card', title: 'How a refund moves' }, cursor: { at: [400, 300] } }));
+    expect(title()).toBeUndefined();
+  });
+
+  it('new words in the tag and a new title come in as new elements, so they rise in and are not swapped in place', () => {
+    const { src } = mount({ state: 'drawing', note: 'reading your marks', picture: { kind: 'card', title: 'One' }, cursor: { at: [400, 300] } });
+    const words = cursor().querySelector('.agent-cursor__words');
+    const title = cursor().querySelector('.agent-cursor__title');
+    act(() => src.setPresence({ state: 'drawing', note: 'thinking', picture: { kind: 'card', title: 'Two' }, cursor: { at: [400, 300] } }));
+    expect(cursor().querySelector('.agent-cursor__words')).not.toBe(words);
+    expect(cursor().querySelector('.agent-cursor__title')).not.toBe(title);
+    expect(cursor().querySelector('.agent-cursor__words')!.textContent).toBe('thinking');
+  });
+
+  it('a title wider than the pill is measured with it: near the right edge the tag and title hang left', () => {
+    const width = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('agent-cursor__tag')) return 80;
+      return this.classList.contains('agent-cursor__title') ? 220 : 0;
+    });
+    try {
+      // 800 + 32 + 80 fits in 1000 px; 800 + 32 + 220 does not.
+      const { src } = mount({ state: 'drawing', note: 'drawing a card', cursor: { at: [800, 300] } });
+      expect(cursor().hasAttribute('data-flip')).toBe(false);
+      act(() => src.setPresence({ state: 'drawing', note: 'drawing a card', picture: { kind: 'card', title: 'How a refund moves through the ledger' }, cursor: { at: [800, 300] } }));
+      expect(cursor().hasAttribute('data-flip')).toBe(true);
+    } finally {
+      width.mockRestore();
+    }
+  });
+
+  it('split, a droplet is drawn for each split cursor at its place, with no tag, and a lead moves it frame by frame with no React commit', () => {
+    const { store, f, commits } = mount({ state: 'drawing', cursor: { at: [400, 300] } });
+    act(() => {
+      store.split(2);
+    });
+    const droplets = () => screen.queryAllByTestId('agent-droplet');
+    expect(droplets()).toHaveLength(2);
+    expect(screen.getAllByTestId('agent-cursor')).toHaveLength(1);
+    for (const d of droplets()) {
+      expect(placeOf(d)).toEqual([400, 300]);
+      expect(d.querySelector('.agent-cursor__tag')).toBeNull();
+      expect(Number(d.querySelector('svg')!.getAttribute('width'))).toBeCloseTo(CURSOR_SIZE * 0.72, 5);
+    }
+    let a: Lead | undefined;
+    act(() => {
+      [a] = store.split(1);
+    });
+    let x = 500;
+    act(() => a!.lead(() => [x, 200]));
+    commits.n = 0;
+    for (let i = 0; i < 5; i++) {
+      x += 10;
+      act(() => f.step());
+      expect(placeOf(droplets()[2]!)).toEqual([x, 200]);
+    }
+    expect(commits.n).toBe(0);
+  });
+
+  it('merged, the droplets shrink into the drop and are gone; the drop swells once', () => {
+    const { store, settle } = mount({ state: 'drawing', cursor: { at: [400, 300] } });
+    let a: Lead | undefined;
+    act(() => {
+      [a] = store.split(1);
+    });
+    act(() => a!.lead(() => [600, 300]));
+    act(() => a!.lead(null));
+    const scale = cursor().querySelector('.drop__scale')!;
+    const lids = cursor().querySelector('.drop__lids')!;
+    const animate = vi.spyOn(Element.prototype, 'animate');
+    try {
+      act(() => store.merge([400, 300]));
+      settle();
+      expect(screen.queryAllByTestId('agent-droplet')).toHaveLength(0);
+      // One swell, on the drop's own scale group, which is not made anew: nor are its eyes, so
+      // they close after the hold as at any other rest.
+      const swells = animate.mock.contexts.filter((el) => el === scale);
+      expect(swells).toHaveLength(1);
+      expect(cursor().querySelector('.drop__scale')).toBe(scale);
+      expect(cursor().querySelector('.drop__lids')).toBe(lids);
+    } finally {
+      animate.mockRestore();
+    }
+  });
+
+  it('merged with reduced motion, nothing swells', () => {
+    const { store } = mount({ state: 'drawing', cursor: { at: [400, 300] } });
+    reduceMotion(true);
+    let a: Lead | undefined;
+    act(() => {
+      [a] = store.split(1);
+    });
+    act(() => a!.lead(() => [600, 300]));
+    const animate = vi.spyOn(Element.prototype, 'animate');
+    try {
+      act(() => store.merge([400, 300]));
+      expect(screen.queryAllByTestId('agent-droplet')).toHaveLength(0);
+      expect(animate).not.toHaveBeenCalled();
+    } finally {
+      animate.mockRestore();
+    }
+  });
+
+  it('while cursors split off it still draw, the figure is at work, though presence listens', () => {
+    const { src, store } = mount({ state: 'drawing', cursor: { at: [400, 300] } });
+    act(() => {
+      store.split(1)[0]!.lead(() => [600, 300]);
+    });
+    act(() => src.setPresence({ state: 'listening', cursor: { at: [400, 300] } }));
+    expect(cursor().getAttribute('data-pose')).toBe('led');
+    expect(cursor().hasAttribute('data-rest')).toBe(false);
+  });
+
+  it('while a picture of the agent\'s waits to be drawn, the figure is at work, though presence listens', () => {
+    mount({ state: 'listening', cursor: { at: [400, 300] } }, true);
+    expect(cursor().getAttribute('data-pose')).toBe('led');
+    expect(cursor().hasAttribute('data-rest')).toBe(false);
+  });
+
+  it('a pan moves every droplet with the drop, one write each, and no React commit', () => {
+    const { store, cam, commits } = mount({ state: 'drawing', cursor: { at: [400, 300] } });
+    act(() => {
+      store.split(1);
+    });
+    commits.n = 0;
+    act(() => cam.set({ x: -50, y: 20, z: 1 }));
+    expect(placeOf(screen.getByTestId('agent-droplet'))).toEqual([350, 320]);
+    expect(placeOf(cursor())).toEqual([350, 320]);
+    expect(commits.n).toBe(0);
   });
 
   it('stays where it was when presence names no place, and goes on from there with one', () => {

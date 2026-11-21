@@ -509,11 +509,12 @@ export function App({ source: board0, show, view: firstView = {}, focus: firstFo
     () =>
       live.flatMap((s) => {
         const b = boxes.get(s.item.id);
-        if (!b) return [];
+        // What the board holds out of sight, waiting to be drawn on, the map does not show either.
+        if (!b || arrivals.held.has(s.item.id)) return [];
         const tone: MiniBox['tone'] = s.item.kind === 'picture' ? 'agent' : s.item.kind === 'note' || s.item.kind === 'file' ? 'owner' : 'owner-line';
         return [{ box: b, tone }];
       }),
-    [live, boxes],
+    [live, boxes, arrivals.held],
   );
 
   const editing = notes.editor?.mode === 'edit' ? notes.editor.id : undefined;
@@ -620,7 +621,7 @@ export function App({ source: board0, show, view: firstView = {}, focus: firstFo
         <Overlay>
           <SelectionLayer board={board} selection={selection} state={state} boxes={boxes} ends={ends} />
           <TrailsSvg layer={hand.trails} />
-          <AgentCursor source={source} cursor={agentCursor} state={state} boxOf={boxOf} titles={chapterTitles} camera={camera} rect={rect} />
+          <AgentCursor source={source} cursor={agentCursor} state={state} boxOf={boxOf} titles={chapterTitles} camera={camera} rect={rect} waiting={arrivals.held.size > 0} />
         </Overlay>
         {drop.dropping && (
           <div className="drop-hint" data-testid="drop-hint">

@@ -1,6 +1,6 @@
-import type { BoardState, Box, Id } from '@keel/protocol';
+import type { BoardState, Box, Id, Point } from '@keel/protocol';
 import type { RefObject } from 'react';
-import { useLayoutEffect } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import type { CameraStore } from '../camera/camera';
 import { shownBoxOf } from '../layout';
 import { placeAll } from '../place';
@@ -29,9 +29,11 @@ export interface PlacementNeeds {
  * Measure what waits, find room for it, and place it: once, with `item.place`. The page never
  * posts a box change of its own: only a drag or a resize by the owner does. So a placeholder
  * the agent is still drawing gets a spot here only, and is placed once it is finished, at its
- * finished size.
+ * finished size, from the top left corner of that spot.
  */
 export function usePlacement({ source, camera, state, fontsReady, canPlace, ahead, subRects, measureLayer, say }: PlacementNeeds): void {
+  /** The top left corner of the spot each finished placeholder stood at on this page. */
+  const stood = useRef(new Map<Id, Point>());
   useLayoutEffect(() => {
     if (!fontsReady || !canPlace) return;
     // Read the board as it is now, not as it was at this render.
@@ -53,7 +55,7 @@ export function usePlacement({ source, camera, state, fontsReady, canPlace, ahea
     const placed = placeAll(st, sizes, (now) => {
       const boxes = { get: (x: Id) => now.get(x) ?? known.get(x) };
       return (x: Id) => shownBoxOf({ state: st, boxes, subs: subRects, subOffsets }, x);
-    });
+    }, stood.current);
     if (placed.size === 0) return;
     const drawing = new Map<Id, Box>();
     const real = new Map<Id, Box>();
@@ -78,11 +80,14 @@ export function usePlacement({ source, camera, state, fontsReady, canPlace, ahea
   // finished one waits to be placed at its finished size. Before the page is painted, so a
   // finished picture is measured and placed in the frame of the agent's update, and is never
   // drawn whole on the placeholder's spot.
-  const { keepProvisional } = ahead;
+  const { keepProvisional, provisional } = ahead;
   useLayoutEffect(() => {
     keepProvisional((id) => {
       const it = state.items[id];
-      return !!it && !it.removed && it.item.kind === 'picture' && it.item.box === undefined && it.item.status === 'drawing';
+      const drawing = !!it && !it.removed && it.item.kind === 'picture' && it.item.box === undefined && it.item.status === 'drawing';
+      const spot = provisional.get(id);
+      if (!drawing && spot) stood.current.set(id, [spot[0], spot[1]]);
+      return drawing;
     });
-  }, [state, keepProvisional]);
+  }, [state, keepProvisional, provisional]);
 }

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { CURSOR_SIZE } from '../app/src/overlay/cursorPlace';
 import { zoomTo } from './hand';
 import { nextFrame, readCamera, wheel } from './pointer';
 
@@ -355,7 +356,7 @@ test.describe('the tooltips', () => {
 });
 
 test.describe('the agent’s cursor', () => {
-  const arrow = '.agent-cursor__arrow';
+  const drop = '.agent-cursor__drop';
 
   test('is the same size at 25% and at 400%, and stays on its card', async ({ page }) => {
     await open(page);
@@ -363,13 +364,13 @@ test.describe('the agent’s cursor', () => {
     for (const z of [0.25, 1, 4]) {
       await zoomTo(page, z);
       await nextFrame(page);
-      sizes.push(await rect(page, arrow));
+      sizes.push(await rect(page, drop));
     }
     for (const s of sizes) {
       expect(s.width).toBeCloseTo(sizes[0]!.width, 3);
       expect(s.height).toBeCloseTo(sizes[0]!.height, 3);
     }
-    expect(sizes[0]!.width).toBeCloseTo(22, 0);
+    expect(sizes[0]!.width).toBeCloseTo(CURSOR_SIZE, 0);
     // At 100% it sits near the bottom right of the card it names.
     await zoomTo(page, 1);
     const card = await rect(page, '[data-item="a1"]');
@@ -437,7 +438,7 @@ test.describe('the agent’s cursor', () => {
     for (let i = 0; i < 4; i++) await page.mouse.wheel(20000, 0);
     await nextFrame(page);
     expect((await readCamera(page)).x).toBeLessThan(cam.x - 40000);
-    const c = await rect(page, arrow);
+    const c = await rect(page, drop);
     const view = page.viewportSize()!;
     expect(c.x).toBeGreaterThanOrEqual(0);
     expect(c.x + c.width).toBeLessThanOrEqual(view.width);

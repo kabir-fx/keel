@@ -36,10 +36,12 @@ export class PresenceHub {
   }
 }
 
-/** Drop undefined fields, so two equal presences serialise the same. */
+/** Drop undefined fields and put the rest in one order, so two equal presences serialise the same. */
 function clean(u: PresenceUpdate): PresenceUpdate {
   const out: PresenceUpdate = { state: u.state };
   if (u.note !== undefined) out.note = u.note;
+  if (u.doing !== undefined) out.doing = u.doing;
+  if (u.picture !== undefined) out.picture = u.picture.title === undefined ? { kind: u.picture.kind } : { kind: u.picture.kind, title: u.picture.title };
   if (u.cursor !== undefined) out.cursor = u.cursor;
   return out;
 }

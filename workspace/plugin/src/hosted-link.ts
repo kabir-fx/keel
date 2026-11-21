@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AgentLink, CreateLink, LinkContext, PresenceUpdate, Wake, WakeResult } from '@keel/protocol';
 import { ClaudeSetup, findClaude } from './claude-setup';
-import { bareToolName, toolPresence, writingPresence } from './presence';
+import { THINKING_PRESENCE, bareToolName, toolPresence, writingPresence } from './presence';
 
 /**
  * The hosted agent link (ADR 0003). The board server owns one long-lived headless Claude
@@ -277,33 +277,37 @@ type StreamLine = {
   event?: unknown;
 };
 
-/** A tool call the model is writing: its block in the message, its id, the tool, and the note last reported for it. */
+/** A tool call the model is writing: its block in the message, its id, the tool, and the note and first picture's title last reported for it. */
 export interface Writing {
   index: number;
   id: string | undefined;
   tool: string;
   note: string | undefined;
-  /** True while the input may still make the note more exact: a `board_post` whose first picture's kind is not read yet, and not looked for past `KIND_READ_MAX`. */
+  title: string | undefined;
+  /** True while the input may still make the report more exact: a `board_post` whose first picture's title is not read yet, and not looked for past `PICTURE_READ_MAX`. */
   refining: boolean;
   /** The input written so far, kept only while `refining`. */
   input: string;
 }
 
 /**
- * How much of a `board_post`'s input is read for the kind of its first picture, in characters.
- * The kind is the first thing a model writes of a picture, so it comes well inside this; past
- * it, the note waits for the whole call, and the input is neither kept nor read again.
+ * How much of a `board_post`'s input is read for the kind and title of its first picture, in
+ * characters. They are the first things a model writes of a picture, so they come well inside
+ * this; past it, the rest waits for the whole call, and the input is neither kept nor read
+ * again. Each piece of input reads at most this much, so a call costs at most this much per
+ * piece until its title is read or the bound is passed.
  */
-export const KIND_READ_MAX = 4096;
+export const PICTURE_READ_MAX = 4096;
 
 const asObject = (v: unknown): Record<string, unknown> | undefined =>
   typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
 
 /**
  * One event of the partial stream, for the tool call being written: the call as it is now, and
- * a presence to report, if any. A tool call that begins reports what the tool does. While a
- * `board_post`'s input comes in, the note is reported once more if it becomes more exact. A
- * block that is not a tool call reports nothing. An event that is malformed changes nothing.
+ * a presence to report, if any. A tool call that begins reports what the tool does, and a
+ * thinking block that begins reports thinking. While a `board_post`'s input comes in, it is
+ * reported again each time its note or its first picture becomes more exact. Any other block
+ * reports nothing. An event that is malformed changes nothing.
  */
 export function followCall(w: Writing | undefined, event: unknown): { writing: Writing | undefined; report?: PresenceUpdate } {
   const e = asObject(event);
@@ -312,23 +316,24 @@ export function followCall(w: Writing | undefined, event: unknown): { writing: W
       const block = asObject(e.content_block);
       if (typeof e.index !== 'number' || typeof block?.type !== 'string') return { writing: w };
       // A new block ends the one before, whatever it is.
+      if (block.type === 'thinking' || block.type === 'redacted_thinking') return { writing: undefined, report: THINKING_PRESENCE };
       if (block.type !== 'tool_use') return { writing: undefined };
       if (typeof block.name !== 'string') return { writing: w };
       const report = writingPresence(block.name, '');
       const id = typeof block.id === 'string' ? block.id : undefined;
       const refining = bareToolName(block.name) === 'board_post';
-      return { writing: { index: e.index, id, tool: block.name, note: report.note, refining, input: '' }, report };
+      return { writing: { index: e.index, id, tool: block.name, note: report.note, title: undefined, refining, input: '' }, report };
     }
     case 'content_block_delta': {
       const delta = asObject(e.delta);
       if (!w?.refining || e.index !== w.index || delta?.type !== 'input_json_delta' || typeof delta.partial_json !== 'string') return { writing: w };
       const input = w.input + delta.partial_json;
-      const report = writingPresence(w.tool, input.slice(0, KIND_READ_MAX));
-      // The note is as exact as it gets: no more reading of this call.
-      if (report.note !== w.note) return { writing: { ...w, note: report.note, refining: false, input: '' }, report };
-      // Read as far as the kind is looked for, and it was not there.
-      if (input.length > KIND_READ_MAX) return { writing: { ...w, refining: false, input: '' } };
-      return { writing: { ...w, input } };
+      const report = writingPresence(w.tool, input.slice(0, PICTURE_READ_MAX));
+      const title = report.picture?.title;
+      // The title is the last thing looked for: once it is read, or the bound is passed, no more reading of this call.
+      const refining = title === undefined && input.length <= PICTURE_READ_MAX;
+      const writing = { ...w, note: report.note, title, refining, input: refining ? input : '' };
+      return report.note !== w.note || title !== w.title ? { writing, report } : { writing };
     }
     case 'content_block_stop':
       return { writing: e.index === w?.index ? undefined : w };

@@ -258,13 +258,13 @@ describe('the pause rule', () => {
 });
 
 describe('the presence pill during a wake', () => {
-  it('says drawing, "reading your marks", the moment a wake starts, and listening when it ends', async () => {
+  it('says drawing, "reading your marks", busy reading, the moment a wake starts, and listening when it ends', async () => {
     const t = setup();
     t.owner(note('m1', 'one engine'));
     expect(t.presence.get().state).toBe('listening');
     t.clock.advance(QUIET_SHORT);
     expect(t.link.wakes).toHaveLength(1);
-    expect(t.presence.get()).toMatchObject({ state: 'drawing', note: 'reading your marks' });
+    expect(t.presence.get()).toMatchObject({ state: 'drawing', note: 'reading your marks', doing: 'reading' });
     t.link.finish();
     await flush();
     expect(t.presence.get()).toEqual({ state: 'listening', since: expect.any(String) });
@@ -360,6 +360,39 @@ describe('where the agent’s cursor is during a wake', () => {
     t.clock.advance(QUIET_SHORT);
     expect(t.link.wakes[0]!.reason).toBe('act');
     expect(t.presence.get()).toEqual({ ...WAKE_PRESENCE, since: expect.any(String) });
+  });
+
+  describe('a solidify names the lasso it was made from', () => {
+    const lasso = (id: string, targets: unknown[]) => ({ type: 'item.add', chapter: CH, item: { id, kind: 'lasso', box: [0, 0, 400, 200], path: [0, 0, 400, 0, 400, 200], targets } });
+
+    it('with its lasso on the board, the cursor goes on the lasso, though the mark in it is fresh too', () => {
+      const t = setup();
+      t.owner(note('m1', 'this one'));
+      t.owner(lasso('l1', [{ item: 'm1' }]));
+      t.owner({ type: 'solidify', chapter: CH, picks: ['m1'], parts: [], lasso: 'l1' });
+      t.clock.advance(QUIET_SHORT);
+      expect(t.link.wakes[0]!.reason).toBe('act');
+      expect(t.presence.get()).toEqual({ ...WAKE_PRESENCE, cursor: { item: 'l1' }, since: expect.any(String) });
+    });
+
+    it('with its lasso gone, no place', () => {
+      const t = setup();
+      t.owner(lasso('l1', []));
+      t.owner({ type: 'solidify', chapter: CH, picks: [], parts: [], lasso: 'l1' });
+      t.owner({ type: 'item.remove', item: 'l1' });
+      const state = t.board.state;
+      expect(wakePresence(digest(state), state)).toEqual(WAKE_PRESENCE);
+    });
+
+    it('a fresh mark made after it is newer: the cursor goes to the mark', () => {
+      const t = setup();
+      t.owner(note('m1', 'this one'));
+      t.owner(lasso('l1', [{ item: 'm1' }]));
+      t.owner({ type: 'solidify', chapter: CH, picks: ['m1'], parts: [], lasso: 'l1' });
+      t.owner(note('m2', 'and this'));
+      t.clock.advance(QUIET_SHORT);
+      expect(t.presence.get()).toEqual({ ...WAKE_PRESENCE, cursor: { item: 'm2' }, since: expect.any(String) });
+    });
   });
 
   it('a mark and an act in one pause: the cursor goes to the mark, though the act came after it', () => {

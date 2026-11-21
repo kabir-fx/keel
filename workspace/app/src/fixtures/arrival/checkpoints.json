@@ -70,5 +70,29 @@
       }
     },
     "after": "e17"
+  },
+  {
+    "screen": 7,
+    "name": "two",
+    "title": "One answer brings two pictures, drawn at once",
+    "view": {
+      "mode": "board",
+      "presence": {
+        "state": "listening"
+      }
+    },
+    "after": "e22"
+  },
+  {
+    "screen": 8,
+    "name": "model",
+    "title": "The whole service: a model, its pipeline and a walk, and a card drawn again",
+    "view": {
+      "mode": "board",
+      "presence": {
+        "state": "listening"
+      }
+    },
+    "after": "e29"
   }
 ]

@@ -1,4 +1,4 @@
-import type { BoardEvent, Id, PictureKind, PresenceUpdate } from '@keel/protocol';
+import type { BoardEvent, Id, PictureKind, PresenceDoing, PresencePicture, PresenceUpdate } from '@keel/protocol';
 import { EventId, isAct } from '@keel/protocol';
 
 /**
@@ -9,13 +9,13 @@ import { EventId, isAct } from '@keel/protocol';
  * - The owner's events keep their order and the gaps the log has between them, within bounds.
  * - After the owner's last input before the agent's turn, the agent is woken as the server
  *   wakes it (`server/src/wake.ts`): after the quiet time that input asks for, with the pill on
- *   "reading your marks" and the cursor on the newest mark.
+ *   "reading your marks", busy reading, and the cursor on the newest mark.
  * - The model then writes its call, and presence follows it as the link reports it
  *   (`followCall` in plugin/src/hosted-link.ts, `writingPresence` and `toolPresence` in
- *   plugin/src/presence.ts): when the call begins, what the tool does and no place; for a post,
- *   the kind of its first picture as soon as that is written; when the call is whole, the same
- *   words and the cursor on what it answers. A moment later its events land, with the
- *   placements of the pictures it posts.
+ *   plugin/src/presence.ts): when the call begins, what the tool does and what that keeps the
+ *   agent busy with, and no place; for a post, the kind of its first picture as soon as that is
+ *   written, then its title when it has one; when the call is whole, the same and the cursor on
+ *   what it answers. A moment later its events land, with the placements of the pictures it posts.
  * - When the agent's turn is over, the pill goes back to listening.
  * - The system's events (a build) come at their own spacing, with no presence of the agent.
  *
@@ -46,6 +46,8 @@ export const WRITING = 2000;
 export const CALL_BEGINS = 500;
 /** A post's first picture has its kind written this long after the call begins. */
 export const KIND_WRITTEN = 200;
+/** A post's first picture has its title written this long after its kind. */
+export const TITLE_WRITTEN = 300;
 /** From the link seeing the whole call to the call's events landing on the board. */
 export const CALL_LANDS = 100;
 /** From the agent's last call to the end of its turn. */
@@ -81,10 +83,11 @@ export function quietAfter(ev: BoardEvent): number | undefined {
   return undefined;
 }
 
-/** The mark an input of the owner's names, when it names one: the one the wake points the cursor at. */
+/** The mark an input of the owner's names, when it names one: the one the wake points the cursor at. A solidify names its lasso. */
 function markOf(ev: BoardEvent): Id | undefined {
   if (ev.type === 'item.add' && ev.item.kind !== 'picture') return ev.item.id;
   if (ev.type === 'item.update') return ev.item;
+  if (ev.type === 'solidify') return ev.lasso;
   return undefined;
 }
 
@@ -112,13 +115,13 @@ function toolOf(ev: BoardEvent): Tool | undefined {
   }
 }
 
-/** Mirrors `NOTES` in plugin/src/presence.ts: what each board tool does, in the pill's words. */
-const NOTES: Record<Tool, string> = {
-  board_post: 'drawing',
-  board_answer: 'answering',
-  board_model: 'drawing the model',
-  board_part: 'moving a part',
-  board_update: 'writing an update',
+/** Mirrors `TOOLS` in plugin/src/presence.ts: what each board tool does, in the pill's words, and what that keeps the agent busy with. */
+const TOOLS: Record<Tool, { note: string; doing: PresenceDoing }> = {
+  board_post: { note: 'drawing', doing: 'drawing' },
+  board_answer: { note: 'answering', doing: 'writing' },
+  board_model: { note: 'drawing the model', doing: 'drawing' },
+  board_part: { note: 'moving a part', doing: 'drawing' },
+  board_update: { note: 'writing an update', doing: 'writing' },
 };
 
 /** Mirrors `KIND_NOTES` in plugin/src/presence.ts: what a post says once its first picture's kind is written. */
@@ -136,11 +139,14 @@ export const KIND_NOTES: Record<PictureKind, string> = {
   free: 'drawing a free drawing',
 };
 
-/** The kind of the picture a post's event draws, when it draws one: a new picture, or a new spec. */
-function kindOf(ev: BoardEvent): PictureKind | undefined {
-  if (ev.type === 'item.add' && ev.item.kind === 'picture') return ev.item.picture.kind;
-  if (ev.type === 'item.update') return ev.patch.picture?.kind;
-  return undefined;
+/**
+ * The picture a post's event draws, when it draws one (a new picture, or a new spec), as presence
+ * names it. A logged title is one the contract took, so it is never longer than presence takes.
+ */
+function pictureOf(ev: BoardEvent): PresencePicture | undefined {
+  const p = ev.type === 'item.add' && ev.item.kind === 'picture' ? ev.item.picture : ev.type === 'item.update' ? ev.patch.picture : undefined;
+  if (!p) return undefined;
+  return p.title === undefined ? { kind: p.kind } : { kind: p.kind, title: p.title };
 }
 
 /** Where a call puts the cursor: on what it redraws, else on what it answers, else beside what it is placed near. */
@@ -157,6 +163,8 @@ export interface CallPresence {
   begins: PresenceUpdate;
   /** For a post, once its first picture's kind is written. Never a place. */
   kind?: PresenceUpdate;
+  /** For a post whose first picture has a title, once that is written. Never a place. */
+  title?: PresenceUpdate;
   /** When the call is whole: the same words, and the cursor on what it answers. */
   whole: PresenceUpdate;
 }
@@ -170,14 +178,16 @@ export function callPresence(events: readonly BoardEvent[]): CallPresence {
   const tool = tools.includes('board_post') ? 'board_post' : tools.find((t) => t !== undefined);
   if (!tool) return { begins: { state: 'drawing' }, whole: { state: 'drawing' } };
   const mine = own.filter((e) => toolOf(e) === tool);
-  const kind = tool === 'board_post' ? kindOf(mine[0]!) : undefined;
-  const note = kind ? KIND_NOTES[kind] : NOTES[tool];
+  const picture = tool === 'board_post' ? pictureOf(mine[0]!) : undefined;
+  const { note: toolNote, doing } = TOOLS[tool];
+  const note = picture ? KIND_NOTES[picture.kind] : toolNote;
   // A call of one tool: the cursor goes on the first of its events that names a place.
   const item = mine.map(cursorOf).find((i) => i !== undefined);
   return {
-    begins: { state: 'drawing', note: NOTES[tool] },
-    ...(kind ? { kind: { state: 'drawing', note } } : {}),
-    whole: { state: 'drawing', note, ...(item ? { cursor: { item } } : {}) },
+    begins: { state: 'drawing', note: toolNote, doing },
+    ...(picture ? { kind: { state: 'drawing', note, doing, picture: { kind: picture.kind } } } : {}),
+    ...(picture?.title !== undefined ? { title: { state: 'drawing', note, doing, picture } } : {}),
+    whole: { state: 'drawing', note, doing, ...(picture ? { picture } : {}), ...(item ? { cursor: { item } } : {}) },
   };
 }
 
@@ -197,7 +207,7 @@ export function playScript(log: readonly BoardEvent[], from = 0, to: number = lo
   /** The newest mark of the owner's since the agent's last turn. */
   let newest: Id | undefined;
   /** Each call of the agent's: the steps where the link reports it as it is written, and the step where its events land. */
-  const calls: Array<{ begins: PlayStep; kind: PlayStep; whole: PlayStep; landed: PlayStep & { events: BoardEvent[] } }> = [];
+  const calls: Array<{ begins: PlayStep; kind: PlayStep; title: PlayStep; whole: PlayStep; landed: PlayStep & { events: BoardEvent[] } }> = [];
   /** The agent's turn under way: its latest call, and when that call's latest event was logged. */
   let turn: { call: (typeof calls)[number]; logged: number } | undefined;
 
@@ -211,11 +221,13 @@ export function playScript(log: readonly BoardEvent[], from = 0, to: number = lo
     const call = {
       begins: { at: writing + CALL_BEGINS },
       kind: { at: writing + CALL_BEGINS + KIND_WRITTEN },
+      title: { at: writing + CALL_BEGINS + KIND_WRITTEN + TITLE_WRITTEN },
       whole: { at: writing + WRITING },
       landed: { at: writing + WRITING + CALL_LANDS, events: [ev] },
     };
     push(call.begins);
     push(call.kind);
+    push(call.title);
     push(call.whole);
     push(call.landed);
     calls.push(call);
@@ -248,7 +260,7 @@ export function playScript(log: readonly BoardEvent[], from = 0, to: number = lo
       } else if (waking) {
         // The owner's input woke the agent: the wake comes first, when the server's would.
         const wake = Math.max(t, waking.at + waking.quiet);
-        push({ at: wake, presence: { state: 'drawing', note: WAKE_NOTE, ...(newest ? { cursor: { item: newest } } : {}) } });
+        push({ at: wake, presence: { state: 'drawing', note: WAKE_NOTE, doing: 'reading', ...(newest ? { cursor: { item: newest } } : {}) } });
         startCall(ev, wake);
       } else {
         // The agent was awake already: its call begins after the lead, or after what came before.
@@ -275,12 +287,14 @@ export function playScript(log: readonly BoardEvent[], from = 0, to: number = lo
   endTurn();
 
   // What a call says is known once it is known what the call made. A call that is no post, or
-  // whose first picture has no kind to name, says nothing more until it is whole.
+  // whose first picture has no kind to name, says nothing more until it is whole; one whose
+  // first picture has no title says nothing more after its kind.
   for (const call of calls) {
     const said = callPresence(call.landed.events);
     call.begins.presence = said.begins;
     call.whole.presence = said.whole;
     if (said.kind) call.kind.presence = said.kind;
+    if (said.title) call.title.presence = said.title;
   }
   return steps.filter((step) => step.events || step.presence);
 }

@@ -131,22 +131,31 @@ describe('the agent\'s picture arriving on the board', () => {
     expect(marked(container)).toBe(0);
   });
 
-  it('two pictures in one moment: the second waits out of sight, with its arrow, then plays', async () => {
+  it('two pictures in one moment: drawn at once, the second a beat after the first by a cursor of its own, and left out of the map while it waits', async () => {
     reduceMotion(false);
     const { src, container } = open();
+    const mapped = () => container.querySelectorAll('[data-testid="minimap"] .mm-item--agent').length;
     await act(async () => {
       await src.postAs('agent', text('a1', { answers: ['m1'], picture: CARD }) as never);
       await src.postAs('agent', text('a2', { answers: ['m1'], picture: CARD }) as never);
     });
     expect(root(container, 'a1').hasAttribute(PLAYS)).toBe(true);
     expect(item(container, 'a2').hasAttribute(WAITS)).toBe(true);
-    // It waits while the first plays, and plays the moment it no longer waits.
+    expect(mapped()).toBe(1);
+    // A beat later both are drawn on, each by its own cursor.
     let n = 0;
-    while (item(container, 'a2').hasAttribute(WAITS) && n++ < 300) await frames(1);
-    expect(root(container, 'a1').hasAttribute(PLAYS)).toBe(false);
+    while (item(container, 'a2').hasAttribute(WAITS) && n++ < 30) await frames(1);
+    expect(n).toBeLessThan(30);
+    expect(root(container, 'a1').hasAttribute(PLAYS)).toBe(true);
     expect(root(container, 'a2').hasAttribute(PLAYS)).toBe(true);
+    expect(mapped()).toBe(2);
+    expect(container.querySelectorAll('[data-testid="agent-droplet"]')).toHaveLength(1);
     await over();
     expect(marked(container)).toBe(0);
+    expect(container.querySelectorAll('.arrival-band')).toHaveLength(0);
+    // And the cursors merge into one.
+    await frames(60);
+    expect(container.querySelectorAll('[data-testid="agent-droplet"]')).toHaveLength(0);
   });
 
   describe('lands at once', () => {
@@ -247,7 +256,8 @@ describe('the agent\'s picture arriving on the board', () => {
       await src.postAs('agent', text('a1', { answers: ['m1'], picture: CARD }) as never);
       await src.postAs('agent', text('a2', { answers: ['m1'], picture: CARD }) as never);
     });
-    await frames(10);
+    // Inside the stagger: the first is drawn on, the second waits its beat.
+    await frames(4);
     const cursor = () => container.querySelector<HTMLElement>('[data-testid="agent-cursor"]')!;
     expect(root(container, 'a1').hasAttribute(PLAYS)).toBe(true);
     expect(item(container, 'a2').hasAttribute(WAITS)).toBe(true);

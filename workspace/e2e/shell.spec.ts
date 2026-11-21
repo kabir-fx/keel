@@ -221,8 +221,8 @@ test('the server source: token out of the address bar, a note, the agent card be
   expect(posts[0]!.draft.by).toBeUndefined();
   const note = posts[0]!.draft.item as { id: string; box: [number, number, number, number] };
 
-  // The agent answers the note with a card. The app measures it, finds the nearest clear spot
-  // round the note (right, below, left or above it), and posts its box.
+  // The agent answers the note with a card. The app measures it, puts it in the lane right of
+  // the note (level with it, else further down that column), and posts its box.
   const card = {
     type: 'item.add',
     chapter: posts[0]!.draft.chapter,
@@ -246,14 +246,8 @@ test('the server source: token out of the address bar, a note, the agent card be
   const [nx, ny, nw, nh] = note.box;
   const [x, y, w, h] = box;
   const near = (a: number, b: number) => Math.abs(a - b) <= 1;
-  // Beside the note: level with it on the right or the left, or lined up with it above or below, at least the gap away.
-  const side = [
-    near(y, ny) && x >= nx + nw + 48 - 1 ? 'right' : '',
-    near(x, nx) && y >= ny + nh + 48 - 1 ? 'below' : '',
-    near(y, ny) && x + w <= nx - 48 + 1 ? 'left' : '',
-    near(x, nx) && y + h <= ny - 48 + 1 ? 'above' : '',
-  ].find(Boolean);
-  expect(side, `the card ${box.join(',')} is not beside the note ${note.box.join(',')}`).toBeTruthy();
+  // In the column right of the note, the gap away, level with it or further down.
+  expect(near(x, nx + nw + 48) && y >= ny - 1, `the card ${box.join(',')} is not in the lane right of the note ${note.box.join(',')}`).toBe(true);
   // Close to it, and clear of everything else on the board.
   const away = Math.max(x - (nx + nw), nx - (x + w), y - (ny + nh), ny - (y + h));
   expect(away).toBeLessThan(48 + 600);

@@ -113,6 +113,39 @@ describe('the page posts no move of its own', () => {
     expect(posted(src, n).filter((e) => e.by === 'owner').map((e) => e.type)).toEqual(['item.place']);
     expect(posted(src, n).some((e) => e.type === 'item.update' && e.by === 'owner')).toBe(false);
   });
+
+  describe('a placeholder finished as a wide picture', () => {
+    const LANES = { kind: 'lanes', title: 'Two lanes', lanes: [{ id: 'api', name: 'API' }], steps: [{ id: 's1', lane: 'api', text: 'one' }] };
+    /** The board with a note n2, and the agent's card placeholder for it: drawn right of n2, where a wide picture's lane (below n2) is not. */
+    async function drawing() {
+      const b = board();
+      b.must('owner', note('n2', [0, 400, 320, 100], {}, 'c1'));
+      const src = localSource({ events: b.events });
+      const view = render(<App source={src} />);
+      await act(async () => {
+        await src.postAs('agent', text('p1', { answers: ['n2'], status: 'drawing' }, 'c1') as never);
+      });
+      return { src, view, spot: document.querySelector<HTMLElement>('.layer [data-item="p1"]')!.dataset.box!.split(',').map(Number) };
+    }
+    const finish = (src: ReturnType<typeof localSource>) => act(async () => {
+      await src.postAs('agent', { type: 'item.update', item: 'p1', patch: { picture: LANES, status: 'done' } } as never);
+    });
+
+    it('is placed at the corner its placeholder stood at', async () => {
+      const { src, spot } = await drawing();
+      expect(spot.slice(0, 2)).toEqual([320 + 48, 400]);
+      await finish(src);
+      expect(src.state.items.p1?.item.box?.slice(0, 2)).toEqual(spot.slice(0, 2));
+    });
+
+    it('finished after its spot was lost (the page opened again), it is placed by its lane: below n2', async () => {
+      const { src, view } = await drawing();
+      view.unmount();
+      await finish(src);
+      render(<App source={src} />);
+      expect(src.state.items.p1?.item.box?.slice(0, 2)).toEqual([0, 400 + 100 + 64]);
+    });
+  });
 });
 
 /** A built chapter, and a newer idea far to the right. */

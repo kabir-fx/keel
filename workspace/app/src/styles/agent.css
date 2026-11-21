@@ -7,7 +7,9 @@
 
 /* In the overlay, at one size at any zoom. Its place is a transform the page writes as the camera
    and the agent move (overlay/cursor.tsx), so its place has no transition of its own: only how
-   strongly it shows does. */
+   strongly it shows does. A droplet, a cursor split off it, is drawn the same way, smaller and
+   with no tag. Every time and distance of its motion comes from motion/timing.ts, through the
+   custom properties set on it. */
 .agent-cursor {
   position: absolute;
   left: 0;
@@ -16,37 +18,111 @@
   align-items: flex-start;
   gap: 2px;
   pointer-events: none;
+  transform-origin: 0 0;
   transition: opacity 160ms ease-out;
 }
-/* A white halo under the arrow and round the tag, so the cursor reads on any picture, and a soft
-   shadow under the arrow, so it sits above the board. */
-.agent-cursor__arrow { flex: none; overflow: visible; filter: drop-shadow(0 1px 1.5px rgb(16 24 40 / 0.28)); }
+/* A white halo under the drop and round the tag, so the cursor reads on any picture, and a soft
+   shadow under the drop, so it sits above the board. */
+.agent-cursor__drop { flex: none; overflow: visible; filter: drop-shadow(0 1px 1.5px rgb(16 24 40 / 0.28)); }
+.agent-cursor__drop g { transform-box: view-box; transform-origin: 0 0; }
 .agent-cursor__halo { fill: #fff; stroke: #fff; stroke-width: 4; stroke-linejoin: round; }
-.agent-cursor__body { fill: var(--agent); stroke: #fff; stroke-width: 1.4; stroke-linejoin: round; }
-.agent-cursor__tag { display: flex; align-items: center; gap: 6px; margin-top: 16px; padding: 2px 8px; border-radius: 999px; background: var(--agent); color: #fff; font: 600 12px/16px var(--font-ui); white-space: nowrap; box-shadow: 0 0 0 2px #fff; }
+.agent-cursor__body { fill: var(--agent); }
+.drop__glint { fill: #fff; opacity: 0.55; }
+.drop__white { fill: #fff; }
+.drop__pupil { fill: #141b2b; }
+.agent-cursor__drop .drop__lids { transform-origin: 17px 17.6px; transition: transform var(--drop-pose) ease-out; }
+.drop__pupils { transition: transform var(--drop-pose) ease-out; }
+.drop__turn { transition: transform var(--drop-pose) ease-out; }
+.drop__dots circle { fill: var(--agent); stroke: #fff; stroke-width: 1; opacity: 0; }
+
+/* Asleep: after the hold it dims and closes its eyes, then nothing runs. Away: faint, eyes closed. */
+.agent-cursor[data-pose="asleep"] .drop__lids { transform: scaleY(0.1); transition: transform var(--cursor-dim) ease-in-out var(--cursor-hold); }
+.agent-cursor[data-pose="away"] .drop__lids { transform: scaleY(0.1); }
+/* Reading: it leans toward the mark on its left, and its pupils go along a line, then the next. */
+.agent-cursor[data-pose="reading"] .drop__turn { transform: rotate(var(--drop-lean)); }
+.agent-cursor[data-pose="reading"] .drop__pupils { animation: drop-read var(--drop-read) ease-in-out infinite; }
+/* Thinking: a slow bob, pupils up, three dots one after another. */
+.agent-cursor[data-pose="thinking"] .drop__move { animation: drop-bob var(--drop-bob) ease-in-out infinite; }
+.agent-cursor[data-pose="thinking"] .drop__pupils { transform: translateY(calc(-1 * var(--drop-look))); }
+.agent-cursor[data-pose="thinking"] .drop__dots circle { animation: drop-dot var(--drop-dots) ease-in-out infinite; }
+.agent-cursor[data-pose="thinking"] .drop__dots circle:nth-child(2) { animation-delay: calc(var(--drop-dots) / 6); }
+.agent-cursor[data-pose="thinking"] .drop__dots circle:nth-child(3) { animation-delay: calc(var(--drop-dots) / 3); }
+/* Drawing: the tip scribbles in place, a few degrees about it. Drawing and led: pupils on the tip. */
+.agent-cursor[data-pose="drawing"] .drop__turn { animation: drop-scribble var(--drop-scribble) ease-in-out infinite alternate; }
+.agent-cursor[data-pose="drawing"] .drop__pupils, .agent-cursor[data-pose="led"] .drop__pupils { transform: translate(calc(-1 * var(--drop-look)), calc(-1 * var(--drop-look))); }
+/* A droplet comes out of the drop with one small overshoot. */
+/* A droplet's share, as it goes into the drop, is written on every frame: it has no transition. */
+.agent-droplet { transition: none; }
+.agent-droplet .drop__scale { animation: drop-out var(--drop-split) ease-out; }
+
+@keyframes drop-read {
+  0% { transform: translate(calc(-1 * var(--drop-look)), -0.6px); }
+  42% { transform: translate(var(--drop-look), -0.6px); }
+  50% { transform: translate(calc(-1 * var(--drop-look)), 0.6px); }
+  92% { transform: translate(var(--drop-look), 0.6px); }
+  100% { transform: translate(calc(-1 * var(--drop-look)), -0.6px); }
+}
+@keyframes drop-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(calc(-1 * var(--drop-bob-px))); }
+}
+@keyframes drop-dot {
+  0%, 10% { opacity: 0; transform: translateY(1px); }
+  30%, 70% { opacity: 1; transform: translateY(0); }
+  90%, 100% { opacity: 0; transform: translateY(0); }
+}
+@keyframes drop-scribble {
+  from { transform: rotate(calc(-1 * var(--drop-scribble-deg))); }
+  to { transform: rotate(var(--drop-scribble-deg)); }
+}
+@keyframes drop-out {
+  0% { transform: scale(0.4); }
+  65% { transform: scale(var(--drop-overshoot)); }
+  100% { transform: scale(1); }
+}
+
+.agent-cursor__tag { display: flex; align-items: center; gap: 6px; margin-top: 8px; padding: 2px 8px; border-radius: 999px; background: var(--agent); color: #fff; font: 600 12px/16px var(--font-ui); white-space: nowrap; box-shadow: 0 0 0 2px #fff; }
+/* Under the tag, the title of the picture being written: quiet, one line, cut short. */
+.agent-cursor__title {
+  position: absolute;
+  left: 32px;
+  top: 32px;
+  max-width: 260px;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 500 12px/16px var(--font-ui);
+  color: var(--text-2);
+  text-shadow: 0 0 2px #fff, 0 0 2px #fff;
+}
+/* New words come in with a short rise, not a swap. */
+.agent-cursor__words, .agent-cursor__title { animation: cursor-words-in var(--words-in) cubic-bezier(0.05, 0.7, 0.1, 1) backwards; }
+@keyframes cursor-words-in {
+  from { opacity: 0; transform: translateY(var(--words-rise)); }
+}
 /* With no room for the tag right of the point inside the board, it hangs left of the point, still
    below the tip: under the edge of what the cursor rests by, not over it (overlay/cursor.tsx). */
-.agent-cursor[data-flip] .agent-cursor__tag { position: absolute; top: 0; right: calc(100% - 4px); }
-/* What the agent does, after its name, in the tag: the pill's words and its three quiet dots, in white. */
+.agent-cursor[data-flip] .agent-cursor__tag { position: absolute; top: 0; right: calc(100% - 2px); }
+.agent-cursor[data-flip] .agent-cursor__title { left: auto; right: calc(100% - 2px); text-align: right; }
+/* What the agent does, after its name, in the tag: the pill's words. */
 .agent-cursor__words { font-weight: 500; }
-.agent-cursor__tag .presence-sign { margin-left: 0; }
-.agent-cursor__tag .presence-sign i { width: 4px; height: 4px; background: #fff; }
 /* At rest it holds a moment, then dims (the hold and the fade come from motion/timing.ts); off
    screen at rest it is not drawn at all. Working, it brightens at once. */
-.agent-cursor[data-rest] { opacity: 0.5; transition: opacity var(--cursor-dim, 400ms) ease-in-out var(--cursor-hold, 1200ms); }
+.agent-cursor[data-rest] { opacity: 0.5; transition: opacity var(--cursor-dim) ease-in-out var(--cursor-hold); }
 .agent-cursor[data-rest][data-off] { visibility: hidden; }
 /* Faint, as Excalidraw draws a collaborator (clients.ts): while the agent is away, and while its
    place is off screen, where the cursor waits at the board's edge with its words put away. */
 .agent-cursor[data-away], .agent-cursor[data-off] { opacity: 0.3; transition-delay: 0s; }
-.agent-cursor[data-off] .agent-cursor__tag, .agent-cursor[data-off] .agent-cursor__said { display: none; }
-/* With reduced motion nothing is timed: it dims at once at rest. */
+.agent-cursor[data-off] .agent-cursor__tag, .agent-cursor[data-off] .agent-cursor__title, .agent-cursor[data-off] .agent-cursor__said { display: none; }
+/* With reduced motion nothing is timed and nothing moves: it dims at once at rest, and the drop is drawn still in its pose. */
 @media (prefers-reduced-motion: reduce) {
-  .agent-cursor { transition: none !important; }
+  .agent-cursor, .agent-cursor * { transition: none !important; animation: none !important; }
 }
 .agent-cursor__said {
   position: absolute;
   left: 34px;
-  top: 44px;
+  top: 36px;
   width: 300px;
   margin: 0;
   padding: 12px 14px;
@@ -56,3 +132,4 @@
   font: 400 14px/21px var(--font-ui);
   color: var(--ink);
 }
+.agent-cursor__title + .agent-cursor__said { top: 54px; }

@@ -39,7 +39,7 @@ From the keel folder, `scripts/check.sh board` runs the typecheck and the unit t
 To run a board while you work on it:
 
 - `node server/bin/keel-board.mjs open <repo> --link none` runs a board with no agent. `--link script:e2e/agents/echo.mjs` runs the stand-in agent, which answers each mark with one card.
-- `KEEL_BOARD_SOURCE=1` runs the server from its source, through `tsx`, even when a bundle exists.
+- `KEEL_BOARD_SOURCE=1` runs the server from its source, through `tsx`, even when a bundle exists. Without it, a change to the server shows only after `npm run build`: this holds for a browser test run by hand with `npx playwright test` too (`npm run e2e` builds first).
 - `KEEL_STATE_DIR=<folder>` puts the board's private files in that folder, not in `~/.keel`. They are the board's key, the running server's tokens, the port, the builds the owner agreed to, the seal of the log, the agent's session, the builder's worktrees and the pid files of running shows. Use a fresh folder for a throwaway board, and always for a test: a test must never write in `~/.keel`.
 - For the app with hot reload: start the server with `--port 4790 --dev-origin http://localhost:5173`, then run `npm run dev -w @keel/board-app`. Vite sends `/api` and `/ws` to `KEEL_SERVER`, which is `http://127.0.0.1:4790` by default.
 
@@ -117,15 +117,19 @@ The fixture is part of the contract, so the orchestrator changes it.
 
 ## How the agent's answers are shown
 
-The agent has a cursor on the board, and a picture it posts is drawn on from the mark it answers. The motion shows only what the log and the agent's presence say, and nothing waits on it: a press on a picture that is being drawn on lands it at once ([0010](../docs/adr/0010-motion-shows-what-the-log-and-presence-say.md)).
+The agent is a figure on the board: a drop with two eyes, whose point is the cursor's tip. A picture it posts is drawn on from the mark it answers. The motion shows only what the log and the agent's presence say, and nothing waits on it: a press on a picture that is being drawn on lands it at once ([0010](../docs/adr/0010-motion-shows-what-the-log-and-presence-say.md), [0016](../docs/adr/0016-the-agent-is-a-figure-and-draws-with-several-cursors.md)).
 
 What the owner sees, and where it comes from:
 
-- **The cursor goes to the mark.** The server's wake names the newest mark the agent was handed (`wakePresence` in `server/src/wake.ts`).
-- **Its tag says what the agent does.** The hosted link reads the agent's stream as it is written: "drawing" when a `board_post` begins, "drawing a card" once the first picture's kind is written (`followCall` in `plugin/src/hosted-link.ts`, `plugin/src/presence.ts`).
-- **The picture is drawn on.** The cursor draws the picture's arrow, pulls the picture out by its corner, and rests while what is on it fills in, in the order its renderer marked (`buildParts` in `pictures/src/build.ts`).
-- **What is not a new picture has a film of its own.** A placeholder is drawn on like a picture, and pulled from its rectangle to the finished one when the agent finishes it. A picture the agent draws again keeps its paper, and what is on it fills in anew. An answer in words is written in from the left under its mark (`planFinish`, `planRedraw`, `planChip` in `app/src/arrival/plan.ts`).
-- **The camera moves only when it must.** It makes the smallest move that shows the picture with its mark, and only for an answer to the owner's last mark. A placeholder finished at another size is shown again the same way (`app/src/camera/reveal.ts`, `app/src/board/news.ts`).
+- **The cursor goes to the mark.** The server's wake names the newest mark the agent was handed, or the lasso a solidify was made from (`wakePresence` in `server/src/wake.ts`).
+- **The figure shows what the agent does.** Its eyes are shut at rest. They read when the agent reads, it bobs when the agent thinks, and it scribbles when the agent draws or writes. Presence says which, in `doing`: the wake says reading, the start of a thinking block says thinking, and each tool says its own (`TOOLS` in `plugin/src/presence.ts`, `followCall` in `plugin/src/hosted-link.ts`). While a picture waits to be drawn or is drawn on, the figure is at work, whatever presence says.
+- **Its tag says what the agent does, in words.** The hosted link reads the agent's stream as it is written: "drawing" when a `board_post` begins, "drawing a card" once the first picture's kind is written, and the picture's title under the tag once that is written whole (`postPictureSoFar` in `plugin/src/presence.ts`).
+- **Where a picture goes can be told beforehand.** A small picture goes right of what it answers, top edges level, and down that column when the spot is taken. A wide one goes below what it belongs to, and further down. `place.side` names another side. A placeholder that is finished keeps the top left corner it stood at (`app/src/place.ts`, `app/src/board/placement.ts`).
+- **The picture is drawn on, never scaled.** The cursor draws the picture's arrow and drags a band out from where the arrow ends to the picture's rectangle. The picture then shows in place, at its own size, and what is on it fills in, in the order its renderer marked (`buildParts` in `pictures/src/build.ts`).
+- **Several pictures are drawn at once.** The pictures of one post each get a cursor: the agent's own draws the nearest, and one split off it draws each of the others, 140 ms apart, four at a time at most. When the last is done they fly to where it ended and merge into the one figure.
+- **What is not a new picture has a film of its own.** A placeholder is drawn on like a picture. When the agent finishes it, the band is dragged from the placeholder's rectangle to the finished one; while it waits for its turn, the band stands where the placeholder was, so the place is never empty. A picture the agent draws again keeps its paper, and what is on it fills in anew. An answer in words is written in from the left under its mark (`planFinish`, `planRedraw`, `planChip` in `app/src/arrival/plan.ts`).
+- **The camera moves only when it must, and first.** It makes the smallest move that shows the picture with its mark, and only for an answer to the owner's last mark. Nothing is drawn on until it has stopped, or 0.7 s have passed; the cursor travels to where it will draw meanwhile. A placeholder finished at another size is shown again the same way (`app/src/camera/reveal.ts`, `app/src/board/news.ts`).
+- **The minimap shows what the board shows.** A picture held out of sight until a cursor takes it is not on the minimap either.
 
 How it is built, in `app/src/`:
 
@@ -133,9 +137,11 @@ How it is built, in `app/src/`:
 |---|---|
 | `arrival/cues.ts` | Reads two moments of the board and says what deserves motion. Pure. |
 | `arrival/plan.ts` | One cue and what the page measures become plain data: beats for the parts, legs for the cursor. Pure, so the same input gives the same film. |
-| `arrival/player.ts` | Plays plans on the page, one after another: Web Animations for the parts, the cursor led along its legs, all on the board's one frame loop. |
+| `arrival/player.ts` | Plays plans on the page, the films of one commit at once: Web Animations for the parts, one cursor led along each film's legs, all on the board's one frame loop. |
 | `arrival/useArrivals.ts` | Wires the three to the board, and lands what plays when it must. |
-| `overlay/cursorStore.ts` | The cursor, one per board: presence names its place, an arrival leads it. |
+| `overlay/cursorStore.ts` | The agent's cursor, and the cursors split off it while several pictures are drawn: presence names its place, an arrival leads it. |
+| `overlay/drop.tsx`, `styles/agent.css` | The figure: one inline SVG, posed by CSS. |
+| `place.ts` | Where a picture goes. Pure: the same log and sizes give the same layout. |
 | `motion/timing.ts`, `motion/ease.ts` | Every number and every easing, each with a line that says what it is for. |
 | `motion/plays.ts` | `motionPlays()`: the one answer to "does anything play". |
 
@@ -148,6 +154,6 @@ A fixture can be played, not only opened. This is how the motion is looked at an
 - `/?fixture=arrival&at=1&play=1` opens the board as it was before checkpoint 1 and feeds in the events up to it over time, with the presence the server and the link would set. Leave `at` out to play the whole log from a blank board.
 - Add `&clock=manual` and nothing on the page moves by itself. `await window.renderAt(ms)` moves the board's clock forward to that moment, in steps of 1/60 s, and resolves when the page shows it. The same address and the same moments give the same frames. It goes forward only: load the page again to go back. `window.__keel` says how far the play has run.
 - `e2e/replay.ts` has the helpers for a browser test: `openReplay`, `renderAt`, `playStatus` and `contactSheet`, which writes many moments as one image.
-- `app/src/fixtures/arrival/` is the fixture made for the motion: a note answered by a card, a small picture, a remark answered in words, a spread, a placeholder that is finished, and a redraw. `story.ts` is its source; `npx tsx src/fixtures/arrival/build.ts` in `app/` rebuilds it.
+- `app/src/fixtures/arrival/` is the fixture made for the motion: a note answered by a card, a small picture, a remark answered in words, a spread, a placeholder that is finished, a redraw, two pictures in one post, and a post with a model. `story.ts` is its source; `npx tsx src/fixtures/arrival/build.ts` in `app/` rebuilds it.
 
 These hooks exist only on a played fixture. A live board has none of them and is never on the manual clock.
