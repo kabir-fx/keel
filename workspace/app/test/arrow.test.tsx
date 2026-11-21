@@ -1784,7 +1784,7 @@ describe('what the overlay draws for an arrow, and the ring round it', () => {
 
   it('a press on a side of the head lands on the arrow, squarely, as one on its line does', () => {
     const item: ArrowItem = { id: 'a1', kind: 'arrow', box: [0, 0, 400, 0], from: [0, 0], to: [400, 0] };
-    const lines: Parameters<typeof lineHit>[0] = { live: [], boxes: new Map([['a1', item.box]]), ends: new Map(), outlines: new Map(), raised: undefined };
+    const lines: Parameters<typeof lineHit>[0] = { live: [], boxes: new Map([['a1', item.box]]), ends: new Map(), outlines: new Map(), raised: undefined, frameSize: () => undefined };
     const [side, tip] = headPoints([0, 0], [400, 0])!;
     // Three quarters of the way out along one side: at 400% that is 15 pixels from the line, past its slop.
     const p = [tip[0] + 0.75 * (side[0] - tip[0]), tip[1] + 0.75 * (side[1] - tip[1])] as const;

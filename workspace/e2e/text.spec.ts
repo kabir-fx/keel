@@ -222,7 +222,8 @@ test('the window loses focus while a label is typed: the mark is not posted, and
   await page.waitForTimeout(300);
   expect((await admitted(page)).length).toBe(n0);
   await expect(label(page)).toHaveValue('the slow');
-  await expect(page.getByTestId('live').locator('.live-box')).toHaveCount(1);
+  // The box waits for its words drawn by its field.
+  await expect(page.locator('.label-editor--box .drawn-box')).toHaveCount(1);
   await back();
   await expect(label(page)).toBeFocused();
   await page.keyboard.type(' part');
@@ -297,7 +298,8 @@ test('a reload after Esc brings nothing back, and a reload while a label is type
   expect(marks(server).length).toBe(n);
   await expect(label(page)).toHaveValue('the slow part');
   await expect(label(page)).toBeFocused();
-  await expect(page.getByTestId('live').locator('.live-box')).toHaveCount(1);
+  // The box waits for its words drawn by its field.
+  await expect(page.locator('.label-editor--box .drawn-box')).toHaveCount(1);
   await page.keyboard.press('Enter');
   await expect.poll(() => marks(server).length).toBe(n + 1);
   expect(marks(server)[n]).toMatchObject({ type: 'item.add', item: { kind: 'box', text: 'the slow part' } });
@@ -542,7 +544,7 @@ test('the field is 5% taller than its text, and the note’s paper is not: a sav
   await expect.poll(async () => (await adds(page, n0)).length).toBe(1);
   const [made] = await adds(page, n0);
   // Changed with as many lines as before, it posts its words and no new height.
-  await page.keyboard.press('v');
+  await page.keyboard.press('s');
   const drawn = page.locator(`[data-item="${made!.id}"]`);
   const was = (await drawn.boundingBox())!;
   await drawn.dblclick();
@@ -556,6 +558,44 @@ test('the field is 5% taller than its text, and the note’s paper is not: a sav
   const change = (await admitted(page)).slice(n0).find((e) => e.type === 'item.update')!;
   expect(change.patch?.text).toMatch(/!$/);
   expect(change.patch?.box).toBeUndefined();
+});
+
+/* ------------------------------------------------------------ a box's words */
+
+test('a box’s words are typed inside the box, wrap at its width, grow it down, and land where they were typed', async ({ page }) => {
+  await openFixture(page);
+  const n0 = (await admitted(page)).length;
+  const z = await zoom(page);
+  await drag(page, 'b');
+  const field = page.locator('.label-editor--box');
+  const frame = page.locator('.label-editor--box .drawn-box');
+  const drawn = (await frame.boundingBox())!;
+  await page.keyboard.type('create a 3d game where the owner goes through a maze and finds the way out in real time');
+  const typed = (await label(page).boundingBox())!;
+  const grown = (await frame.boundingBox())!;
+  // The words stay inside the box: it keeps its width and grows down.
+  expect(grown.x).toBeCloseTo(drawn.x, 0);
+  expect(grown.width).toBeCloseTo(drawn.width, 0);
+  expect(grown.height).toBeGreaterThan(drawn.height);
+  expect(typed.x).toBeGreaterThanOrEqual(grown.x);
+  expect(typed.x + typed.width).toBeLessThanOrEqual(grown.x + grown.width);
+  // The field keeps a little room under the words, and gives it back to the box with a negative margin: the words end inside the box.
+  const wordsEnd = await label(page).evaluate((el) => el.getBoundingClientRect().bottom + Number.parseFloat(getComputedStyle(el).marginBottom) * (el.getBoundingClientRect().height / el.offsetHeight));
+  expect(wordsEnd).toBeLessThanOrEqual(grown.y + grown.height);
+  // One box on screen: the live layer does not draw a second one under the field.
+  await expect(page.getByTestId('live').locator('.live-box')).toHaveCount(0);
+  await page.keyboard.press('Enter');
+  await expect(field).toHaveCount(0);
+  await expect.poll(async () => (await adds(page, n0)).length).toBe(1);
+  const [box] = (await adds(page, n0)) as Array<Item & { box: [number, number, number, number] }>;
+  // Posted at the size it was drawn at.
+  expect(box!.box[3]).toBeCloseTo(grown.height / z, 0);
+  // Drawn where it was typed: the box, and its words, not a pixel away.
+  const saved = (await page.locator(`[data-item="${box!.id}"] .drawn-box`).boundingBox())!;
+  for (const k of ['x', 'y', 'width', 'height'] as const) expect(saved[k], k).toBeCloseTo(grown[k], 0);
+  const words = (await page.locator(`[data-item="${box!.id}"] .drawn-box__words`).boundingBox())!;
+  expect(words.x).toBeCloseTo(typed.x, 0);
+  expect(words.width).toBeCloseTo(typed.width, 0);
 });
 
 /* ------------------------------------------------------------ a label's width */
@@ -619,7 +659,8 @@ test('a mark the board refuses comes back as it was drawn, with its words; so do
   await expect(toast(page)).toContainText('There is no chapter');
   await expect(label(page)).toHaveValue('the slow part');
   await expect(label(page)).toBeFocused();
-  await expect(page.getByTestId('live').locator('.live-box')).toHaveCount(1);
+  // The box waits for its words drawn by its field.
+  await expect(page.locator('.label-editor--box .drawn-box')).toHaveCount(1);
   expect(posts).toHaveLength(0);
   refuse = false;
   await page.keyboard.press('Enter');

@@ -55,7 +55,7 @@ describe('the toolbar', () => {
     render(<App source={localSource({ events: board().events })} />);
     const titles = [...screen.getByRole('toolbar', { name: 'Tools' }).querySelectorAll('button')].map((b) => b.dataset.tip);
     expect(titles.slice(0, 10)).toEqual([
-      'Select (V)',
+      'Select (S)',
       'Pan (H)',
       'Draw with the pen (P)',
       'Draw a box (B)',
@@ -67,7 +67,7 @@ describe('the toolbar', () => {
       'Drop in a file, a picture or a link (D)',
     ]);
     expect(titles[11]).toContain('(Shift+S)');
-    for (const [k, t] of [['p', 'pen'], ['b', 'box'], ['a', 'arrow'], ['i', 'pin'], ['l', 'lasso'], ['e', 'eraser'], ['h', 'pan'], ['v', 'select'], ['n', 'note']] as const) {
+    for (const [k, t] of [['p', 'pen'], ['b', 'box'], ['a', 'arrow'], ['i', 'pin'], ['l', 'lasso'], ['e', 'eraser'], ['h', 'pan'], ['s', 'select'], ['n', 'note']] as const) {
       fireEvent.keyDown(window, { key: k });
       expect(tool()).toBe(t);
     }

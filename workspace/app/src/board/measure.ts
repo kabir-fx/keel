@@ -34,6 +34,14 @@ export interface Lines {
   ends: ReadonlyMap<Id, Ends>;
   outlines: ReadonlyMap<Id, Outline>;
   raised: Raised;
+  /** The size a thing in a frame is drawn at, in world units, when it is on the page. A box the owner drew grows down with its words. */
+  frameSize(id: Id): readonly [number, number] | undefined;
+}
+
+/** A box the owner drew, as the page draws it: at its frame's size, which its words may have made taller than its box. */
+function drawnBox(lines: Lines, id: Id, shown: Box): Box {
+  const size = lines.frameSize(id);
+  return size ? [shown[0], shown[1], size[0], size[1]] : shown;
 }
 
 /** What the pen and the pointer can point at: every item with a box in the DOM, and its subs. */
@@ -69,12 +77,13 @@ export function subBoxFromDom(itemEl: HTMLElement, sub: string, base: Box | unde
 
 /**
  * How a press at a world point lands on a mark drawn as a line, or on a box the owner drew:
- * squarely on its line, only near it (within the slop, `LINE_SLOP` screen pixels), or not at all.
- * A drawn box is hit on its line only, so a press inside it reaches what it was drawn round. An
- * arrow is hit on its line and on the two sides of its head. Points inside a mark are counted
- * from its box. `z` is the zoom.
+ * squarely on its line, only near it (within the slop, `LINE_SLOP` screen pixels), inside a
+ * drawn box off its line, or not at all. Inside a box ranks below a square hit on anything else
+ * (`rankHits`), so a press inside it still reaches what it was drawn round. An arrow is hit on
+ * its line and on the two sides of its head. Points inside a mark are counted from its box. `z`
+ * is the zoom.
  */
-export function lineHit(lines: Lines, it: Item, z: number, wx: number, wy: number): 'square' | 'near' | undefined {
+export function lineHit(lines: Lines, it: Item, z: number, wx: number, wy: number): 'square' | 'near' | 'inside' | undefined {
   const shown = lines.boxes.get(it.id);
   if (!shown) return undefined;
   const slop = LINE_SLOP / z;
@@ -102,7 +111,15 @@ export function lineHit(lines: Lines, it: Item, z: number, wx: number, wy: numbe
     const d = Math.min(...loops.map((l) => distToPath(wx, wy, [...l, l[0]!])));
     return within(d, LASSO_LINE / 2 / z);
   }
-  if (it.kind === 'box') return within(distToOutline(wx, wy, padBox(shown, -BOX_LINE / 2)), BOX_LINE / 2);
+  if (it.kind === 'box') {
+    // Words only ever make a box taller: a point beside it or above it is no hit, and the page's layout is not read for it.
+    const reach = BOX_LINE / 2 + slop;
+    if (wx < shown[0] - reach || wx > shown[0] + shown[2] + reach || wy < shown[1] - reach) return undefined;
+    const box = drawnBox(lines, it.id, shown);
+    const got = within(distToOutline(wx, wy, padBox(box, -BOX_LINE / 2)), BOX_LINE / 2);
+    // Off its line and inside it, a press is inside the box, also within the slop of the line.
+    return got !== 'square' && inBox(wx, wy, box) ? 'inside' : got;
+  }
   return undefined;
 }
 
@@ -128,7 +145,7 @@ export function hitAt(lines: Lines, z: number, target: Element | null, wx: numbe
       return;
     }
     const got = lineHit(lines, it, z, wx, wy);
-    if (got) hits.push({ id: it.id, layer, order, square: got === 'square' });
+    if (got) hits.push({ id: it.id, layer, order, square: got !== 'near', ...(got === 'inside' ? { inside: true } : {}) });
   });
   return rankHits(hits);
 }
@@ -202,7 +219,6 @@ export type Measuring = Pick<BoardCtx, 'rect' | 'toBoard' | 'toWorld' | 'itemEl'
 /** The measuring half of the board's context, for one render: it measures the board as that render drew it. */
 export function measuringOf(page: Page, shown: Shown, raised: Raised): Measuring {
   const { camera, source } = page;
-  const lines: Lines = { live: shown.live, boxes: shown.boxes, ends: shown.ends, outlines: shown.outlines, raised };
 
   const toBoard = (clientX: number, clientY: number): [number, number] => {
     const r = page.rect();
@@ -214,6 +230,11 @@ export function measuringOf(page: Page, shown: Shown, raised: Raised): Measuring
     return [(x - cam.x) / cam.z, (y - cam.y) / cam.z];
   };
   const itemEl = (id: Id) => page.layer.current?.querySelector<HTMLElement>(`[data-item="${id}"]`) ?? undefined;
+  const frameSize = (id: Id): [number, number] | undefined => {
+    const el = itemEl(id);
+    return el && el.offsetWidth > 0 ? [el.offsetWidth, el.offsetHeight] : undefined;
+  };
+  const lines: Lines = { live: shown.live, boxes: shown.boxes, ends: shown.ends, outlines: shown.outlines, raised, frameSize };
   /** Where a target is drawn now, measured the same way the board draws anchored marks. */
   const boxIn = (el: HTMLElement, t: Target) => (t.sub ? subBoxFromDom(el, t.sub, shown.stored(t.item), camera.get().z) : shown.boxes.get(t.item));
   const targetBox = (t: Target) => {
@@ -228,8 +249,7 @@ export function measuringOf(page: Page, shown: Shown, raised: Raised): Measuring
     for (const s of shown.live) {
       const b = shown.boxes.get(s.item.id);
       if (!b || !reachable(s.item.id)) continue;
-      const el = FRAMED.has(s.item.kind) ? itemEl(s.item.id) : undefined;
-      out.set(s.item.id, outlineOf(s.item, b, shown.ends.get(s.item.id), el && el.offsetWidth > 0 ? [el.offsetWidth, el.offsetHeight] : undefined));
+      out.set(s.item.id, outlineOf(s.item, b, shown.ends.get(s.item.id), FRAMED.has(s.item.kind) ? frameSize(s.item.id) : undefined));
     }
     return out;
   };

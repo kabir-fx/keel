@@ -2062,7 +2062,7 @@ describe('the cursor comes from one table, set on the board from code', () => {
     expect(cursor()).toBe('crosshair');
     Keyboard.press('h');
     expect(cursor()).toBe('grab');
-    Keyboard.press('v');
+    Keyboard.press('s');
     expect(cursor()).toBe('grab');
     Keyboard.press('b');
     expect(cursor()).toBe('crosshair');

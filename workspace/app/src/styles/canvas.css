@@ -30,7 +30,7 @@
 /* A lasso lies under what it holds: its tint shows round them, its dashes outside them. */
 .item--lasso { z-index: 0; pointer-events: none; }
 .item--pin { z-index: 4; }
-/* A box the owner drew is hit on its line only (`lineHit`): a press inside it reaches what it was drawn round. */
+/* A box the owner drew is hit by the board, not the page (`lineHit`): on its line, and inside it where nothing it was drawn round is. */
 .item--box { pointer-events: none; }
 .item--dragging { z-index: 10; opacity: 0.92; }
 /* What hangs on a thing being dragged, and the arrows tied to it, stay over it while it is lifted,

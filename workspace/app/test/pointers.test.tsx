@@ -1355,7 +1355,7 @@ describe('the right button, and the browser’s own menu and drag', () => {
     await frame();
     expect(camera(container)).toEqual(before);
 
-    Keyboard.press('v');
+    Keyboard.press('s');
     Keyboard.keyDown(' ');
     new Pointer().drag([300, 300], [420, 380], { button: 'right' });
     await frame();

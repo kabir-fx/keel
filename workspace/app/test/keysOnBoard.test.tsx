@@ -214,7 +214,7 @@ describe('keys while a press is open', () => {
     mouse.move([800, 480]);
     await frame();
     expect(shape()).not.toBeNull();
-    for (const key of ['p', 'v', 'h', 'a', 'n', 'i', 'l']) Keyboard.press(key);
+    for (const key of ['p', 's', 'h', 'a', 'n', 'i', 'l']) Keyboard.press(key);
     expect(tool()).toBe('box');
     expect(shape()).not.toBeNull();
     mouse.up();

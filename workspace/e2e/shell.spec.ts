@@ -121,7 +121,7 @@ test('Esc closes a note with nothing posted, and a dragged note posts its new pl
   expect((await admitted(page)).length).toBe(before);
 
   // Select is back on after a note; drag the first note by 120 by 60 screen pixels.
-  await page.keyboard.press('v');
+  await page.keyboard.press('s');
   const note = page.locator('[data-item][data-kind="note"]').first();
   const id = await note.getAttribute('data-item');
   const b = (await note.boundingBox())!;
@@ -283,7 +283,7 @@ test('the server source: token out of the address bar, a note, the agent card be
   await page.keyboard.press('Escape');
 
   // A refused edit of a note comes back too, with what was typed.
-  await page.keyboard.press('v');
+  await page.keyboard.press('s');
   await page.locator('[data-item]').filter({ hasText: 'one engine, many clients' }).first().dblclick();
   await expect(page.getByRole('textbox', { name: 'Your note' })).toBeFocused();
   await page.keyboard.press('End');

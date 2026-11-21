@@ -152,7 +152,7 @@ test('checkpoint 4 opens in the focus view; a mark made in it hangs on the focus
   await expect(page.locator(`[data-item="${ink.id}"]`)).toHaveClass(/item--raised/);
 
   // Esc goes back to the board; a tap on the bridge opens it again; the crumb goes back.
-  await page.keyboard.press('v');
+  await page.keyboard.press('s');
   await page.keyboard.press('Escape');
   await expect(crumb).toHaveCount(0);
   await expect(page.locator('[data-focus-dim]')).toHaveCount(0);

@@ -17,24 +17,24 @@ type Typed = readonly [key: string, code: string];
 /** The keys the board binds, as each layout types them: the key the board must read, and the event. */
 const LAYOUTS: Record<string, Record<string, Typed>> = {
   US: {
-    z: ['z', 'KeyZ'], y: ['y', 'KeyY'], v: ['v', 'KeyV'], h: ['h', 'KeyH'], p: ['p', 'KeyP'], b: ['b', 'KeyB'], a: ['a', 'KeyA'],
+    z: ['z', 'KeyZ'], y: ['y', 'KeyY'], h: ['h', 'KeyH'], p: ['p', 'KeyP'], b: ['b', 'KeyB'], a: ['a', 'KeyA'],
     n: ['n', 'KeyN'], i: ['i', 'KeyI'], l: ['l', 'KeyL'], d: ['d', 'KeyD'], t: ['t', 'KeyT'], s: ['s', 'KeyS'],
     0: ['0', 'Digit0'], 1: ['1', 'Digit1'], 2: ['2', 'Digit2'], '-': ['-', 'Minus'], '=': ['=', 'Equal'], '+': ['+', 'Equal'],
   },
   // AZERTY: A and Q have changed places, and so have Z and W. The digits need Shift: bare, the
   // key in the 1 place types "&". Minus is on the key in the 6 place.
   French: {
-    z: ['z', 'KeyW'], y: ['y', 'KeyY'], v: ['v', 'KeyV'], h: ['h', 'KeyH'], p: ['p', 'KeyP'], b: ['b', 'KeyB'], a: ['a', 'KeyQ'],
+    z: ['z', 'KeyW'], y: ['y', 'KeyY'], h: ['h', 'KeyH'], p: ['p', 'KeyP'], b: ['b', 'KeyB'], a: ['a', 'KeyQ'],
     n: ['n', 'KeyN'], i: ['i', 'KeyI'], l: ['l', 'KeyL'], d: ['d', 'KeyD'], t: ['t', 'KeyT'], s: ['s', 'KeyS'],
     0: ['à', 'Digit0'], 1: ['&', 'Digit1'], 2: ['é', 'Digit2'], '-': ['-', 'Digit6'], '=': ['=', 'Equal'], '+': ['+', 'Equal'],
   },
   Russian: {
-    z: ['я', 'KeyZ'], y: ['н', 'KeyY'], v: ['м', 'KeyV'], h: ['р', 'KeyH'], p: ['з', 'KeyP'], b: ['и', 'KeyB'], a: ['ф', 'KeyA'],
+    z: ['я', 'KeyZ'], y: ['н', 'KeyY'], h: ['р', 'KeyH'], p: ['з', 'KeyP'], b: ['и', 'KeyB'], a: ['ф', 'KeyA'],
     n: ['т', 'KeyN'], i: ['ш', 'KeyI'], l: ['д', 'KeyL'], d: ['в', 'KeyD'], t: ['е', 'KeyT'], s: ['ы', 'KeyS'],
     0: ['0', 'Digit0'], 1: ['1', 'Digit1'], 2: ['2', 'Digit2'], '-': ['-', 'Minus'], '=': ['=', 'Equal'], '+': ['+', 'Equal'],
   },
   Greek: {
-    z: ['ζ', 'KeyZ'], y: ['υ', 'KeyY'], v: ['ω', 'KeyV'], h: ['η', 'KeyH'], p: ['π', 'KeyP'], b: ['β', 'KeyB'], a: ['α', 'KeyA'],
+    z: ['ζ', 'KeyZ'], y: ['υ', 'KeyY'], h: ['η', 'KeyH'], p: ['π', 'KeyP'], b: ['β', 'KeyB'], a: ['α', 'KeyA'],
     n: ['ν', 'KeyN'], i: ['ι', 'KeyI'], l: ['λ', 'KeyL'], d: ['δ', 'KeyD'], t: ['τ', 'KeyT'], s: ['σ', 'KeyS'],
     0: ['0', 'Digit0'], 1: ['1', 'Digit1'], 2: ['2', 'Digit2'], '-': ['-', 'Minus'], '=': ['=', 'Equal'], '+': ['+', 'Equal'],
   },
@@ -163,12 +163,12 @@ describe('the key table', () => {
   });
 
   it('the check finds a clash when there is one, and then neither entry runs', () => {
-    const twice: KeyEntry[] = [...KEY_TABLE, { name: 'again', keys: ['v'], run: () => {} }];
+    const twice: KeyEntry[] = [...KEY_TABLE, { name: 'again', keys: ['s'], run: () => {} }];
     expect(clashes(twice).length).toBeGreaterThan(0);
     expect(clashes(twice).every((line) => line.includes('tool.select, again'))).toBe(true);
-    expect(entryFor(press('v'), IDLE, twice)).toBeUndefined();
+    expect(entryFor(press('s'), IDLE, twice)).toBeUndefined();
     // The table as it is still knows the key.
-    expect(entryFor(press('v'), IDLE)?.name).toBe('tool.select');
+    expect(entryFor(press('s'), IDLE)?.name).toBe('tool.select');
   });
 
   it('every name is used once', () => {
@@ -187,7 +187,7 @@ describe('the key table', () => {
   });
 
   it('a tool key is no key while a press is open; Space, Undo, Redo, Delete and Solidify are still taken from the browser, and do nothing', () => {
-    for (const key of ['v', 'h', 'p', 'b', 'a', 'n', 'i', 'l', 'e']) expect(nameFor(press(key), { pressOpen: true }), key).toBeUndefined();
+    for (const key of ['s', 'h', 'p', 'b', 'a', 'n', 'i', 'l', 'e']) expect(nameFor(press(key), { pressOpen: true }), key).toBeUndefined();
     expect(nameFor(press(' '), { pressOpen: true })).toBe('pan.hold');
     expect(nameFor(press('z', { meta: true }), { pressOpen: true })).toBe('undo');
     expect(nameFor(press('z', { meta: true, shift: true }), { pressOpen: true })).toBe('redo');
@@ -214,7 +214,7 @@ describe('the key table', () => {
   });
 
   it('while the owner types, a key is a letter: only Cmd or Ctrl with plus, equals, minus and 0 are still the board’s', () => {
-    for (const key of ['v', 'p', ' ', 'Delete', 'Backspace', 'Escape', '1', '=', '-', 'ArrowLeft', 'PageDown']) expect(nameFor(press(key), { typing: true }), key).toBeUndefined();
+    for (const key of ['s', 'p', ' ', 'Delete', 'Backspace', 'Escape', '1', '=', '-', 'ArrowLeft', 'PageDown']) expect(nameFor(press(key), { typing: true }), key).toBeUndefined();
     expect(nameFor(press('z', { meta: true }), { typing: true })).toBeUndefined();
     expect(nameFor(press('=', { meta: true }), { typing: true })).toBe('zoom.in.main');
     expect(nameFor(press('+', { ctrl: true, shift: true }), { typing: true, mac: false })).toBe('zoom.in.main');
@@ -250,7 +250,7 @@ describe('the key table', () => {
 
   it('in the Story only Esc does something; Cmd or Ctrl with plus, minus and 0 are taken from the browser there too, and do nothing', () => {
     expect(nameFor(press('Escape'), { mode: 'story' })).toBe('story.leave');
-    for (const key of ['v', ' ', 'Delete', '1']) expect(nameFor(press(key), { mode: 'story' }), key).toBeUndefined();
+    for (const key of ['s', ' ', 'Delete', '1']) expect(nameFor(press(key), { mode: 'story' }), key).toBeUndefined();
     expect(nameFor(press('z', { meta: true }), { mode: 'story' })).toBeUndefined();
     expect(nameFor(press('1', { meta: true }), { mode: 'story' })).toBeUndefined();
     expect(nameFor(press('=', { meta: true }))).toBe('zoom.in.main');
@@ -275,10 +275,10 @@ describe('the key table', () => {
 
   it('no entry uses Alt, and a plain key is not taken with Cmd or Ctrl held', () => {
     expect(nameFor(press('z', { meta: true, alt: true }))).toBeUndefined();
-    expect(nameFor(press('v', { alt: true }))).toBeUndefined();
-    expect(nameFor(press('v', { meta: true }))).toBeUndefined();
+    expect(nameFor(press('s', { alt: true }))).toBeUndefined();
+    expect(nameFor(press('s', { meta: true }))).toBeUndefined();
     expect(nameFor(press('s', { ctrl: true, shift: true }))).toBeUndefined();
-    expect(nameFor(press('s'))).toBeUndefined();
+    expect(nameFor(press('s'))).toBe('tool.select');
     expect(nameFor(press('s', { shift: true }))).toBe('solidify');
   });
 

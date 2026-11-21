@@ -5,7 +5,8 @@ import type { Tool } from './types';
 
 /**
  * The Box tool: a drag draws a box in the live layer, and lifting the pointer opens the field
- * for its label. The box is posted with its label, not here. A box too small to be meant is dropped.
+ * for its label, in the box itself (`BoxLabelEditor`). The box is posted with its label, not
+ * here. A box too small to be meant is dropped.
  */
 export function boxTool(): Tool {
   let from: [number, number] = [0, 0];
@@ -35,7 +36,9 @@ export function boxTool(): Tool {
         board.hand.set({ shape: undefined });
         return;
       }
-      board.openLabel({ kind: 'box', box, at: [box[0] + 8, box[1] + box[3] / 2 - 18] });
+      // From here the box is drawn by the field its words are typed in, which grows with them.
+      board.hand.set({ shape: undefined });
+      board.openLabel({ kind: 'box', box, at: [box[0], box[1]] });
     },
     cancel(_press, board) {
       board.hand.set({ shape: undefined });
