@@ -159,6 +159,46 @@ test('a press inside a box drawn round a card reaches the card; a press on its l
   expect(await selected(page)).toEqual([boxId]);
 });
 
+test('a press anywhere inside a box, on its words or off them, selects the box, and a drag from there moves it', async ({ page }) => {
+  await open(page);
+  const n = (await admitted(page)).length;
+  const m1 = await rect(page, '[data-item="m1"]');
+  // On bare ground, below the note.
+  const from: XY = [m1.x, m1.y + m1.height + 160];
+  await page.keyboard.press('b');
+  await page.mouse.move(...from);
+  await page.mouse.down();
+  await page.mouse.move(from[0] + 260, from[1] + 140, { steps: 6 });
+  await page.mouse.up();
+  await page.keyboard.type('the part that waits');
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await admitted(page)).slice(n).filter((e) => e.type === 'item.add').length).toBe(1);
+  const boxId = ((await admitted(page)).slice(n).find((e) => e.type === 'item.add')!.item as { id: string }).id;
+  await page.keyboard.press('s');
+
+  const b = await rect(page, `[data-item="${boxId}"]`);
+  const words = await rect(page, `[data-item="${boxId}"] .drawn-box__words`);
+  for (const [name, at] of [
+    ['its words', [words.x + words.width / 2, words.y + words.height / 2]],
+    ['off its words, well in from its line', [b.x + 30, b.y + 24]],
+  ] as const) {
+    await page.keyboard.press('Escape');
+    expect(await selected(page), name).toEqual([]);
+    await page.mouse.click(...at);
+    expect(await selected(page), name).toEqual([boxId]);
+  }
+  // The cursor says it can be moved, and a drag from the middle moves it.
+  const mid: XY = [b.x + b.width / 2, b.y + b.height / 2];
+  await page.mouse.move(...mid);
+  await nextFrame(page);
+  expect(await cursorAt(page, mid)).toBe('grab');
+  const before = (await admitted(page)).length;
+  await page.mouse.down();
+  await page.mouse.move(mid[0] + 60, mid[1] + 40, { steps: 6 });
+  await page.mouse.up();
+  await expect.poll(async () => (await updatesSince(page, before)).map(([id]) => id)).toEqual([boxId]);
+});
+
 test('the cursor: an open hand on a note and a picture, a closed hand while moving, the default on the ground, a crosshair with the pen and the eraser', async ({ page }) => {
   await open(page);
   const m1 = await rect(page, '[data-item="m1"]');
@@ -190,7 +230,7 @@ test('the cursor: an open hand on a note and a picture, a closed hand while movi
   await nextFrame(page);
   expect(await cursorAt(page, onNote)).toBe('crosshair');
   // The eraser picks nothing up: a crosshair over a note and over the ground, as soon as it is in hand.
-  await page.keyboard.press('v');
+  await page.keyboard.press('s');
   await nextFrame(page);
   expect(await cursorAt(page, onNote)).toBe('grab');
   await page.keyboard.press('e');
@@ -205,7 +245,7 @@ test('the cursor: a pointer over a picture’s button with any tool, and the res
   await open(page, 'engine-loop&at=3');
   const button = await rect(page, '[data-item="walk"] [aria-label="Next step"], [data-item="walk"] button');
   const on: XY = [button.x + button.width / 2, button.y + button.height / 2];
-  for (const key of ['v', 'p', 'b']) {
+  for (const key of ['s', 'p', 'b']) {
     await page.keyboard.press(key);
     await page.mouse.move(on[0] - 1, on[1]);
     await page.mouse.move(...on);
@@ -423,7 +463,7 @@ test('ink on a card stays over the card while the card is dragged: it is not hid
   await page.mouse.down();
   await page.mouse.move(a1.x + a1.width - 40, a1.y + a1.height - 20, { steps: 6 });
   await page.mouse.up();
-  await page.keyboard.press('v');
+  await page.keyboard.press('s');
   await expect(page.locator('.layer [data-kind="ink"]')).toHaveCount(1);
   /** How far the ink is over the card in the stack: both lie in one layer, so the higher number is drawn on top. */
   const over = () =>
@@ -455,7 +495,7 @@ test('in a focus view a dragged note is lifted too: over the ink beside it, whic
   await page.mouse.click(picture.x + picture.width / 2, picture.y + 40);
   await page.keyboard.type('a note on the picture');
   await page.keyboard.press('Enter');
-  await page.keyboard.press('v');
+  await page.keyboard.press('s');
   const note = page.locator('.item--note.item--raised').last();
   await expect(note).toBeVisible();
   const layer = (of: Locator) => of.first().evaluate((el) => Number(getComputedStyle(el).zIndex));

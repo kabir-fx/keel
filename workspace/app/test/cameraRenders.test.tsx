@@ -138,7 +138,7 @@ describe('the minimap and "back to the board" render only when what they show ch
   it('the board rendering again for something else renders neither: a tool taken in hand, a chapter renamed', async () => {
     const { src } = await open();
     Keyboard.press('p');
-    Keyboard.press('v');
+    Keyboard.press('s');
     await frame();
     expect(screen.getByRole('toolbar', { name: 'Tools' })).toBeTruthy();
     expect(seen).toEqual({ minimap: 0, back: 0 });

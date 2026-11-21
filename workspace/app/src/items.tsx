@@ -136,7 +136,7 @@ export const MarkView = memo(function MarkView({ item, shown, selected = false, 
     case 'box':
       return (
         <Frame item={item} shown={shown} kind="box" className={sel}>
-          <div className="drawn-box">{item.text && <span>{item.text}</span>}</div>
+          <div className="drawn-box">{item.text && <span className="drawn-box__words">{item.text}</span>}</div>
         </Frame>
       );
     case 'pin':

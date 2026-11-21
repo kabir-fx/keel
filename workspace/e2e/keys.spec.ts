@@ -122,7 +122,7 @@ test('keys by their place: Undo and the Pen on a Russian keyboard, and Caps Lock
   // The key in the P place types "з": it is the Pen.
   expect(await keyAt(page, { key: 'з', code: 'KeyP' })).toBe(false);
   expect(await tool(page)).toBe('pen');
-  expect(await keyAt(page, { key: 'М', code: 'KeyV', capsLock: true })).toBe(false);
+  expect(await keyAt(page, { key: 'Ы', code: 'KeyS', capsLock: true })).toBe(false);
   expect(await tool(page)).toBe('select');
 
   const n = (await admitted(page)).length;

@@ -55,8 +55,36 @@
 .file-tile__open:hover { background: var(--owner-bg); }
 .file-tile__open:focus-visible { outline: 2px solid var(--agent); outline-offset: 2px; }
 
+/*
+ * A box the owner drew, and the field its words are typed in (`BoxLabelEditor`): one look, so
+ * the words land where they were typed. The words are centred both ways and wrap inside the
+ * box; the box grows down when they need more room than it has.
+ */
 .drawn-box { width: 100%; min-height: inherit; border: 2.5px solid var(--owner); border-radius: 6px; display: flex; align-items: center; justify-content: center; }
-.drawn-box span { font: 600 24px/28px var(--font-hand); color: var(--owner-text); }
+.drawn-box__words {
+  width: 100%;
+  padding: 4px 10px;
+  font: 600 24px/28px var(--font-hand);
+  color: var(--owner-text);
+  text-align: center;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* While its words are typed the box is tinted as it was while it was dragged (`.live-box`). */
+.drawn-box--editing { background: rgba(194, 65, 12, 0.04); cursor: text; }
+.drawn-box--editing > textarea {
+  display: block;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.drawn-box--editing > textarea::placeholder { color: var(--owner); opacity: 0.55; }
 
 .ink, .line-mark { position: absolute; overflow: visible; pointer-events: none; }
 /* The line itself, and an arrow's head, drawn with the same stroke as its line. */
@@ -99,10 +127,10 @@
   color: var(--owner-text);
 }
 .label-editor__fit::after,
-.label-editor textarea { grid-area: 1 / 1; white-space: pre-wrap; overflow-wrap: anywhere; }
+.label-editor__fit textarea { grid-area: 1 / 1; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* A little room after the last word, so the caret fits and the field never wraps a word the unseen copy did not. */
 .label-editor__fit::after { content: attr(data-words); height: 0; padding-right: 6px; overflow: hidden; visibility: hidden; }
-.label-editor textarea {
+.label-editor__fit textarea {
   display: block;
   width: 0;
   min-width: 100%;
@@ -120,7 +148,7 @@
   user-select: text;
   -webkit-user-select: text;
 }
-.label-editor textarea::placeholder { color: var(--owner); opacity: 0.55; }
+.label-editor__fit textarea::placeholder { color: var(--owner); opacity: 0.55; }
 
 .drop-hint {
   position: absolute;

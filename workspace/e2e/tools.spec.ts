@@ -431,7 +431,7 @@ test('select: a click selects a mark, Delete takes it off, Cmd+Z puts it back an
   const under = await nextMark(page, n0);
 
   // Drag the card: it moves, and the ring on its question moves with it.
-  await page.keyboard.press('v');
+  await page.keyboard.press('s');
   const card = await box(page, '[data-item="a1"]');
   const ringBefore = await box(page, `[data-item="${ring.id}"] svg`);
   n0 = (await admitted(page)).length;
@@ -485,7 +485,7 @@ test('moving ink keeps its id: one item.update of its box, drawn where it lands'
   expect(Math.min(...xs)).toBeLessThan(1);
 
   // Take the ring by its line and drop it one row up.
-  await page.keyboard.press('v');
+  await page.keyboard.press('s');
   const svg = await box(page, `[data-item="${ring.id}"] svg`);
   const grab = { x: svg.x + svg.width / 2, y: svg.y + 9 };
   const dy = q2.y - q1.y;
@@ -515,7 +515,7 @@ test('moving ink keeps its id: one item.update of its box, drawn where it lands'
   n0 = (await admitted(page)).length;
   await draw(page, [[x, y], [x + 30, y + 40], [x + 60, y], [x + 90, y + 40], [x + 120, y]]);
   const sketch = await nextMark(page, n0);
-  await page.keyboard.press('v');
+  await page.keyboard.press('s');
   n0 = (await admitted(page)).length;
   await page.mouse.move(x + 30, y + 40);
   await page.mouse.down();
@@ -550,7 +550,7 @@ test('every mark on one card, as the owner would leave them: a picture to look a
   await page.keyboard.type('yes, 64');
   await page.keyboard.press('Enter');
   await nextMark(page, n0);
-  await page.keyboard.press('v');
+  await page.keyboard.press('s');
   await page.mouse.click(5, 450);
   await page.waitForTimeout(200);
   await page.screenshot({ path: `${SHOTS}/tools-6-marks.png` });

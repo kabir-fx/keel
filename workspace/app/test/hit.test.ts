@@ -3,11 +3,15 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Hit } from '../src/select/hit';
+import type { Lines } from '../src/board/measure';
+import { lineHit } from '../src/board/measure';
 import { distToOutline, KIND_LAYER, rankHits } from '../src/select/hit';
 
 /** What a press lands on (`src/select/hit.ts`): one ranking for everything under the pointer. */
 
 const hit = (id: string, layer: number, order: number, square: boolean): Hit => ({ id, layer, order, square });
+/** A press inside a box the owner drew, off its line. */
+const inside = (id: string, order: number): Hit => ({ id, layer: KIND_LAYER.box, order, square: true, inside: true });
 
 describe('the ranking of what is under the pointer', () => {
   it.each([
@@ -20,6 +24,12 @@ describe('the ranking of what is under the pointer', () => {
     ['one layer, the later one only near: the earlier, square one', [hit('n1', 2, 0, true), hit('n2', 2, 1, false)], 'n1'],
     ['a higher layer wins over a later place in the log', [hit('pin', 4, 0, true), hit('ink', 3, 9, true)], 'pin'],
     ['the order they are handed in does not matter', [hit('ink', 3, 1, false), hit('card', 1, 0, true)], 'card'],
+    ['inside a box, nothing else: the box', [inside('box', 0)], 'box'],
+    ['inside a box drawn round a picture, on the picture: the picture, though the box is above it', [hit('pic', 1, 0, true), inside('box', 1)], 'pic'],
+    ['inside a box, on a note drawn earlier on its layer: the note', [hit('note', 2, 0, true), inside('box', 1)], 'note'],
+    ['inside a box, on its neighbour’s line: the line', [inside('box', 0), hit('b2', 2, 1, true)], 'b2'],
+    ['inside a box, with a line only near: the box', [inside('box', 0), hit('ink', 3, 1, false)], 'box'],
+    ['inside two boxes: the one on top', [inside('outer', 0), inside('inner', 1)], 'inner'],
   ] as const)('%s', (_name, hits, want) => {
     expect(rankHits(hits)).toBe(want);
   });
@@ -76,5 +86,33 @@ describe('how far a point is from the outline of a box', () => {
     ['outside a corner', 103, 54, 5],
   ] as const)('%s', (_name, x, y, d) => {
     expect(distToOutline(x, y, box)).toBeCloseTo(d, 9);
+  });
+});
+
+describe('a press on a box the owner drew', () => {
+  const box = { id: 'b1', kind: 'box' as const, box: [0, 0, 200, 100] as Box };
+  const lines = (frame?: readonly [number, number]): Lines => ({
+    live: [],
+    boxes: new Map([[box.id, box.box]]),
+    ends: new Map(),
+    outlines: new Map(),
+    raised: undefined,
+    frameSize: () => frame,
+  });
+
+  it.each([
+    ['on its line: square', [1, 50], 'square'],
+    ['in the middle: inside', [100, 50], 'inside'],
+    ['inside, within the slop of its line: inside', [6, 50], 'inside'],
+    ['outside, within the slop of its line: near', [-4, 50], 'near'],
+    ['well outside: nothing', [-40, 50], undefined],
+  ] as const)('%s', (_name, [x, y], want) => {
+    expect(lineHit(lines(), box, 1, x, y)).toBe(want);
+  });
+
+  it('is hit as the page draws it: a box its words made taller is hit on its lower part and its lower line', () => {
+    expect(lineHit(lines(), box, 1, 100, 140)).toBeUndefined();
+    expect(lineHit(lines([200, 160]), box, 1, 100, 140)).toBe('inside');
+    expect(lineHit(lines([200, 160]), box, 1, 100, 159)).toBe('square');
   });
 });

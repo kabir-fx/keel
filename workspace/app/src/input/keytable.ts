@@ -98,7 +98,7 @@ const solidify = (b: Board) => {
 };
 
 export const KEY_TABLE = [
-  tool('select', 'v'),
+  tool('select', 's'),
   tool('pan', 'h'),
   tool('pen', 'p'),
   tool('box', 'b'),

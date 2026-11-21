@@ -2,7 +2,7 @@ import type { Id, MarkItem, PinItem } from '@keel/protocol';
 import { useEffect } from 'react';
 import { LABEL_MAX, PIN_MAX } from '../fieldText';
 import { keyWords } from '../input/keytable';
-import { LabelEditor } from '../LabelEditor';
+import { BoxLabelEditor, LabelEditor } from '../LabelEditor';
 import type { Shape } from '../live';
 import { arrowItem, boxItem } from '../marks';
 import type { LabelDraft } from '../noteDraft';
@@ -48,7 +48,8 @@ interface LabelField {
   placeholder: string;
   initial: string;
   max: number;
-  onCommit(text: string): void;
+  /** Enter or a press outside. A box's field hands over the height the box grew to with its words. */
+  onCommit(text: string, height?: number): void;
   onCancel(text: string): void;
   onType(text: string): void;
   onCut(): void;
@@ -64,11 +65,19 @@ export interface MarkLabels {
   open(label: Label): void;
 }
 
-/** A box or an arrow that waits for its words is drawn in the live layer, as it was while it was dragged. A pin draws itself. */
+/**
+ * An arrow that waits for its words is drawn in the live layer, as it was while it was dragged.
+ * A box is drawn by its field (`BoxLabelEditor`), which grows with the words; a pin draws itself.
+ */
 function shapeOf(l: Label): Shape | undefined {
-  if (l.kind === 'box') return { kind: 'box', from: [l.box[0], l.box[1]], to: [l.box[0] + l.box[2], l.box[1] + l.box[3]] };
-  if (l.kind === 'arrow') return { kind: 'arrow', from: l.from, to: l.to };
-  return undefined;
+  return l.kind === 'arrow' ? { kind: 'arrow', from: l.from, to: l.to } : undefined;
+}
+
+/** A box as tall as its field grew with its words: it is posted at the size it was drawn. A box never shrinks below the size it was dragged to. */
+function grownTo(l: Label, height: number | undefined): Label {
+  if (l.kind !== 'box' || height === undefined || height <= l.box[3]) return l;
+  const [x, y, w] = l.box;
+  return { ...l, box: [x, y, w, height] };
 }
 
 /**
@@ -252,7 +261,7 @@ export function useMarkLabel(board: LabelBoard, remember = false, noteOpen: () =
       placeholder: label.kind === 'pin' ? 'A few words' : label.kind === 'box' ? 'A label, if you like' : 'Say what it means',
       initial: o.text,
       max: maxOf(label),
-      onCommit: (text) => void post(o, text),
+      onCommit: (text, height) => void post({ ...o, of: { ...o.of, label: grownTo(label, height) } }, text),
       onCancel: (text) => cancel(o, text),
       onType: (text) => one.keep(o, text),
       onCut: () => board.say(labelFull(maxOf(label))),
@@ -280,7 +289,11 @@ export function MarkLabel({ labels }: { labels: MarkLabels }) {
           </svg>
         </div>
       )}
-      <LabelEditor key={f.key} at={f.at} placeholder={f.placeholder} initial={f.initial} max={f.max} onCommit={f.onCommit} onCancel={f.onCancel} onType={f.onType} onCut={f.onCut} />
+      {label.kind === 'box' ? (
+        <BoxLabelEditor key={f.key} box={label.box} placeholder={f.placeholder} initial={f.initial} max={f.max} onCommit={f.onCommit} onCancel={f.onCancel} onType={f.onType} onCut={f.onCut} />
+      ) : (
+        <LabelEditor key={f.key} at={f.at} placeholder={f.placeholder} initial={f.initial} max={f.max} onCommit={f.onCommit} onCancel={f.onCancel} onType={f.onType} onCut={f.onCut} />
+      )}
     </>
   );
 }

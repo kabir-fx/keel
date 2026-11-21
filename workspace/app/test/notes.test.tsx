@@ -61,7 +61,8 @@ const field = () => screen.queryByRole<HTMLTextAreaElement>('textbox', { name: '
 const label = () => screen.queryByRole<HTMLTextAreaElement>('textbox', { name: 'A few words' });
 const toast = () => screen.queryByTestId('toast')?.textContent ?? null;
 const tool = () => document.querySelector('.app')!.getAttribute('data-tool');
-const liveShape = () => screen.getByTestId('live').querySelector<HTMLElement>('.live-box, .live-line');
+/** The mark that waits for its words, as it is drawn: a box by the field its words are typed in, an arrow in the live layer. */
+const drawnMark = () => document.querySelector<HTMLElement>('.label-editor--box .drawn-box') ?? screen.getByTestId('live').querySelector<HTMLElement>('.live-box, .live-line');
 /** The frame the open note is drawn in: where it is on the board. */
 const place = () => {
   const el = document.querySelector<HTMLElement>('.item--editor');
@@ -649,7 +650,7 @@ describe('a press outside the field', () => {
     await settle();
     expect(posted()).toMatchObject([{ type: 'item.add', item: { kind: 'box', text: 'the slow part' } }]);
     expect(label()).toBeNull();
-    expect(liveShape()).toBeNull();
+    expect(drawnMark()).toBeNull();
   });
 });
 
@@ -741,7 +742,7 @@ describe('the focus leaves the field', () => {
     expect(posted()).toHaveLength(0);
     expect(label()).toBe(el);
     expect(el.value).toBe('the slow');
-    expect(liveShape()).not.toBeNull();
+    expect(drawnMark()).not.toBeNull();
     comeBack();
     type(el, 'the slow part');
     Keyboard.press('Enter');
@@ -917,7 +918,7 @@ describe('keys typed in a field', () => {
     const { posted, src } = open();
     const el = newNote();
     type(el, 'pvb');
-    for (const key of ['p', 'v', 'b', 'a', 'l', ' ', 'Delete', 'Backspace', '1', '0']) expect(Keyboard.press(key), key).toBe(true);
+    for (const key of ['p', 's', 'b', 'a', 'l', ' ', 'Delete', 'Backspace', '1', '0']) expect(Keyboard.press(key), key).toBe(true);
     Keyboard.press('z', 'KeyZ', { meta: true });
     await settle();
     expect(field()).toBe(el);
@@ -1078,7 +1079,7 @@ describe('the board refuses', () => {
     expect(posted()).toHaveLength(0);
     expect(label()?.value).toBe('kept through a refusal');
     expect(label()).not.toBe(el);
-    expect(liveShape()).not.toBeNull();
+    expect(drawnMark()).not.toBeNull();
     expect(toast()).toContain('The board is away.');
   });
 
@@ -1097,7 +1098,7 @@ describe('the board refuses', () => {
     await settle();
     expect(posted()).toMatchObject([{ item: { kind: 'note', text: 'being typed' } }]);
     expect(label()?.value).toBe('a label');
-    expect(liveShape()).not.toBeNull();
+    expect(drawnMark()).not.toBeNull();
   });
 
   it('two marks, the Box tool still in hand: the second waits for the first, and comes back drawn too', async () => {
@@ -1114,17 +1115,17 @@ describe('the board refuses', () => {
     await settle();
     await board.refuseAll();
     expect(label()?.value).toBe('the first');
-    expect(liveShape()).not.toBeNull();
+    expect(drawnMark()).not.toBeNull();
     board.release();
     Keyboard.press('Enter');
     await settle();
     expect(label()?.value).toBe('the second');
-    expect(liveShape()).not.toBeNull();
+    expect(drawnMark()).not.toBeNull();
     Keyboard.press('Enter');
     await settle();
     expect(posted().map((e) => (e.type === 'item.add' && e.item.kind === 'box' ? e.item.text : e.type))).toEqual(['the first', 'the second']);
     expect(label()).toBeNull();
-    expect(liveShape()).toBeNull();
+    expect(drawnMark()).toBeNull();
   });
 
   it('a note while the owner types in some other field of the page: it opens with its words and leaves the focus where it is', async () => {
@@ -1238,7 +1239,7 @@ describe('a thing is taken off the board while a mark is labelled', () => {
     expect(label()).toBe(el);
     expect(el.value).toBe('round that note');
     expect(document.activeElement).toBe(el);
-    expect(liveShape()).not.toBeNull();
+    expect(drawnMark()).not.toBeNull();
     Keyboard.press('Enter');
     await settle();
     expect(posted().slice(1)).toMatchObject([{ type: 'item.add', item: { kind: 'box', text: 'round that note' } }]);
@@ -1455,7 +1456,7 @@ describe('a draft survives a reload', () => {
     await settle();
     expect(field()).toBeNull();
     expect(label()).toBeNull();
-    expect(liveShape()).toBeNull();
+    expect(drawnMark()).toBeNull();
   });
 
   it('a page that is not the owner’s opens no draft', async () => {
@@ -1516,7 +1517,7 @@ describe('a draft survives a reload', () => {
     await settle();
     expect(first.posted()).toHaveLength(0);
     expect(label()?.value).toBe('the slow part');
-    expect(liveShape()).not.toBeNull();
+    expect(drawnMark()).not.toBeNull();
     expect(toast()).toBe(LABEL_BACK);
     Keyboard.press('Enter');
     await settle();
@@ -1573,7 +1574,7 @@ describe('a draft survives a reload', () => {
     expect(field()).toBeNull();
     expect(label()?.value).toBe('the label');
     expect(document.activeElement).toBe(label());
-    expect(liveShape()).not.toBeNull();
+    expect(drawnMark()).not.toBeNull();
     expect(toast()).toBe(LABEL_BACK);
   });
 });
@@ -1590,7 +1591,7 @@ describe('Esc on a label', () => {
     expect(posted()).toMatchObject([{ type: 'item.add', item: { kind: 'box' } }]);
     expect(boxesOn(src)).toEqual(['']);
     expect(label()).toBeNull();
-    expect(liveShape()).toBeNull();
+    expect(drawnMark()).toBeNull();
     expect(toast()).toBeNull();
   });
 
@@ -1606,7 +1607,7 @@ describe('Esc on a label', () => {
     expect(label()).toBeNull();
     await undo();
     expect(label()?.value).toBe('the slow part');
-    expect(liveShape()).not.toBeNull();
+    expect(drawnMark()).not.toBeNull();
     Keyboard.press('Enter');
     await settle();
     expect(boxesOn(src)).toEqual(['the slow part']);
@@ -1845,7 +1846,7 @@ describe('a label, with the board’s tools alone', () => {
     const steps: Array<{ undo(): boolean | Promise<boolean> }> = [];
     const posted: string[] = [];
     let ok = false;
-    const { hand, open: openLabel } = labels({
+    const { container, hand, open: openLabel } = labels({
       recordStep: (step) => {
         steps.push(step);
         return () => void steps.splice(steps.indexOf(step), 1);
@@ -1862,7 +1863,8 @@ describe('a label, with the board’s tools alone', () => {
     expect(steps).toHaveLength(1);
     await settle();
     expect(label()?.value).toBe('the slow part');
-    expect(hand.get().shape).toMatchObject({ kind: 'box' });
+    // The box is drawn again, by its field.
+    expect(container.querySelector('.label-editor--box .drawn-box')).not.toBeNull();
     // Refused: the words are in the field again, so their step is out of Undo's list and costs no press.
     expect(steps).toHaveLength(0);
     // The words are in the field that came back: once it is posted, no second field follows it.
@@ -1949,9 +1951,35 @@ describe('a label, with the board’s tools alone', () => {
     expect(did.sent).toEqual([]);
   });
 
-  it('the field starts at the width it always had and may grow to a set width', () => {
-    const { container, open: openLabel } = labels();
+  it('a box’s words are typed in the box itself, drawn as the posted box is drawn', () => {
+    const { container, hand, open: openLabel } = labels();
     openLabel(box);
+    const paper = container.querySelector<HTMLElement>('.label-editor--box')!;
+    // The field is the box: where it was drawn, as wide, and at least as tall.
+    expect([paper.style.left, paper.style.top, paper.style.width, paper.style.minHeight]).toEqual(['10px', '20px', '200px', '100px']);
+    // With the posted box's frame and words, so the words land where they were typed.
+    expect(paper.querySelector('.drawn-box > textarea.drawn-box__words')).toBe(label());
+    expect(container.querySelector('.label-editor__fit')).toBeNull();
+    // The field draws the box: nothing is left in the live layer to draw it twice.
+    expect(hand.get().shape).toBeUndefined();
+  });
+
+  it.each([
+    ['grew with its words: it is posted at the height it grew to', 164, [10, 20, 200, 164]],
+    ['kept within its box: it is posted as it was dragged', 100, [10, 20, 200, 100]],
+  ] as const)('a box whose field %s', async (_name, height, want) => {
+    const { did, container, open: openLabel } = labels();
+    openLabel(box);
+    Object.defineProperty(container.querySelector('.label-editor--box')!, 'offsetHeight', { configurable: true, get: () => height });
+    type(label()!, 'the part that waits on the queue');
+    Keyboard.press('Enter');
+    await settle();
+    expect(did.marks).toMatchObject([{ kind: 'box', box: want, text: 'the part that waits on the queue' }]);
+  });
+
+  it('an arrow’s field starts at the width it always had and may grow to a set width', () => {
+    const { container, open: openLabel } = labels();
+    openLabel(arrow);
     const fit = container.querySelector<HTMLElement>('.label-editor__fit')!;
     expect([fit.style.minWidth, fit.style.maxWidth]).toEqual([`${LABEL_MIN_WIDTH}px`, `${LABEL_MAX_WIDTH}px`]);
     expect(LABEL_MIN_WIDTH).toBe(240);
@@ -2208,7 +2236,7 @@ describe('a reload while a note or a mark is on its way', () => {
     open({ remember: true, events: first.src.events });
     await settle();
     expect(label()).toBeNull();
-    expect(liveShape()).toBeNull();
+    expect(drawnMark()).toBeNull();
     expect(keptKey('label')).toBeUndefined();
   });
 
@@ -2354,7 +2382,7 @@ describe('a field on its way back while a press is under way', () => {
     Keyboard.press('Enter');
     await settle();
     expect(label()?.value).toBe('first box words');
-    expect(liveShape()).not.toBeNull();
+    expect(drawnMark()).not.toBeNull();
     Keyboard.press('Enter');
     await settle();
     expect(boxesOn(src)).toEqual(['second box words', 'first box words']);
@@ -2690,7 +2718,7 @@ describe('Esc on the field Undo opened', () => {
     await settle();
     hear();
     expect(label()).toBeNull();
-    expect(liveShape()).toBeNull();
+    expect(drawnMark()).toBeNull();
     expect(boxesOn(src)).toEqual([]);
     await undo();
     hear();
