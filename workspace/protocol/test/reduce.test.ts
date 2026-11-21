@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BoardState } from '../src';
 import { MAX_OPEN, MAX_PARTS, admit, audit, digest, emptyState, formatEvent, markings, oneLine, openThings, parseLog, reduce, renderBrief, renderDigest, replay, trackProgress } from '../src';
-import { Board, CH, CHECK, PASSED, blueprint, build, buildingBoard, ideaBoard, ink, note, openBoard, picture, solidBoard, solidify } from './helpers';
+import { Board, CH, CHECK, PASSED, blueprint, buildingBoard, ideaBoard, ink, note, openBoard, picture, solidBoard, solidify } from './helpers';
 
 function deepFreeze<T>(value: T): T {
   if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {

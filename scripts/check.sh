@@ -3,15 +3,19 @@
 #
 #   scripts/check.sh            everything
 #   scripts/check.sh lint       skill, agent, and reference checks
+#   scripts/check.sh shell      shellcheck, over keel's own scripts
 #   scripts/check.sh hook       the guard hook, against a table of commands
 #   scripts/check.sh bar        bar-guard.sh, against a throwaway repository
 #   scripts/check.sh brief      brief-check.sh, against a clean and a bad brief
 #   scripts/check.sh install    the installer, against a throwaway config directory and bin folder
 #   scripts/check.sh get        get.sh, against a throwaway home, install folder and bin folder
-#   scripts/check.sh board      the workspace: typecheck, unit tests, the plugin's files.
+#   scripts/check.sh board      the workspace: lint, typecheck, unit tests, the plugin's files.
 #                               KEEL_E2E=1 adds the browser tests.
+#   scripts/check.sh package    the npm package: build it, stage it, install it, run it
 #
-# `all` runs `board` only when Node 22 or newer and npm are there.
+# `all` runs `board` and `package` only when Node 22 or newer and npm are there,
+# and `shell` only when shellcheck is there.
+# .github/workflows/ci.yml runs this file, so a pull request is held to the same list.
 # Exit status: 0 when every check passes, 1 otherwise.
 
 set -u
@@ -37,6 +41,8 @@ trap 'rm -rf "$tmp"' EXIT
 builtin_names="add-dir advisor agents autofix-pr batch branch btw bug clear code-review color compact config context copy cost debug deep-research design design-sync diff doctor effort exit export fast feedback fork goal help hooks ide import init insights login logout loop mcp memory model permissions plan plugin recap release-notes reload-skills rename resume review rewind run run-skill-generator sandbox schedule security-review simplify skill-doctor skills status statusline subtask tasks team-onboarding theme ultrareview usage verify vim"
 skill_keys="name description when_to_use argument-hint disable-model-invocation user-invocable allowed-tools disallowed-tools model effort context agent paths hooks"
 agent_keys="name description tools disallowedTools model permissionMode maxTurns skills effort isolation color omitClaudeMd"
+
+keel_scripts="install.sh get.sh scripts/check.sh hooks/guard.sh skills/vet/scripts/bar-guard.sh skills/keel/scripts/brief-check.sh"
 
 in_list() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
 
@@ -140,7 +146,7 @@ lint() {
   done
   grep -rq 'nothing after it' skills agents && fail "a skill voids a verdict on any later commit: point at keel/verdicts.md instead" || ok
 
-  for file in install.sh get.sh scripts/check.sh hooks/guard.sh skills/vet/scripts/bar-guard.sh skills/keel/scripts/brief-check.sh; do
+  for file in $keel_scripts; do
     [ -x "$file" ] && ok || fail "$file is not executable"
     bash -n "$file" 2>/dev/null && ok || fail "$file has a syntax error"
   done
@@ -153,6 +159,18 @@ lint() {
   done
   printf 'info  always-on cost: rules %s words, model-invoked skill descriptions %s characters, %s skills, %s agents\n' \
     "$(wc -w <rules/keel.md | tr -d ' ')" "$n" "$(echo $skills | wc -w | tr -d ' ')" "$(echo $agents | wc -w | tr -d ' ')"
+}
+
+shell() {
+  local out file files=()
+  command -v shellcheck >/dev/null 2>&1 || { fail "the shell check needs shellcheck"; return; }
+  for file in $keel_scripts; do files+=("$file"); done
+  if out="$(shellcheck --severity=warning "${files[@]}" 2>&1)"; then
+    ok
+  else
+    fail "shellcheck --severity=warning"
+    printf '%s\n' "$out" | sed 's/^/      /'
+  fi
 }
 
 hook_decision() { # hook_decision <cwd> <command>
@@ -256,6 +274,8 @@ ask  feature docker push me/app:1
 none feature docker build -t app .
 deny feature rm -rf /
 deny feature rm -rf ~
+deny feature rm -rf ~/
+deny feature rm -rf ~/*
 deny feature rm -rf "$HOME"
 deny feature sudo rm -rf /*
 deny feature rm -fr ${HOME}/
@@ -441,7 +461,7 @@ EOF
 
   command -v jq >/dev/null 2>&1 || { fail "brief hook tests need jq"; return; }
   hook_run() { # hook_run <file>: prints stderr, then exit=<status>
-    jq -cn --arg f "$1" '{tool_name: "Write", tool_input: {file_path: $f}}' | "$checker" --hook 2>&1 >/dev/null
+    jq -cn --arg f "$1" '{tool_name: "Write", tool_input: {file_path: $f}}' | { "$checker" --hook >/dev/null; } 2>&1
     echo "exit=$?"
   }
   out="$(hook_run "$dir/bad.md")"
@@ -957,26 +977,32 @@ sudo apt-get install -y -qq git"
   fi
 }
 
+workspace_ready() { # workspace_ready <what needs it>
+  has_node || { fail "$1 need Node 22 or newer and npm"; return 1; }
+  [ -d workspace/node_modules ] || { fail "workspace/node_modules is missing: run ./install.sh, or npm install in workspace/"; return 1; }
+}
+
+in_workspace() { # in_workspace <description> <command...>: sets $out, and shows its end when the command fails
+  local what="$1"
+  shift
+  if out="$(cd "$root/workspace" && "$@" 2>&1)"; then
+    ok
+  else
+    fail "$what"
+    printf '%s\n' "$out" | tail -n 30 | sed 's/^/      /'
+  fi
+}
+
 board() {
   local file out
-  has_node || { fail "the board checks need Node 22 or newer and npm"; return; }
-  [ -d workspace/node_modules ] || { fail "workspace/node_modules is missing: run ./install.sh, or npm install in workspace/"; return; }
+  workspace_ready "the board checks" || return
 
   check_frontmatter workspace/plugin/skills/board/SKILL.md board "$skill_keys"
   for file in workspace/plugin/.claude-plugin/plugin.json workspace/plugin/hooks/hooks.json workspace/plugin/.mcp.json; do
     node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$file" 2>/dev/null && ok || fail "$file is not valid JSON"
   done
 
-  in_workspace() { # in_workspace <description> <command...>: shows the end of the output when it fails
-    local what="$1"
-    shift
-    if out="$(cd "$root/workspace" && "$@" 2>&1)"; then
-      ok
-    else
-      fail "$what"
-      printf '%s\n' "$out" | tail -n 30 | sed 's/^/      /'
-    fi
-  }
+  in_workspace "workspace lint (npm run lint)" npm run lint
   in_workspace "workspace typecheck (npm run typecheck)" npm run typecheck
   in_workspace "workspace unit tests (npm test)" npm test
   printf 'info  unit tests: %s\n' "$(printf '%s\n' "$out" | grep -E '^ +Tests ' | sed 's/^ *//')"
@@ -988,19 +1014,31 @@ board() {
   fi
 }
 
+package() {
+  local out
+  workspace_ready "the package checks" || return
+  in_workspace "build and stage the package (npm run release:pack)" npm run release:pack
+  in_workspace "the installed package runs (npm run release:test)" npm run release:test
+  printf 'info  package: %s\n' "$(printf '%s\n' "$out" | grep -E '^ok +tarball ' | sed 's/^ok *//')"
+}
+
 case "$what" in
   lint) lint ;;
+  shell) shell ;;
   hook) hook ;;
   bar) bar ;;
   brief) brief ;;
   install) install_check ;;
   get) get_check ;;
   board) board ;;
+  package) package ;;
   all)
-    lint; hook; bar; brief; install_check; get_check
-    if has_node; then board; else printf 'skipped board: it needs Node 22 or newer and npm\n'; fi
+    lint
+    if command -v shellcheck >/dev/null 2>&1; then shell; else printf 'skipped shell: it needs shellcheck\n'; fi
+    hook; bar; brief; install_check; get_check
+    if has_node; then board; package; else printf 'skipped board and package: they need Node 22 or newer and npm\n'; fi
     ;;
-  *) echo "usage: scripts/check.sh [lint|hook|bar|brief|install|get|board]" >&2; exit 2 ;;
+  *) echo "usage: scripts/check.sh [lint|shell|hook|bar|brief|install|get|board|package]" >&2; exit 2 ;;
 esac
 
 if [ "$fails" -gt 0 ]; then

@@ -17,7 +17,7 @@ export function chapterInWork(state: BoardState): Id | undefined {
 /** A chapter's title from a note: its first six words. */
 export function titleFromText(text: string): string {
   const words = text.trim().split(/\s+/).filter(Boolean).slice(0, 6);
-  const title = words.join(' ').replace(/[\s,;:.\-]+$/, '');
+  const title = words.join(' ').replace(/[\s,;:.-]+$/, '');
   return (title || 'A new idea').slice(0, 90);
 }
 

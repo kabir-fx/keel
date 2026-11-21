@@ -214,11 +214,15 @@ These numbers were measured on one machine on 2026-11-17 and 2026-11-18, with a 
 ## Check that it works
 
 ```sh
-scripts/check.sh board              # the workspace: typecheck, unit tests, the plugin's files
+scripts/check.sh board              # the workspace: lint, typecheck, unit tests, the plugin's files
 KEEL_E2E=1 scripts/check.sh board   # the same, and the browser tests (they use your Chrome)
+scripts/check.sh package            # the npm package: build it, stage it, install it, run it
 scripts/check.sh install            # the installer, against throwaway folders
 scripts/check.sh get                # get.sh, against a throwaway home, with stand-ins for every download
+scripts/check.sh shell              # shellcheck, over keel's own scripts
 ```
+
+Every pull request runs the whole of `KEEL_E2E=1 scripts/check.sh` on GitHub, on Ubuntu and on macOS.
 
 To see the board with no agent and no cost, run `keel-board open --link none` in a scratch repository. To see one real agent turn, run `npm run live-check -w @keel/board-plugin` in `workspace/`. It posts a note and prints how many seconds the card took. It costs one turn on your subscription.
 
@@ -378,6 +382,8 @@ A repo's own conventions win. Keel points at what exists and does not create a s
 
 ## Changing keel
 
-Edit the files here. The rules, skills, agents and hooks are live through the symlinks. The board needs `./install.sh` again, or `npm run build` in `workspace/`. Run `scripts/check.sh` after any edit. It checks every skill and reference, runs the guard hook against a table of commands, runs `bar-guard.sh` against a throwaway repo, and runs `brief-check.sh` against a clean and a bad brief. It round-trips the installer against throwaway folders, and runs the board's checks when Node 22 is there. When a keel skill misfires, `/retro` proposes the edit as a diff.
+Edit the files here. The rules, skills, agents and hooks are live through the symlinks. The board needs `./install.sh` again, or `npm run build` in `workspace/`. Run `scripts/check.sh` after any edit. It checks every skill and reference, runs the guard hook against a table of commands, runs `bar-guard.sh` against a throwaway repo, and runs `brief-check.sh` against a clean and a bad brief. It round-trips the installer against throwaway folders, and runs the board's and the package's checks when Node 22 is there. When a keel skill misfires, `/retro` proposes the edit as a diff.
+
+A merge to `main` is a release. When the merge changes what the npm package holds, GitHub publishes the next version of `keel-workspace`, installs it from npm on Ubuntu and on macOS, and only then makes it the version `get.sh` and `npx keel-workspace` install. Nobody types a version: a `feat` commit raises the minor number, and anything else the patch number. [Record 0017](docs/adr/0017-a-merge-to-main-is-a-release.md) has the steps, and how to take a release back.
 
 Keep it small. Before adding a skill, ask whether a rule, a line in an existing skill, or a check in the repo would do the job.

@@ -123,12 +123,12 @@ test('a transition that begins and ends while renderAt waits on real frames is h
     const probe = document.createElement('div');
     probe.style.cssText = 'position: fixed; width: 1px; height: 1px; opacity: 1; transition: opacity 1ms linear';
     document.body.append(probe);
-    getComputedStyle(probe).opacity;
+    void getComputedStyle(probe).opacity;
     let transition: Animation | undefined;
     // Runs once renderAt has begun waiting on real frames for the page to settle.
     setTimeout(() => {
       probe.style.opacity = '0';
-      getComputedStyle(probe).opacity;
+      void getComputedStyle(probe).opacity;
       transition = probe.getAnimations()[0];
     }, 0);
     await render(200);

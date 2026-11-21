@@ -1,10 +1,9 @@
-import type { Box } from '@keel/protocol';
-import { admit, replay } from '@keel/protocol';
+import { replay } from '@keel/protocol';
 import { describe, expect, it } from 'vitest';
 import { cutAt, loadFixture } from '../src/fixture';
 import { chapterProgress, itemWords, mainItems, projectProgress, storyOf, when } from '../src/story';
 import { trackOf } from '../src/watch';
-import { CH, note, openBoard } from './helpers';
+import { CH, openBoard } from './helpers';
 
 async function seven() {
   const fx = (await loadFixture('engine-loop'))!;

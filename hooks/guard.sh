@@ -208,7 +208,7 @@ check_rm() {
   for w in "${words[@]:1}"; do
     case "$w" in
       -*) ;;
-      "/"|"/*"|"~"|"~/"|"~/*"|"\$HOME"|"\$HOME/"|"\$HOME/*"|"\${HOME}"|"\${HOME}/"|"\${HOME}/*")
+      "/"|"/*"|"~"|\~/|\~/\*|"\$HOME"|"\$HOME/"|"\$HOME/*"|"\${HOME}"|"\${HOME}/"|"\${HOME}/*")
         want_deny "this would delete the home directory or the filesystem root." ;;
       "."|"./"|"./*"|".."|"../"|"../*"|"*"|".git"|"./.git"|".git/")
         want_ask "this deletes the whole directory, or the repository's history. Name the exact paths instead." ;;
