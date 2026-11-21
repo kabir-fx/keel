@@ -63,7 +63,7 @@ describe('the toolbar', () => {
       'Write a note (N)',
       'Pin a place inside an item (I)',
       'Lasso several items (L)',
-      'Erase your ink, boxes, arrows and pins (E)',
+      'Erase your ink, boxes, arrows and pins, or a picture (E)',
       'Drop in a file, a picture or a link (D)',
     ]);
     expect(titles[11]).toContain('(Shift+S)');

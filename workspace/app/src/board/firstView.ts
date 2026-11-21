@@ -45,6 +45,8 @@ export interface FirstViewNeeds {
   fitted: RefObject<boolean>;
   /** Set here, once: the pictures on the board when it first opened. Only later ones are news. */
   known: RefObject<Set<Id> | null>;
+  /** The canvas in view. A kept camera is used only on the canvas it was kept for. */
+  canvas: Id | undefined;
 }
 
 /**
@@ -69,7 +71,7 @@ export function useFirstView(p: FirstViewNeeds): void {
     }
     // Back where the owner was on this board, as they left it.
     const kept = p.remember ? readView(viewKey(state.name)) : undefined;
-    if (kept && !show?.length) {
+    if (kept && !show?.length && (kept.canvas === undefined || kept.canvas === p.canvas)) {
       camera.set(kept.camera);
       if (kept.mode !== p.mode) p.setMode(kept.mode);
       if (kept.chapter && state.chapters[kept.chapter]) p.pinView(kept.chapter);
@@ -103,10 +105,12 @@ export interface KeptViewNeeds {
   inView: Id | undefined;
   chapterRef: RefObject<Id | undefined>;
   fitted: RefObject<boolean>;
+  /** The canvas in view: a change of it is written down too. */
+  canvas: Id | undefined;
 }
 
-/** Keep where the owner looks (the camera, the Board or the Story, the chapter), per board, so a reload comes back to it. */
-export function useKeptView({ camera, source, remember, mode, modeNow, inView, chapterRef, fitted }: KeptViewNeeds): void {
+/** Keep where the owner looks (the canvas and its camera, the Board or the Story, the chapter), per board, so a reload comes back to it. */
+export function useKeptView({ camera, source, remember, mode, modeNow, inView, chapterRef, fitted, canvas }: KeptViewNeeds): void {
   useEffect(() => {
     if (!remember) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -115,7 +119,7 @@ export function useKeptView({ camera, source, remember, mode, modeNow, inView, c
       timer = setTimeout(() => {
         if (fitted.current && source.state.name) {
           const chapter = chapterRef.current;
-          writeView(viewKey(source.state.name), { camera: camera.get(), mode: modeNow(), ...(chapter ? { chapter } : {}) });
+          writeView(viewKey(source.state.name), { camera: camera.get(), mode: modeNow(), ...(chapter ? { chapter } : {}), ...(canvas ? { canvas } : {}) });
         }
       }, KEEP_AFTER);
     };
@@ -125,5 +129,5 @@ export function useKeptView({ camera, source, remember, mode, modeNow, inView, c
       clearTimeout(timer);
       off();
     };
-  }, [remember, camera, source, mode, inView, modeNow, chapterRef, fitted]);
+  }, [remember, camera, source, mode, inView, modeNow, chapterRef, fitted, canvas]);
 }

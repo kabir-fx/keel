@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Actor, BoardEvent, BoardState, EventDraft, LogProblem, PrivateBoardFile, RuleId } from '@keel/protocol';
+import type { Actor, BoardEvent, BoardState, EventDraft, LogProblem, PrivateBoardFile, RuleId, Verdict } from '@keel/protocol';
 import { ASSETS_DIR, BOARD_DIR, EventId, LOG_FILE, admitAll, check, emptyState, formatEvent, parseEvent, step } from '@keel/protocol';
 import { NOFOLLOW, readNoFollow, realFolder, refuseLinkedFile, writeAll } from './files';
 import type { CommitCheck } from './git';
@@ -34,6 +34,16 @@ export interface BoardOpenOptions {
    * for tests and for replaying a fixture whose commits are in no repository.
    */
   checkCommits?: boolean | CommitCheck;
+  /**
+   * Check `canvas.merged` before it is admitted: its commit is in the repository, and the
+   * home branch, by the name it gives, holds it. Left out: no `canvas.merged` is admitted.
+   */
+  checkMerged?: (commit: string, into: string) => Verdict;
+  /**
+   * The server's say on an event the rules admit, from what it does on this machine now: a
+   * build that has not ended, a merge under way. Left out: the rules alone decide.
+   */
+  machine?: (event: BoardEvent) => Verdict;
   /** The seal of the log as this machine's server last wrote it, when it has one on file. */
   sealed?: LogSeal;
   /** Told once, when the log on disk is found to be no longer the file this board writes. */
@@ -81,6 +91,8 @@ export class Board {
   private readonly listeners = new Set<BoardListener>();
   private readonly now: () => Date;
   private readonly commitCheck: CommitCheck | undefined;
+  private readonly mergedCheck: ((commit: string, into: string) => Verdict) | undefined;
+  private readonly machine: ((event: BoardEvent) => Verdict) | undefined;
   private readonly warn: (message: string) => void;
   /** Why this board no longer writes: its log on disk is not the file it holds. Set once, and kept. */
   private apart: string | undefined;
@@ -95,6 +107,8 @@ export class Board {
     this.warn = opts.log ?? (() => {});
     const cc = opts.checkCommits ?? true;
     this.commitCheck = cc === true ? gitCommitCheck(repoDir) : cc === false ? undefined : cc;
+    this.mergedCheck = opts.checkMerged;
+    this.machine = opts.machine;
 
     const read = Buffer.from(text, 'utf8');
     this.took(read);
@@ -186,6 +200,12 @@ export class Board {
         const v = this.commitCheck(ev.commit);
         if (!v.ok) return { ...v, index: i };
       }
+      if (ev.type === 'canvas.merged') {
+        const v = this.mergedCheck?.(ev.commit, ev.into) ?? { ok: false, rule: 'R2', reason: 'Only the board server says an idea is merged, after it checked the home branch.' };
+        if (!v.ok) return { ...v, index: i };
+      }
+      const v = this.machine?.(ev);
+      if (v && !v.ok) return { ...v, index: i };
     }
 
     const bytes = Buffer.from(`${this.needsNewline ? '\n' : ''}${r.events.map(formatEvent).join('\n')}\n`, 'utf8');

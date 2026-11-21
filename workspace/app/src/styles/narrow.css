@@ -1,3 +1,14 @@
+/* Below 1100 px the board pill keeps its room for the names: the item count goes, the gaps close up. */
+@media (max-width: 1100px) {
+  .pill--board { gap: 8px; }
+  .pill--board .pill__count { display: none; }
+  /* Two lines: the board's name, small, over the canvas's, which then has the whole width. */
+  .pill__name { flex-direction: column; }
+  .pill__board { max-width: 100%; color: var(--text-2); font: 600 11.5px/14px var(--font-ui); }
+  .pill__where { font-size: 14px; line-height: 18px; }
+  .pill__dot { display: none; }
+}
+
 @media (max-width: 760px) {
   .view-switch { display: none; }
   .zoom, .minimap { display: none; }

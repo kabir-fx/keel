@@ -2,14 +2,15 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { FeedAdd, Id, oneLine } from '@keel/protocol';
 import { BoardClient, BoardError, RefusedError, refusalText } from './client';
-import { dirtyFiles, headOf, isAncestor, pinEnv, shortOf } from './git';
+import { dirtyFiles, git, headOf, isAncestor, pinEnv, shortOf } from './git';
 import type { SandboxKind } from './sandbox';
-import { sandboxPlan } from './sandbox';
+import { packageCaches, sandboxPlan } from './sandbox';
 import { readStarts, recordStart } from './starts';
 import type { PostInput } from './tools';
 import { PostPicture, ReadInput, checkSpecs, itemView, modelView, postDrafts } from './tools';
@@ -32,6 +33,7 @@ import { PostPicture, ReadInput, checkSpecs, itemView, modelView, postDrafts } f
  *   KEEL_BUILD_STATE                   the builder's private folder (outside the worktree)
  *   KEEL_BUILD_DENY_READ               folders the check may not read, as a JSON list
  *   KEEL_BUILD_CHECK_TIMEOUT           seconds a check may run, 600 by default
+ *   KEEL_BUILD_SETUPS                  the setups the owner agreed to, as a JSON list
  */
 
 export interface BuildEnv {
@@ -50,6 +52,8 @@ export interface BuildEnv {
   checkTimeoutMs: number;
   /** Folders the check may not read. */
   denyRead?: string[];
+  /** The setups the owner agreed to. They run again before a check when a dependency file changed. */
+  setups?: string[];
 }
 
 export const ROLE_ENV = 'KEEL_BOARD_ROLE';
@@ -67,6 +71,12 @@ export function buildEnvFrom(env: NodeJS.ProcessEnv = process.env): BuildEnv | u
   if (env.KEEL_BUILD_CHECK) out.check = env.KEEL_BUILD_CHECK;
   if (env.KEEL_BUILD_TREE) out.tree = env.KEEL_BUILD_TREE;
   if (env.KEEL_BUILD_GIT_DIR) out.gitDir = env.KEEL_BUILD_GIT_DIR;
+  try {
+    const setups = JSON.parse(env.KEEL_BUILD_SETUPS ?? 'null') as unknown;
+    if (Array.isArray(setups)) out.setups = setups.filter((x): x is string => typeof x === 'string' && x.length > 0);
+  } catch {
+    // No setups.
+  }
   try {
     const deny = JSON.parse(env.KEEL_BUILD_DENY_READ ?? '[]') as unknown;
     if (Array.isArray(deny)) out.denyRead = deny.filter((d): d is string => typeof d === 'string' && path.isAbsolute(d));
@@ -90,8 +100,7 @@ export interface CheckRun {
 
 const OUTPUT_KEPT = 64 * 1024;
 
-/** The process groups of the checks that run now. They die with this process. */
-/** Each running check's process group, and its temp folder. */
+/** Each running check's process group, and its temp folder. They die with this process. */
 const running = new Map<number, string>();
 export const CHECKS_DIR = 'checks';
 
@@ -134,7 +143,7 @@ export function gitPin(build: Pick<BuildEnv, 'gitDir' | 'tree' | 'workdir'> | un
 }
 
 /** What a check's places are, from the builder's: it may not change the worktree's link to its git folder. */
-function checkPlaces(build: BuildEnv): CheckPlaces {
+export function checkPlaces(build: Pick<BuildEnv, 'tree' | 'workdir' | 'stateDir' | 'denyRead'>): CheckPlaces {
   const root = build.tree ?? build.workdir;
   return { ...(build.tree ? { root: build.tree } : {}), stateDir: build.stateDir, denyRead: build.denyRead ?? [], denyWrite: [path.join(root, '.git')] };
 }
@@ -147,6 +156,9 @@ export interface CheckPlaces {
   /** The builder's private folder: a pid file per running check goes there. */
   stateDir?: string;
   denyRead?: string[];
+  /** The network is on, and these folders are writable too: the setup's reach. */
+  network?: boolean;
+  write?: string[];
 }
 
 /**
@@ -158,7 +170,7 @@ export function runCheck(cmd: string, cwd: string, timeoutMs: number, places: Ch
     const t0 = Date.now();
     const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'keel-check-')));
     const denyRead = [...(places.denyRead ?? []), ...(places.stateDir ? [places.stateDir] : [])];
-    const plan = sandboxPlan(cmd, { workdir: places.root ?? cwd, tmp, denyRead, denyWrite: places.denyWrite ?? [] });
+    const plan = sandboxPlan(cmd, { workdir: places.root ?? cwd, tmp, denyRead, denyWrite: places.denyWrite ?? [], network: places.network === true, write: places.write ?? [] });
     const p = spawn(plan.bin, plan.args, { cwd, env: plan.env, stdio: ['ignore', 'pipe', 'pipe'], detached: true, windowsHide: true });
     const pidFile = places.stateDir && p.pid ? path.join(places.stateDir, CHECKS_DIR, String(p.pid)) : undefined;
     if (p.pid) running.set(p.pid, tmp);
@@ -197,6 +209,73 @@ export function runCheck(cmd: string, cwd: string, timeoutMs: number, places: Ch
       resolve({ code: timedOut ? null : code, timedOut, output, seconds: Math.round((Date.now() - t0) / 100) / 10, sandbox: plan.kind });
     });
   });
+}
+
+/* ------------------------------------------------------- dependency files */
+
+/** The usual manifests and lock files, by name, at any depth: what a setup installs from. */
+export const DEPENDENCY_FILE = /^(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|requirements.*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|Cargo\.(toml|lock)|go\.(mod|sum)|Gemfile(\.lock)?|composer\.(json|lock)|build\.gradle.*|pom\.xml)$/;
+
+/** In the builder's private folder: the dependency files as they were when the setups last ran, by content hash. */
+export const DEPS_FILE = 'deps.json';
+
+/**
+ * The dependency files in the board's folder, tracked or new and not ignored, each with the
+ * SHA-256 of its contents. A link is not followed.
+ */
+export async function dependencyFiles(workdir: string, env: NodeJS.ProcessEnv): Promise<Record<string, string>> {
+  const r = await git(workdir, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], env);
+  const out: Record<string, string> = {};
+  for (const rel of [...new Set(r.stdout.split('\0').filter(Boolean))].sort()) {
+    if (!DEPENDENCY_FILE.test(path.posix.basename(rel))) continue;
+    try {
+      const file = path.join(workdir, rel);
+      if (!fs.lstatSync(file).isFile()) continue;
+      out[rel] = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    } catch {
+      // Deleted in the worktree: it is not there to install from.
+    }
+  }
+  return out;
+}
+
+/** Keep the dependency files as they are now: the setups have just run on them. */
+export async function keepDependencyFiles(workdir: string, env: NodeJS.ProcessEnv, stateDir: string): Promise<void> {
+  const now = await dependencyFiles(workdir, env);
+  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  const tmp = path.join(stateDir, `.${DEPS_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}`);
+  fs.writeFileSync(tmp, JSON.stringify(now), { mode: 0o600 });
+  fs.renameSync(tmp, path.join(stateDir, DEPS_FILE));
+}
+
+function keptDependencyFiles(stateDir: string): Record<string, string> | undefined {
+  try {
+    const file = path.join(stateDir, DEPS_FILE);
+    if (!fs.lstatSync(file).isFile()) return undefined;
+    return JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, string>;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Run the agreed setups again when a dependency file changed since they last ran in this copy,
+ * boxed as a setup always is: the network on, writes to the copy and the package caches.
+ * Undefined when nothing had to run or all of it passed; else what failed, for the builder.
+ */
+export async function setupsIfChanged(build: BuildEnv): Promise<{ cmd: string; why: string; tail: string } | undefined> {
+  const setups = build.setups ?? [];
+  if (setups.length === 0 || !build.stateDir) return undefined;
+  const pin = gitPin(build);
+  const now = await dependencyFiles(build.workdir, pin);
+  const kept = keptDependencyFiles(build.stateDir);
+  if (kept && JSON.stringify(kept) === JSON.stringify(now)) return undefined;
+  for (const cmd of setups) {
+    const run = await runCheck(cmd, build.workdir, build.checkTimeoutMs, { ...checkPlaces(build), network: true, write: packageCaches() });
+    if (run.code !== 0) return { cmd, why: run.timedOut ? `stopped after ${Math.round(build.checkTimeoutMs / 1000)} s` : `exit ${run.code ?? '?'}`, tail: tailOf(run.output) };
+  }
+  await keepDependencyFiles(build.workdir, pin, build.stateDir);
+  return undefined;
 }
 
 /** The last lines of the output, at most `chars` long. */
@@ -295,6 +374,16 @@ export async function boardCheck(agent: BoardClient, system: BoardClient | undef
   }
 
   const commit = await shortOf(build.workdir, head, pin);
+  const setup = await setupsIfChanged(build);
+  if (setup) {
+    const head1 = `A dependency file changed, and the setup \`${setup.cmd}\` failed before the check of ${oneLine(p.name, 60)} at ${commit} (${setup.why}).`;
+    try {
+      await system.post([{ type: 'feed.add', chapter: build.chapter, kind: 'problem', part, commit, text: flat(`${head1} ${tailOf(setup.tail, 4, 300)}`, 400) }]);
+    } catch (e) {
+      if (!(e instanceof RefusedError)) throw e;
+    }
+    return { ok: false, text: `${head1} The check did not run. The end of its output:\n${setup.tail || '(no output)'}\nFix the dependency file, commit again, and call board_check again.` };
+  }
   const run = await runCheck(cmd, build.workdir, build.checkTimeoutMs, checkPlaces(build));
   if (run.code === 0) {
     try {
@@ -329,6 +418,8 @@ export async function boardCheck(agent: BoardClient, system: BoardClient | undef
 /** The agreed check on the files as they are: no commit needed, nothing posted, nothing built. */
 export async function boardTry(build: BuildEnv | undefined): Promise<CheckOutcome> {
   if (!build?.workdir || !build.check) return { ok: false, text: 'board_try works only inside the builder, which hands it the agreed check and its worktree.' };
+  const setup = await setupsIfChanged(build);
+  if (setup) return { ok: false, text: `A dependency file changed, and the setup \`${setup.cmd}\` failed (${setup.why}). The check did not run. The end of its output:\n${setup.tail || '(no output)'}` };
   const run = await runCheck(build.check, build.workdir, build.checkTimeoutMs, checkPlaces(build));
   const tail = tailOf(run.output) || '(no output)';
   if (run.code === 0) return { ok: true, text: `\`${build.check}\` passes on the files as they are (${run.seconds} s). Nothing is built until you commit and call board_check.\n${tailOf(run.output, 8, 800)}` };

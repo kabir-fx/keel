@@ -16,8 +16,9 @@ import { sameSecret } from './serverfile';
  *
  * The key is made new for each start of the server. Without it every address is a 404, so a
  * page elsewhere cannot guess its way in. Only plain files inside the show's folder are
- * served, by real path, and never through a link. There is no content security policy: it is
- * the owner's own app, and it runs as it would when opened by hand.
+ * served, by real path, and never through a link. The only content security policy is who may
+ * frame it: the board's own page, and nothing else. Otherwise it is the owner's own app, and it
+ * runs as it would when opened by hand.
  */
 
 /** The most a show's folder path and its page may be, as the private file keeps them. */
@@ -70,8 +71,12 @@ const HEADERS: Record<string, string> = {
   'cache-control': 'no-store',
   'referrer-policy': 'no-referrer',
   'cross-origin-resource-policy': 'same-origin',
-  'x-frame-options': 'DENY',
 };
+
+/** Who may frame what is shown: these origins, the board's own, or no one. */
+export function showPolicy(ancestors: readonly string[]): string {
+  return `frame-ancestors ${ancestors.length > 0 ? ancestors.join(' ') : "'none'"}`;
+}
 
 /**
  * One part of a path, as decoded: never empty, never hidden or a step up (a dot first), and
@@ -184,14 +189,19 @@ export interface ShowServer {
   close(): Promise<void>;
 }
 
-/** Start the listener for shows, on a free port of 127.0.0.1, with a key of its own. */
-export async function startShowServer(log: (message: string) => void = () => {}): Promise<ShowServer> {
+/**
+ * Start the listener for shows, on a free port of 127.0.0.1, with a key of its own. What it
+ * serves may be framed by `ancestors` only: the board's own origins.
+ */
+export async function startShowServer(log: (message: string) => void = () => {}, ancestors: readonly string[] = []): Promise<ShowServer> {
   const key = crypto.randomBytes(24).toString('base64url');
+  const policy = showPolicy(ancestors);
   const shows = new Map<string, CheckedShow>();
   let port = 0;
 
   const handle = (req: http.IncomingMessage, res: http.ServerResponse): void => {
     for (const [name, value] of Object.entries(HEADERS)) res.setHeader(name, value);
+    res.setHeader('content-security-policy', policy);
     const host = req.headers.host?.toLowerCase();
     if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
       res.setHeader('connection', 'close');

@@ -13,7 +13,7 @@
 .story__head { display: flex; align-items: baseline; gap: 24px; flex-wrap: wrap; }
 .story h2 { margin: 0; font: 700 22px/28px var(--font-head); color: var(--ink); }
 .story__head p { margin: 0; color: var(--text-2); font-size: 14px; }
-.story__chapters { display: flex; gap: 16px; overflow-x: auto; padding-bottom: 6px; align-items: flex-start; }
+.story__chapters { display: flex; flex-wrap: wrap; gap: 16px; padding-bottom: 6px; align-items: flex-start; }
 .chapter { flex: none; min-width: 300px; max-width: 800px; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-chrome); overflow: hidden; }
 .chapter--idea { border: 2px dashed var(--ink); }
 .chapter--building { border: 2px solid var(--agent); }
@@ -52,7 +52,38 @@
 .chapter--built .meter__bar--small > span { background: #fff; }
 .story__already { margin: -8px 0 0; color: var(--text-2); font-size: 13.5px; line-height: 20px; }
 .story__legend-note { margin: 0; color: var(--text-2); font-size: 13.5px; line-height: 20px; }
-.next-idea { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.next-idea { display: flex; flex-direction: column; gap: 8px; }
+/* The next idea leads the row of ideas, newest first: it is the newest one to come. */
+.chapter--new { width: 340px; padding: 14px 16px; border: 2px dashed var(--owner); background: #fff; }
+.next-idea__branch { margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 17px; }
+.story__none { flex: none; align-self: center; max-width: 320px; margin: 0; color: var(--text-2); font-size: 14px; }
+/* The home branch: where every build starts and every approved one goes. */
+.story__home { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; margin-top: -12px; padding: 10px 14px 10px 16px; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-chrome); font-size: 13.5px; line-height: 19px; }
+.story__home--needs { border: 1.5px solid var(--owner); background: var(--owner-bg); }
+.story__home--soft { background: var(--light); }
+.story__home--soft .story__home-words { color: var(--text-2); }
+.story__home-label { flex: none; color: var(--text-2); font-weight: 600; }
+.story__home-words { min-width: 0; color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.story__home--needs .story__home-words { color: var(--owner-text); }
+.story__home-folder { color: var(--text-2); }
+.story__home-grow { flex: 1; }
+.story__home-said { flex-basis: 100%; color: var(--teal-text); font-weight: 600; }
+.story__home-said--no { color: var(--owner-text); }
+/* What an idea is now, its branch, and what can be done with it. */
+.chapter__now { display: flex; flex-direction: column; gap: 6px; padding: 10px 16px 0; }
+.chapter__words { margin: 0; font: 600 13.5px/19px var(--font-ui); color: var(--ink); }
+.chapter__words--building { color: var(--agent); }
+.chapter__words--paused, .chapter__words--idea, .chapter__words--solid { color: var(--text-2); }
+.chapter__words--merged { color: var(--teal-text); }
+.chapter__branch { align-self: flex-start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 8px; border-radius: 6px; background: var(--light); border: 1px solid var(--light-2); color: var(--ink); font: 600 12px/18px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.chapter--merged .chapter__branch { background: var(--teal-light); border-color: var(--teal-light); color: var(--teal-text); }
+.chapter__busy { margin: 0; color: var(--agent); font-size: 12.5px; font-weight: 600; }
+.chapter__acts { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding-top: 2px; }
+.chapter__acts .watch__btn { height: 28px; padding: 0 10px; font-size: 12.5px; }
+.chapter__grow { flex: 1; }
+.watch__btn.chapter__delete { border-color: var(--owner-soft); color: var(--owner-text); }
+.watch__btn.chapter__delete:hover:not(:disabled) { background: var(--owner-bg); }
+.chapter__refused { margin: 0; color: var(--owner-text); font-size: 12.5px; font-weight: 600; }
 .next-idea__label { font: 600 14px/20px var(--font-ui); color: var(--ink); }
 .next-idea__note {
   width: 100%;
@@ -69,3 +100,12 @@
 .next-idea__note:focus { outline: none; box-shadow: 0 0 0 4px rgba(194, 65, 12, 0.14), var(--shadow-note); }
 .next-idea__foot { display: flex; align-items: center; gap: 12px; color: var(--text-2); font-size: 12.5px; line-height: 17px; }
 .app[data-mode='story'] .zoom, .app[data-mode='story'] .minimap, .app[data-mode='story'] .notices { display: none; }
+/* The ideas on one canvas, each with its state in words. */
+.chapter__ideas { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.chapter__ideas li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 10px; }
+.chapter__idea { font: 600 14px/20px var(--font-ui); color: var(--ink); }
+.chapter__ideas .watch__btn { margin-left: auto; height: 26px; padding: 0 10px; font-size: 12.5px; align-self: center; }
+.chapter--canvas .approve { padding-top: 2px; }
+/* A canvas card is as wide as two moments, and never wider than the page: cards wrap to the next row. */
+.chapter--canvas { width: 540px; max-width: 100%; }
+.chapter--canvas .chapter__now { min-width: 0; }

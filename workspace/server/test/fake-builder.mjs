@@ -4,6 +4,10 @@
  * ends the run with "paused", as a real builder does after its current step.
  *
  * Every builder the server creates is kept in `fakes`, newest last.
+ *
+ * It also shows, refreshes and discards, as a builder with a copy of its own does: each is
+ * scripted by the test. With the option `builder-extras=none` it has none of the three, as a
+ * builder that keeps no copy.
  */
 export const fakes = [];
 
@@ -19,9 +23,25 @@ export function createBuilder(ctx) {
     throwOnRun: undefined,
     /** When set, every run resolves at once with it. */
     auto: undefined,
+    /** Runs to play, the first for the next run: each is called with the job and the fake, and resolves with the run's result. */
+    plays: [],
     /** When false, pause() is heard and the run goes on until finish(). */
     pauseEnds: true,
     current: undefined,
+    /** Every show asked for, with the session the fake gave: `req`, `written`, `sizes`, `stopped`, `answer(url)`, `refuse(msg)`, `print(text)`, `exit(code)`. */
+    shows: [],
+    /** When true, every session says it runs with no box, as on a machine that has none. */
+    unboxed: false,
+    /** When set, show() calls it with the request and returns what it gives. */
+    showWith: undefined,
+    /** Every refresh asked for. */
+    refreshes: [],
+    /** What refresh() resolves with. A function is called with the request. */
+    refreshWith: { outcome: 'joined' },
+    /** Every discard asked for. */
+    discards: [],
+    /** When set, discard() calls it with the request first. */
+    discardWith: undefined,
     /** End the run that is going. */
     finish(result = { outcome: 'done' }) {
       const end = fake.current;
@@ -45,7 +65,52 @@ export function createBuilder(ctx) {
   };
   fakes.push(fake);
 
+  const extras = ctx.options['builder-extras'] === 'none' ? {} : {
+    async show(req) {
+      if (fake.showWith) return fake.showWith(req);
+      let answer, refuse;
+      const ready = req.plan.kind === 'app' ? new Promise((resolve, reject) => ((answer = resolve), (refuse = reject))) : undefined;
+      ready?.catch(() => {});
+      const s = {
+        req,
+        written: [],
+        sizes: [],
+        stopped: false,
+        exited: false,
+        answer: (url) => answer?.(url),
+        refuse: (msg) => refuse?.(new Error(msg)),
+        print: (text) => req.onOutput(text),
+        exit(code) {
+          if (s.exited) return;
+          s.exited = true;
+          req.onExit(code);
+        },
+      };
+      fake.shows.push(s);
+      return {
+        ...(ready ? { ready } : {}),
+        ...(fake.unboxed ? { boxed: false } : {}),
+        write: (data) => s.written.push(data),
+        resize: (cols, rows) => s.sizes.push([cols, rows]),
+        async stop() {
+          s.stopped = true;
+          s.exit(null);
+        },
+      };
+    },
+    async refresh(req) {
+      fake.refreshes.push(req);
+      return typeof fake.refreshWith === 'function' ? fake.refreshWith(req) : fake.refreshWith;
+    },
+    async discard(req) {
+      fake.discards.push(req);
+      if (fake.discardWith) await fake.discardWith(req);
+      return { ok: true };
+    },
+  };
+
   return {
+    ...extras,
     name: ctx.options['builder-name'] ?? 'fake-builder',
     run(job) {
       fake.calls.push('run');
@@ -53,9 +118,11 @@ export function createBuilder(ctx) {
       if (fake.throwOnRun) throw new Error(fake.throwOnRun);
       fake.active += 1;
       fake.maxActive = Math.max(fake.maxActive, fake.active);
+      const play = fake.plays.shift();
       return new Promise((resolve) => {
         fake.current = resolve;
-        if (fake.auto) fake.finish(fake.auto);
+        if (play) play(job, fake).then((result) => fake.finish(result));
+        else if (fake.auto) fake.finish(fake.auto);
       });
     },
     async pause() {

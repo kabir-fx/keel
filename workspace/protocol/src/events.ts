@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Actor, Box, EventId, Id } from './ids';
 import { Item, ItemPatch } from './items';
 import { Check, ModelOp, PartState } from './model';
+import { ShowPlan } from './pictures';
 
 /**
  * The board log is an append-only list of events. The state of the board is the log, reduced.
@@ -23,12 +24,29 @@ export const BoardOpen = z.strictObject({
   name: z.string().min(1).max(80),
 });
 
-/** A new idea starts. The owner's first note opens one. */
+/**
+ * A new canvas: a blank place for an idea, with a branch of its own once it is built. The
+ * owner starts one from the Story. Its title is the title of the first idea on it, unless
+ * one is given here.
+ */
+export const CanvasOpen = z.strictObject({
+  ...common,
+  type: z.literal('canvas.open'),
+  canvas: Id,
+  title: z.string().min(1).max(90).optional(),
+});
+
+/**
+ * A new idea starts. The owner's first note on a canvas opens one. `canvas` is the canvas it
+ * is on: every idea on one canvas is built on that canvas's branch. Left out, it is the
+ * board's first canvas, which is made for it when the board has none.
+ */
 export const ChapterOpen = z.strictObject({
   ...common,
   type: z.literal('chapter.open'),
   chapter: Id,
   title: z.string().min(1).max(90),
+  canvas: Id.optional(),
 });
 
 export const ChapterRename = z.strictObject({
@@ -145,6 +163,10 @@ export const BuildStart = z.strictObject({
    * A part is built only when exactly this command has passed.
    */
   check: z.string().min(1).max(300),
+  /** The setup command the blueprint showed, when it showed one. Agreed to with the same press. */
+  setup: z.string().min(1).max(300).optional(),
+  /** How the blueprint said the owner tries the result. The same press agrees to what it runs. */
+  show: ShowPlan.optional(),
 });
 
 export const BuildPause = z.strictObject({
@@ -157,6 +179,52 @@ export const BuildResume = z.strictObject({
   ...common,
   type: z.literal('build.resume'),
   chapter: Id,
+});
+
+/**
+ * The app the owner will try started in the build's copy and answered on its port once
+ * (record 0013). Only the board server's side says so. A chapter that is tried as an `app`
+ * is built only after this: until then it is building, with every part built.
+ */
+export const BuildProved = z.strictObject({
+  ...common,
+  type: z.literal('build.proved'),
+  chapter: Id,
+});
+
+/**
+ * The owner tried what was built on a canvas and approves it: the canvas's branch goes into
+ * the home branch, with every built idea on it. The board server does the merge, and says
+ * `canvas.merged` when the home branch has it.
+ */
+export const CanvasApprove = z.strictObject({
+  ...common,
+  type: z.literal('canvas.approve'),
+  canvas: Id,
+});
+
+/**
+ * The home branch has a canvas's work. Only the board server says so, after it moved the
+ * branch itself or found the work already there. `commit` is the commit the home branch was
+ * moved to, and `into` is the home branch's name. Every built idea on the canvas is merged.
+ */
+export const CanvasMerged = z.strictObject({
+  ...common,
+  type: z.literal('canvas.merged'),
+  canvas: Id,
+  commit: z.string().min(1).max(80),
+  into: z.string().min(1).max(200),
+});
+
+/**
+ * The owner deletes a canvas. Every idea on it leaves the board with its items, its build
+ * stops, and the board server takes its branch away. The log keeps every line: nothing is
+ * deleted from it.
+ */
+export const CanvasRemove = z.strictObject({
+  ...common,
+  type: z.literal('canvas.remove'),
+  canvas: Id,
 });
 
 /** One entry in the build feed. */
@@ -206,6 +274,7 @@ export const MomentAdd = z.strictObject({
 
 export const EventDraft = z.discriminatedUnion('type', [
   BoardOpen,
+  CanvasOpen,
   ChapterOpen,
   ChapterRename,
   ItemAdd,
@@ -220,6 +289,10 @@ export const EventDraft = z.discriminatedUnion('type', [
   BuildStart,
   BuildPause,
   BuildResume,
+  BuildProved,
+  CanvasApprove,
+  CanvasMerged,
+  CanvasRemove,
   FeedAdd,
   ChoicePick,
   Ask,

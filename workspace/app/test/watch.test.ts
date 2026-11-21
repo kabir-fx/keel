@@ -130,9 +130,28 @@ describe('what the build is doing, in plain words', () => {
     const p = b.must('system', { type: 'feed.add', chapter: 'c1', kind: 'problem', text: 'The builder failed.' });
     const stopped = buildStatus(b.state, 'c1', { ...said, state: 'stopped' })!;
     expect(stopped).toMatchObject({ state: 'stopped', problem: p.id });
-    expect(stopped.words).toBe('Stopped before it finished. Pause and resume to try again.');
+    // The panel offers one press that tries again: the words do not send the owner to Pause and Resume.
+    expect(stopped.words).toBe('Stopped before it finished.');
     // The server speaks of another chapter's build: this one is read from the board.
     expect(buildStatus(b.state, 'c1', { ...said, chapter: 'other', state: 'stopped' })!.state).toBe('running');
+  });
+
+  it('an app with every part built: the builder starts it once, and when it did not answer, says so', () => {
+    const b = new Board();
+    b.must('system', { type: 'board.open', name: 'demo' });
+    b.must('owner', { type: 'chapter.open', chapter: 'c1', title: 'One engine' });
+    b.must('agent', { type: 'model.patch', chapter: 'c1', ops: [{ op: 'lane.set', lane: { id: 'api', name: 'API' } }, { op: 'part.set', part: { id: 'door', name: 'The door', lane: 'api' } }] });
+    b.must('owner', { type: 'solidify', chapter: 'c1', picks: [], parts: ['door'] });
+    b.must('owner', { type: 'build.start', chapter: 'c1', track: ['door'], check: 'make check', show: { kind: 'app', run: 'npm start' } });
+    b.must('system', { type: 'part.state', part: 'door', state: 'building' });
+    b.must('system', { type: 'part.state', part: 'door', state: 'built', commit: 'abc1234', check: { cmd: 'make check', passed: true } });
+    const said = { chapter: 'c1', title: 'One engine', built: 1, total: 1 };
+    expect(buildStatus(b.state, 'c1', { ...said, state: 'running' })!.words).toBe('Every part is built. The builder is starting the app once, as you will try it, to see that it answers.');
+    expect(buildStatus(b.state, 'c1')!.words).toBe('Every part is built. The builder is starting the app once, as you will try it, to see that it answers.');
+    const p = b.must('system', { type: 'feed.add', chapter: 'c1', kind: 'problem', text: 'The app does not start.' });
+    expect(buildStatus(b.state, 'c1', { ...said, state: 'stopped' })).toEqual({ state: 'stopped', words: 'Stopped. Every part is built, and the app did not answer when the builder started it.', problem: p.id });
+    b.must('system', { type: 'build.proved', chapter: 'c1' });
+    expect(buildStatus(b.state, 'c1')!.state).toBe('built');
   });
 
   it('a built chapter says so; a chapter that is not building says nothing', async () => {

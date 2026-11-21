@@ -8,6 +8,8 @@
 //   $FAKE_NO_COMMIT=1 no commit is made, so board_check refuses.
 //   $FAKE_FILES={...} the first part also commits these files, by path, with their text.
 //   $FAKE_LINKS={...} and these symbolic links, by path, with their target.
+//   $FAKE_START_FIX={...} a turn that says the app does not start commits these files.
+//   $FAKE_RESOLVE={...}   a turn that asks to join the home branch writes these files, adds and commits them.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -86,14 +88,23 @@ async function turn(line) {
     out({ type: 'system', subtype: 'init', session_id: 'fake', mcp_servers: [{ name: 'board', status: 'connected' }] });
   }
   const part = /\(`([a-z0-9-]+)`\)/.exec(text)?.[1] ?? /Part `([a-z0-9-]+)`/.exec(text)?.[1];
-  if (part) {
+  const fix = text.startsWith('THE APP DOES NOT START') ? process.env.FAKE_START_FIX : text.startsWith('JOIN ') ? process.env.FAKE_RESOLVE : undefined;
+  if (fix) {
+    const files = JSON.parse(fix);
+    for (const [f, body] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, body);
+    }
+    git('add', '--', ...Object.keys(files));
+    if (text.startsWith('JOIN ')) git('commit', '--quiet', '--no-edit');
+    else git('commit', '--quiet', '-m', 'the app starts');
+  } else if (part) {
     if (!/building already/.test(text) && !/^Part `/.test(text)) await tool('board_part', { part, state: 'building' });
     if (!process.env.FAKE_NO_COMMIT) {
       fs.mkdirSync('parts', { recursive: true });
       const bad = process.env.FAKE_FAIL_PART === part;
       fs.writeFileSync(path.join('parts', `${part}.txt`), bad ? 'FAIL\n' : `the ${part} part\n`);
-      await tool('board_try', {});
-      git('add', 'parts');
+      let extra = [];
       if (!extrasDone) {
         extrasDone = true;
         const files = JSON.parse(process.env.FAKE_FILES ?? '{}');
@@ -106,9 +117,11 @@ async function turn(line) {
           fs.mkdirSync(path.dirname(f), { recursive: true });
           fs.symlinkSync(target, f);
         }
-        const extra = [...Object.keys(files), ...Object.keys(links)];
-        if (extra.length) git('add', '-f', '--', ...extra);
+        extra = [...Object.keys(files), ...Object.keys(links)];
       }
+      await tool('board_try', {});
+      git('add', 'parts');
+      if (extra.length) git('add', '-f', '--', ...extra);
       git('commit', '--quiet', '-m', `${part}: the part`);
     }
     const check = await tool('board_check', { part });

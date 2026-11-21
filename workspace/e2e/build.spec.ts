@@ -70,11 +70,12 @@ test('solidify, the blueprint, "Build this": the parts fill in one by one, the c
   await settle(page);
   await page.screenshot({ path: `${SHOTS}/live-build-3-built.png` });
 
-  // The Story shows the chapter built, and the whole pipeline filled in.
+  // The Story shows the canvas with its idea built, and the whole pipeline filled in.
   await page.getByRole('button', { name: 'Story' }).click();
-  const chapter = page.getByTestId('story').locator('article.chapter').first();
+  const chapter = page.getByTestId('story').locator('article[data-canvas]');
+  await expect(chapter).toHaveCount(1);
   await expect(chapter).toHaveAttribute('data-state', 'built');
-  await expect(chapter.getByTestId('chapter-progress')).toContainText('4 of 4 parts built');
+  await expect(chapter.getByTestId('idea-state')).toHaveText('built: try it');
   await expect(page.getByTestId('progress-chapters')).toContainText('1 of 1 idea built');
   await expect(page.getByTestId('progress-parts')).toContainText('4 of 4 parts built');
   await page.screenshot({ path: `${SHOTS}/live-build-4-story.png` });

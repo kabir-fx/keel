@@ -1,0 +1,114 @@
+/* ------------------------------------------------------------------ approve */
+
+.approve { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.approve p { margin: 0; }
+.approve__what { color: var(--text-2); font-size: 12.5px; line-height: 17px; }
+.approve__busy { align-self: stretch; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--agent-bg); color: var(--agent); font-weight: 600; }
+.approve__busy::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 999px; background: var(--agent); animation: approve-pulse 1.2s ease-in-out infinite; }
+@keyframes approve-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .approve__busy::before { animation: none; }
+}
+.approve__again { align-self: stretch; padding: 9px 11px; border: 1.5px dashed var(--owner); border-radius: 8px; background: var(--owner-bg); color: var(--owner-text); }
+.approve__merged { align-self: stretch; padding: 9px 11px; border-radius: 8px; background: var(--teal-light); color: var(--teal-text); }
+.approve__merged code { font: 600 12.5px/17px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.approve__push { align-self: stretch; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 4px; }
+.approve__push p { color: var(--text-2); font-size: 12.5px; line-height: 17px; }
+/* Everything here is merged: the next note joins this branch, and a new canvas is one press away. */
+.approve__next { align-self: stretch; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+.approve__next p { color: var(--text-2); font-size: 12.5px; line-height: 17px; }
+.approve__said { color: var(--teal-text); font-weight: 600; }
+.approve__said--no { color: var(--owner-text); }
+/* A refused push: the server's sentence, and what git printed, folded. */
+.said__more { margin-top: 4px; color: var(--text-2); font-weight: 400; }
+.said__more summary { cursor: pointer; font-size: 12.5px; }
+.said__more summary:focus-visible { outline: 2px solid var(--agent); outline-offset: 2px; }
+.said__more pre { margin: 6px 0 0; max-height: 160px; overflow: auto; padding: 8px 10px; border-radius: 8px; background: var(--light); color: var(--ink); font: 12px/17px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* The home branch needs the owner: said once on the board, quietly. */
+.notice--home { display: flex; align-items: center; gap: 12px; color: var(--ink); }
+.notice--home b { font-weight: 600; }
+.notice__btn--quiet { border-color: transparent; color: var(--text-2); }
+.watch__again { align-self: flex-start; }
+
+/* ------------------------------------------------------------------ the try room */
+
+.try {
+  inset: 0;
+  z-index: var(--layer-room);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--ground);
+  font-size: 13.5px;
+  line-height: 19px;
+}
+.try__head { flex: none; display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 0 10px 0 14px; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-chrome); }
+.try__eyebrow { flex: none; padding: 3px 10px; border-radius: 999px; background: var(--fill); color: #fff; font: 600 12px/16px var(--font-ui); }
+.try__title { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 17px/24px var(--font-head); color: var(--ink); }
+.try__title:focus { outline: none; }
+.try__title:focus-visible { outline: 2px solid var(--agent); outline-offset: 2px; border-radius: 4px; }
+.try__branch { flex: none; padding: 1px 8px; border-radius: 999px; background: var(--teal-light); color: var(--teal-text); font: 600 12px/18px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.try__grow { flex: 1; }
+.try__body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; }
+.try__main { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-chrome); overflow: hidden; }
+.try__bar { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 9px 10px 9px 14px; border-bottom: 1px solid var(--line); }
+.try__kind { flex: none; font-weight: 600; }
+.try__run { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 7px; border-radius: 6px; background: var(--light); border: 1px solid var(--line); font: 600 12.5px/18px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.try__words { min-width: 0; color: var(--text-2); }
+.try[data-state='failed'] .try__words { color: var(--owner-text); font-weight: 600; }
+.try__tab { display: inline-flex; align-items: center; text-decoration: none; }
+.try__unboxed { flex: none; margin: 0; padding: 7px 14px; border-bottom: 1px solid var(--line); background: var(--light); color: var(--text-2); font-size: 12.5px; }
+.try__refused { flex: none; margin: 0; padding: 8px 14px; background: var(--owner-bg); color: var(--owner-text); font-weight: 600; border-bottom: 1px solid var(--owner-soft); }
+.try__stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--light); }
+.try__frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #fff; }
+.try__terminal { flex: 1; min-height: 0; padding: 10px 12px; background: #0f1b2d; overflow: hidden; }
+.try__ended { flex: none; margin: 0; padding: 8px 14px; background: var(--fill); color: #fff; font-weight: 600; }
+.try__frame-note { flex: none; margin: 0; padding: 6px 14px; border-top: 1px solid var(--line); color: var(--text-2); font-size: 12.5px; }
+.try__empty { margin: auto; width: min(560px, calc(100% - 32px)); display: flex; flex-direction: column; gap: 10px; padding: 24px 26px; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
+.try__empty h3 { margin: 0; font: 600 17px/24px var(--font-head); color: var(--ink); }
+.try__empty p { margin: 0; }
+.try__empty code { padding: 1px 6px; border-radius: 6px; background: var(--light); font: 600 12.5px/18px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.try__empty--off { border: 2px dashed var(--ink); }
+.try__empty--wait { border: 2px solid var(--agent); background: var(--agent-bg); }
+.try__empty--wait h3 { color: var(--agent); }
+.try__empty--failed { border: 2px solid var(--owner); }
+.try__empty--failed h3 { color: var(--owner-text); }
+.try__empty--none { border: 2px dashed var(--grey-2); }
+.try__last-head { color: var(--text-2); font-size: 12.5px; }
+.try__last { margin: 0; max-height: 240px; overflow: auto; padding: 10px 12px; border-radius: 8px; background: var(--ink); color: #e4e9f2; font: 12px/17px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.try__quiet { color: var(--text-2); }
+.try__side { min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.try__side > * { flex: none; padding: 14px 16px; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-chrome); }
+.try__side h3 { margin: 0 0 8px; display: flex; align-items: baseline; gap: 8px; font: 600 14px/20px var(--font-ui); color: var(--ink); }
+.try__count { margin-left: auto; color: var(--text-2); font-weight: 400; font-size: 12.5px; }
+.try__proof ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.try__proof label { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; }
+.try__proof input { flex: none; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--fill); }
+.try__proof input:checked + span { color: var(--text-2); text-decoration: line-through; text-decoration-color: var(--grey); }
+.try__proof p { margin: 0; }
+.try__printed summary { font-weight: 600; cursor: pointer; }
+.try__printed summary:focus-visible { outline: 2px solid var(--agent); outline-offset: 2px; }
+.try__printed pre { margin: 8px 0 0; max-height: 220px; overflow: auto; padding: 10px 12px; border-radius: 8px; background: var(--ink); color: #e4e9f2; font: 12px/17px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.try__caveat { border-color: var(--owner) !important; background: var(--owner-bg) !important; }
+.try__caveat h3 { color: var(--owner-text); }
+.try__caveat p { margin: 0; color: var(--ink); }
+.try__approve { margin-top: auto; }
+.try__approve .approve__press { width: 100%; height: 36px; }
+
+/* ------------------------------------------------------------------ are you sure */
+
+.confirm-veil { position: fixed; inset: 0; z-index: var(--layer-confirm); display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(15, 27, 45, 0.32); }
+.confirm { width: min(460px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 22px 24px; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-float); font-size: 14px; line-height: 20px; }
+.confirm h2 { margin: 0; font: 600 19px/26px var(--font-head); color: var(--ink); overflow-wrap: anywhere; }
+.confirm__what { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; color: var(--ink); }
+.confirm__what li:first-child:only-child, .confirm__what li { overflow-wrap: anywhere; }
+.confirm__quiet { margin: 0; color: var(--text-2); font-size: 13px; }
+.confirm__refused { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--owner-bg); color: var(--owner-text); font-weight: 600; }
+.confirm__acts { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+.confirm__delete { background: var(--owner); border-color: var(--owner); color: #fff; }
+.watch__btn.confirm__delete:hover:not(:disabled) { background: var(--owner-text); border-color: var(--owner-text); }

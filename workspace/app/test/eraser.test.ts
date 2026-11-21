@@ -267,7 +267,7 @@ describe('what the eraser reaches on each kind of mark', () => {
     expect(reached([[150, 50 - R - STEP]], things, 1)).toEqual([]);
   });
 
-  it('never a picture, a note, a file, a remark or a lasso: those go with Delete', () => {
+  it('never a note, a file, a remark or a lasso: those go with Delete. The agent’s picture is reached as a picture', () => {
     const b = openBoard();
     b.must('owner', note('n1', [0, 0, 200, 100]));
     b.must('agent', text('a1', { answers: ['n1'] }));
@@ -277,7 +277,37 @@ describe('what the eraser reaches on each kind of mark', () => {
     b.must('owner', { type: 'item.add', chapter: CH, item: { id: 'l1', kind: 'lasso', box: [0, 0, 200, 100], path: [0, 0, 200, 0, 200, 100, 0, 100], targets: [{ item: 'n1' }] } });
     const shown = new Map<string, Box>(['n1', 'a1', 'f1', 'v1', 'l1'].map((id) => [id, [0, 0, 200, 100]]));
     const things = erasables({ state: b.state, boxes: new Map(), subs: new Map() }, shown, 1);
-    expect(things).toEqual([]);
+    expect(things.map((t) => [t.id, t.layer])).toEqual([['a1', 'picture']]);
+  });
+
+  it('a picture is reached anywhere on its frame, as drawn: a click inside, a sweep across it; not beside it', () => {
+    const b = openBoard();
+    b.must('owner', note('n1', [0, 0, 200, 100]));
+    b.must('agent', text('a1', { answers: ['n1'] }));
+    b.must('owner', placeAt('a1', [100, 100, 200, 100]));
+    const where = { state: b.state, boxes: new Map(), subs: new Map() };
+    // The card is drawn taller than its box: its frame is what the eraser meets.
+    const things = erasables(where, new Map([['a1', [100, 100, 200, 100] as Box]]), 1, new Map([['a1', [100, 100, 200, 160] as Box]]));
+    expect(reached([[200, 150]], things, 1)).toEqual(['a1']);
+    expect(reached([[200, 240]], things, 1)).toEqual(['a1']);
+    // A fast sweep from one side of it to the other, no sample on it.
+    expect(reached([[50, 150], [400, 150]], things, 1)).toEqual(['a1']);
+    expect(reached([[200, 300]], things, 1)).toEqual([]);
+    expect(reached([[100 - reachAt(1) - STEP, 150]], things, 1)).toEqual([]);
+  });
+
+  it('a box its words made taller is reached on its lower line, where it is drawn; ink keeps its own box', () => {
+    const box: Item = { id: 'bx', kind: 'box', box: [0, 0, 200, 100] };
+    const ink: InkItem = { id: 'ink', kind: 'ink', box: [0, 300, 100, 0], strokes: [{ pts: [0, 0, 100, 0] }], targets: [], hint: 'none' };
+    const { where } = boardWith([box, ink]);
+    const shown = new Map<string, Box>([['bx', box.box], ['ink', ink.box]]);
+    // An outline is measured for every thing, ink too, padded: only a framed thing takes it.
+    const framed = new Map<string, Box>([['bx', [0, 0, 200, 160]], ['ink', [-10, 290, 120, 20]]]);
+    const things = erasables(where, shown, 1, framed);
+    expect(reached([[100, 159]], things, 1)).toEqual(['bx']);
+    expect(reached([[100, 100]], things, 1)).toEqual([]);
+    expect(reached([[50, 300]], things, 1)).toEqual(['ink']);
+    expect(reached([[50, 290]], things, 1)).toEqual([]);
   });
 
   it('nothing that is not drawn, and nothing taken off the board', () => {

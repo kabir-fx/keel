@@ -13,20 +13,27 @@ import type {
   Builder,
   BuilderContext,
   BuildShow,
+  CanvasWork,
+  Chapter,
   DigestReply,
+  HomeInfo,
   Id,
   LinkContext,
   Refusal,
+  RefreshResult,
   ServerFile,
   ServerMessage,
+  ShowInfo,
 } from '@keel/protocol';
 import type { SessionReply } from '@keel/protocol';
-import { ASSETS_DIR, ClientMessage, ONE_TIME_CODE_MS, PresenceUpdate, ROUTES, digest, isForeign, openCount, openThings, renderDigest } from '@keel/protocol';
+import { ASSETS_DIR, ClientMessage, LOG_FILE, ONE_TIME_CODE_MS, PresenceUpdate, ROUTES, ShowAsk, canvasBuilds, chaptersOn, digest, isForeign, openCount, openThings, renderDigest } from '@keel/protocol';
 import { AssetPlaceError, assetFile, assetsUsage, contentTypeOf, openAsset, saveAsset } from './assets';
 import { Board } from './board';
 import type { BuildInfo } from './build';
 import { BuildRunner } from './build';
 import { errCode } from './files';
+import type { HomeLook } from './home';
+import { aheadBehind, branchNameOk, commitOf, fastForward, holds, lookHome, mergedCheck, nameFiles, pushHome, syncHome } from './home';
 import { MAX_ITEMS, idsParam, itemViews } from './items';
 import { loadBuilder, loadLink } from './link';
 import { PresenceHub } from './presence';
@@ -38,6 +45,7 @@ import { checkShow, startShowServer } from './show';
 import { plain } from './text';
 import type { Clock } from './wake';
 import { WakeScheduler } from './wake';
+import { ShowRunner, planOf } from './tryout';
 
 /**
  * The board server: owns the log, refuses what breaks a rule, feeds the browser and the agent,
@@ -88,6 +96,8 @@ export function shellPolicy(port: number): string {
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
     `connect-src 'self' ws://127.0.0.1:${port} ws://localhost:${port}`,
+    // What a built idea shows runs on a port of its own on this machine: an app, or a page.
+    'frame-src http://127.0.0.1:*',
     "object-src 'none'",
     "base-uri 'none'",
     "frame-ancestors 'none'",
@@ -157,8 +167,12 @@ export interface RunningServer {
   readonly builderName: string;
   /** The build's life on this board. */
   readonly builds: BuildRunner;
-  /** What the owner can look at now: for each built chapter with something to show, the address of its page. */
-  shows(): Record<string, string>;
+  /** What this machine's repository holds for each canvas, as the owner's page hears it. */
+  works(): Record<string, CanvasWork>;
+  /** What the owner can try of each built chapter, as the owner's page hears it. */
+  shows(): Record<string, ShowInfo>;
+  /** The home branch, as last looked at. Undefined where the board's folder is no repository. */
+  home(): HomeInfo | undefined;
   /** `http://127.0.0.1:<port>` of the listener for shows, once it has started. Never one the board allows. */
   showOrigin(): string | undefined;
   close(): Promise<void>;
@@ -186,9 +200,21 @@ const ACTORS = ['owner', 'agent', 'system'] as const satisfies readonly Actor[];
 const NO_AGENT = 'no agent is linked';
 
 /** What the feed says once a finished build's page is open in the owner's browser. */
-export const SHOW_OPENED = 'It is open in your browser now. "See it" on the build panel opens it again.';
+export const SHOW_OPENED = 'It is open in your browser now. "Try it" on the build panel opens it again.';
 /** What the feed says when it was not opened: the owner started the board with --no-browser. */
-export const SHOW_WAITS = 'You can look at it: press "See it" on the build panel.';
+export const SHOW_WAITS = 'You can look at it: press "Try it" on the build panel.';
+
+/** Why an approval is refused while the builder's run on the canvas has not ended. */
+export const APPROVE_WHILE_BUILDING = 'The builder has not finished on this canvas yet. Approve it when the build says done.';
+/** Why Try it is refused while the builder's run on the canvas has not ended. */
+export const TRY_WHILE_BUILDING = 'The builder has not finished on this canvas yet. Try it when the build says done.';
+/** Why a delete is refused while the canvas's branch is being joined to the home branch, or merged into it. */
+export const deleteWhileMerging = (home: string): string => `The board is merging this canvas into ${home} now. Delete it when that is done.`;
+
+/** How long the look at the home branch may hold the board up when it opens. Past it, the board opens and the look goes on. */
+export const OPEN_SYNC_MS = 3000;
+/** How long a delete waits for the builder to pause the idea's build. */
+const DELETE_WAIT_MS = 15_000;
 
 /** At most this many left-out lines are listed when a board opens. The rest are counted. */
 const PROBLEMS_SHOWN = 5;
@@ -205,13 +231,125 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const boardDir = Board.prepare(repoDir);
   const own = PrivateBoard.open(boardDir, opts.stateRoot);
   const unlock = takeLock(own.place, () => own.savedPort);
+
+  /* ------------------------------------------------------- home branch */
+
+  /** Set once the log is loaded: from then on, a pull must not rewrite it under the board. */
+  let boardOpen = false;
+  let home: HomeInfo | undefined;
+  let homeLook: HomeLook | undefined;
+  /** For each canvas with a branch: how it stands with the home branch, and whether the branch is there. */
+  const counts = new Map<Id, { exists: boolean; ahead?: number; behind?: number }>();
+  /** What the server does with a canvas's branch right now. */
+  const busy = new Map<Id, NonNullable<CanvasWork['busy']>>();
+  /** The canvas the builder's run works on, from its start to its end. Set once the build driver is made. */
+  let inWork: () => Id | undefined = () => undefined;
+  /** What is done with a canvas's branch now: by the server, else by the builder's run. */
+  const busyOf = (canvas: Id): CanvasWork['busy'] => busy.get(canvas) ?? (inWork() === canvas ? 'building' : undefined);
+  let gitChain: Promise<unknown> = Promise.resolve();
+  /** Ends a call to the remote that still runs when the board closes. */
+  const stopGit = new AbortController();
+  /** One git job at a time for this board. */
+  const gitJob = <T>(fn: () => Promise<T>): Promise<T> => {
+    const p = gitChain.then(fn, fn);
+    gitChain = p.catch(() => {});
+    return p;
+  };
+  let afterHome: () => void = () => {};
+  /**
+   * Look at the home branch again: with `fetch`, at its remote too, and bring it level when
+   * that is a fast-forward. Then count each canvas's branch against it.
+   */
+  const syncNow = (fetch: boolean): Promise<HomeInfo | undefined> =>
+    gitJob(async () => {
+      const before = home;
+      let r: Awaited<ReturnType<typeof syncHome>>;
+      try {
+        r = await syncHome(repoDir, { fetch, protectLog: () => boardOpen, logPath: path.join(boardDir, LOG_FILE), now, signal: stopGit.signal });
+      } catch (e) {
+        log(`could not look at the home branch: ${e instanceof Error ? e.message : String(e)}`);
+        return home;
+      }
+      let info = r?.info;
+      // Without a look at the remote, what was last seen of it still holds.
+      if (!fetch && info && before && before.branch === info.branch) {
+        if (before.sync === 'unreachable' && info.sync !== 'local') info = { ...info, sync: 'unreachable', ...(before.note ? { note: before.note } : {}) };
+        if (before.checkedAt && !info.checkedAt) info = { ...info, checkedAt: before.checkedAt };
+      }
+      home = info;
+      homeLook = r?.look;
+      if (boardOpen) await countWorks();
+      afterHome();
+      return home;
+    });
+  /** Count each canvas's branch against the home branch. Inside a git job. */
+  const countWorks = async (): Promise<void> => {
+    const look = homeLook;
+    counts.clear();
+    if (!look) return;
+    for (const id of board.state.canvasOrder) {
+      const branch = own.workOf(id);
+      if (!branch) continue;
+      const tip = await commitOf(look.top, `refs/heads/${branch}`);
+      if (!tip) {
+        counts.set(id, { exists: false });
+        continue;
+      }
+      if (!look.commit) {
+        counts.set(id, { exists: true });
+        continue;
+      }
+      const n = await aheadBehind(look.top, `refs/heads/${look.branch}`, tip);
+      counts.set(id, n ? { exists: true, behind: n[0], ahead: n[1] } : { exists: true });
+    }
+  };
+  let countsDue = false;
+  /** Count the branches again soon, with no look at the remote. One job for a burst of calls. */
+  const refreshWorks = (): void => {
+    if (countsDue) return;
+    countsDue = true;
+    setImmediate(() => {
+      countsDue = false;
+      void syncNow(false);
+    });
+  };
+
+  // The home branch is brought level before the log is loaded, so a pull that brings a newer
+  // log is taken whole. It holds the board up a few seconds at most, then goes on behind it.
+  {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      syncNow(true),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, OPEN_SYNC_MS);
+        timer.unref();
+      }),
+    ]);
+    if (timer !== undefined) clearTimeout(timer);
+  }
+
   let board: Board;
   try {
-    board = Board.open(repoDir, { now, checkCommits: opts.checkCommits ?? true, sealed: own.logSeal, log });
+    board = Board.open(repoDir, {
+      now,
+      checkCommits: opts.checkCommits ?? true,
+      checkMerged: mergedCheck(repoDir, () => homeLook?.branch),
+      // Nothing is approved on a canvas the builder still works on: it may still commit there.
+      // Nothing is deleted while its branch is joined or merged: the home branch would take
+      // the work of a canvas that is gone.
+      machine: (ev) => {
+        if (ev.type === 'canvas.approve' && busyOf(ev.canvas) === 'building') return { ok: false, rule: 'R8', reason: APPROVE_WHILE_BUILDING };
+        if (ev.type === 'canvas.remove' && (busy.get(ev.canvas) === 'merging' || busy.get(ev.canvas) === 'joining')) return { ok: false, rule: 'R8', reason: deleteWhileMerging(homeLook?.branch ?? 'the home branch') };
+        return { ok: true };
+      },
+      sealed: own.logSeal,
+      log,
+    });
   } catch (e) {
     unlock();
     throw e;
   }
+  boardOpen = true;
   try {
     summarise(board, log);
     ensureGitignore(board.dir);
@@ -335,20 +473,81 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     return c.builtAt === undefined || !(Date.parse(c.builtAt) > Date.parse(kept.at));
   };
 
-  /** The address of each current show. For the owner only: it holds the key of the listener. */
-  const showsNow = (): Record<string, string> => {
-    const out: Record<string, string> = {};
-    if (!showServer) return out;
-    for (const kept of own.shows) {
-      const url = current(kept) ? showServer.url(kept.chapter) : undefined;
-      if (url) out[kept.chapter] = url;
+  /** The address of a chapter's page that stands alone, while it is current. For the owner only: it holds the key of the listener. */
+  const pageOf = (chapter: Id): string | undefined => {
+    if (!showServer) return undefined;
+    const kept = own.shows.find((x) => x.chapter === chapter);
+    return kept && current(kept) ? showServer.url(chapter) : undefined;
+  };
+
+  /** What runs to show the built chapters: an app, a terminal. */
+  const shows = new ShowRunner({ builder: () => builder, changed: () => pushWorks(), log });
+
+  const setBusy = (canvas: Id, doing: CanvasWork['busy'] | undefined): void => {
+    if (doing) busy.set(canvas, doing);
+    else busy.delete(canvas);
+    pushWorks();
+    // A build held while the canvas was busy may start now.
+    if (!doing) builds?.poke();
+  };
+
+  /** A line in a chapter's feed, as the system. */
+  const say = (chapter: Id, text: string, kind: 'update' | 'problem' = 'update'): void => {
+    if (!board.state.chapters[chapter]) return;
+    const clipped = text.length > 400 ? `${text.slice(0, 399)}…` : text;
+    try {
+      const r = board.post([{ type: 'feed.add', chapter, kind, text: clipped }], 'system');
+      if (!r.ok) log(`the feed refused a line (${r.rule}: ${r.reason})`);
+    } catch (e) {
+      log(`could not write the feed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  /** What the owner can try of a chapter: only a built one, not merged yet, on a canvas the server is not busy with. */
+  const showOf = (c: Chapter): ShowInfo | undefined => {
+    if (c.state !== 'built' || c.merged) return undefined;
+    const page = pageOf(c.id);
+    const plan = planOf(c, page !== undefined);
+    const asPage: ShowInfo | undefined = page !== undefined ? { kind: 'page', url: page } : undefined;
+    if (!plan || plan.kind === 'page') return asPage;
+    // A builder that keeps no copy to run in shows a page only, when there is one.
+    return shows.canRun ? shows.info(c.id, plan) : asPage;
+  };
+
+  /** What this machine's repository holds for each canvas: its branch, how it stands, what the server does with it. */
+  const worksNow = (): Record<string, CanvasWork> => {
+    const out: Record<string, CanvasWork> = {};
+    for (const id of board.state.canvasOrder) {
+      const w: CanvasWork = {};
+      const branch = own.workOf(id);
+      const n = counts.get(id);
+      if (branch && n?.exists !== false) {
+        w.branch = branch;
+        if (n?.ahead !== undefined) w.ahead = n.ahead;
+        if (n?.behind !== undefined) w.behind = n.behind;
+      }
+      const doing = busyOf(id);
+      if (doing) w.busy = doing;
+      if (Object.keys(w).length > 0) out[id] = w;
     }
     return out;
   };
-  const ownerShows = (role: Actor): { shows?: Record<string, string> } => {
+  /** What the owner can try, for each built chapter that has something. */
+  const showsNow = (): Record<string, ShowInfo> => {
+    const out: Record<string, ShowInfo> = {};
+    const s = board.state;
+    for (const id of s.chapterOrder) {
+      const c = s.chapters[id];
+      const show = c ? showOf(c) : undefined;
+      if (show) out[id] = show;
+    }
+    return out;
+  };
+  const ownerWorks = (role: Actor): { works?: Record<string, CanvasWork>; shows?: Record<string, ShowInfo>; home?: HomeInfo } => {
     if (role !== 'owner') return {};
+    const works = worksNow();
     const shows = showsNow();
-    return Object.keys(shows).length > 0 ? { shows } : {};
+    return { ...(Object.keys(works).length > 0 ? { works } : {}), ...(Object.keys(shows).length > 0 ? { shows } : {}), ...(home ? { home } : {}) };
   };
 
   const info = (role: Actor): BoardInfoReply => {
@@ -363,7 +562,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       builder: builderName,
       ...(own.foreign ? { foreign: [...own.foreign] } : {}),
       ...(build ? { build } : {}),
-      ...ownerShows(role),
+      ...ownerWorks(role),
     };
   };
 
@@ -451,6 +650,54 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       // What was held back is the board's own now: the agent may answer it.
       if (kept) scheduler?.start();
       return json(res, 200, { kept });
+    }
+
+    if (route === ROUTES.show) {
+      if (method !== 'POST') return notAllowed(res, 'POST');
+      if (actor !== 'owner') return json(res, 403, { error: 'Only the owner tries a build.' });
+      const parsed = ShowAsk.safeParse(await readJson(req, LIMITS.presence));
+      if (!parsed.success) return json(res, 400, { error: parsed.error.issues.map((i) => `${i.path.join('.') || 'ask'}: ${i.message}`).join('; ') });
+      const ask = parsed.data;
+      const c = board.state.chapters[ask.chapter];
+      if (!c) return json(res, 409, { reason: `There is no idea "${ask.chapter}" on the board.` });
+      if (ask.action === 'stop') {
+        await shows.stop(c.id);
+        pushWorks();
+        return json(res, 200, { show: showOf(c) ?? null });
+      }
+      if (c.state !== 'built') return json(res, 409, { reason: `"${c.title}" is not built yet, so there is nothing to try.` });
+      if (c.merged) return json(res, 409, { reason: `"${c.title}" is merged into ${c.merged.into} already.` });
+      const doing = busyOf(c.canvas);
+      if (doing === 'building') return json(res, 409, { reason: TRY_WHILE_BUILDING });
+      if (doing) return json(res, 409, { reason: `The board is busy with the branch of "${c.title}" now. Try it once that is done.` });
+      const plan = planOf(c, pageOf(c.id) !== undefined);
+      if (!plan || plan.kind === 'page') return json(res, 409, { reason: `"${c.title}" runs no command to be tried${plan ? ': it is a page, opened from its address' : ''}.` });
+      // The press is the owner's agreement to run exactly what the page showed.
+      if (ask.run !== plan.run) return json(res, 409, { reason: `That is not the command "${c.title}" is tried with. Nothing was run.` });
+      const started = await shows.start(c.id, c.canvas, plan, { ...(ask.cols !== undefined ? { cols: ask.cols } : {}), ...(ask.rows !== undefined ? { rows: ask.rows } : {}) });
+      if (!started.ok) return json(res, 409, { reason: started.reason });
+      pushWorks();
+      return json(res, 200, { show: showOf(c) ?? null });
+    }
+
+    if (route === ROUTES.push) {
+      if (method !== 'POST') return notAllowed(res, 'POST');
+      if (actor !== 'owner') return json(res, 403, { error: 'Only the owner pushes.' });
+      const result = await gitJob(async () => {
+        const look = await lookHome(repoDir);
+        return look ? pushHome(look, stopGit.signal) : { ok: false, note: "This board's folder is not a git repository, so there is nothing to push." };
+      });
+      if (!result.ok) log(result.note);
+      // A refused push is news of the remote: look at it again, so home says what is true.
+      const info = await syncNow(!result.ok);
+      return json(res, 200, { ...result, home: info ?? null });
+    }
+
+    if (route === ROUTES.sync) {
+      if (method !== 'POST') return notAllowed(res, 'POST');
+      if (actor !== 'owner') return json(res, 403, { error: 'Only the owner asks for the home branch to be looked at again.' });
+      const info = await syncNow(true);
+      return json(res, 200, { home: info ?? null });
     }
 
     if (route === ROUTES.stop) {
@@ -597,6 +844,8 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   /* -------------------------------------------------------- websocket */
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: LIMITS.ws });
+  /** What the owner types into a show: one paste at most. */
+  const showWss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
 
   server.on('upgrade', (req: http.IncomingMessage, socket: Duplex, head: Buffer) => {
     socket.on('error', () => {});
@@ -606,11 +855,21 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     };
     if (!hostOk(req)) return deny(403, 'Forbidden');
     const url = new URL(req.url ?? '/', origin);
-    if (url.pathname !== ROUTES.ws) return deny(404, 'Not Found');
+    if (url.pathname !== ROUTES.ws && url.pathname !== ROUTES.showWs) return deny(404, 'Not Found');
     const reqOrigin = req.headers.origin;
     if (reqOrigin !== undefined && !allowed.has(reqOrigin)) return deny(403, 'Forbidden');
     const actor = actorOf(req, url);
     if (!actor) return deny(401, 'Unauthorized');
+    if (url.pathname === ROUTES.showWs) {
+      // A show is the owner's hands on a command: nobody else joins it.
+      if (actor !== 'owner') return deny(403, 'Forbidden');
+      const chapter = url.searchParams.get('chapter') ?? '';
+      if (!shows.has(chapter)) return deny(404, 'Not Found');
+      showWss.handleUpgrade(req, socket, head, (ws) => {
+        if (!shows.attach(chapter, ws)) ws.close(1000, 'There is no show for this idea.');
+      });
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => onSocket(ws, actor));
   });
 
@@ -621,7 +880,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     ws.on('close', () => clients.delete(ws));
     ws.on('error', () => clients.delete(ws));
     const build = builds?.status();
-    send(ws, { t: 'init', name: board.state.name, role: actor, events: [...board.events], presence: presence.get(), ...(build ? { build } : {}), ...ownerShows(actor) });
+    send(ws, { t: 'init', name: board.state.name, role: actor, events: [...board.events], presence: presence.get(), ...(build ? { build } : {}), ...ownerWorks(actor) });
 
     ws.on('message', (data, isBinary) => {
       if (isBinary) return send(ws, { t: 'refused', ref: '', rule: 'shape', reason: 'Send JSON text.' });
@@ -682,17 +941,18 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const buildWatch = setInterval(pushBuild, 1000);
   buildWatch.unref();
 
-  // What the owner can look at, pushed to the owner's pages when it changes: a show that came,
-  // or a chapter that is no longer built. Never to the agent or the system.
-  let lastShows = '{}';
-  const pushShows = (): void => {
-    const shows = showsNow();
-    const json = JSON.stringify(shows);
-    if (json === lastShows) return;
-    lastShows = json;
-    const text = JSON.stringify({ t: 'shows', shows } satisfies ServerMessage);
-    for (const [ws, actor] of clients) if (actor === 'owner' && ws.readyState === WebSocket.OPEN) ws.send(text);
+  // What the repository holds for each chapter, and the home branch, pushed to the owner's
+  // pages when either changes: a branch, a show, a merge. Never to the agent or the system.
+  let lastWorks = '';
+  const pushWorks = (): void => {
+    if (!boardOpen) return;
+    const msg: ServerMessage = { t: 'works', works: worksNow(), shows: showsNow(), ...(home ? { home } : {}) };
+    const json = JSON.stringify(msg);
+    if (json === lastWorks) return;
+    lastWorks = json;
+    for (const [ws, actor] of clients) if (actor === 'owner' && ws.readyState === WebSocket.OPEN) ws.send(json);
   };
+  afterHome = pushWorks;
 
   /* ------------------------------------------------------------ start */
 
@@ -759,9 +1019,11 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       const c = state.chapters[ev.chapter];
       const check = ev.type === 'build.start' ? ev.check : c?.check;
       const track = ev.type === 'build.start' ? ev.track : c?.track;
+      const setup = ev.type === 'build.start' ? ev.setup : c?.setup;
+      const show = ev.type === 'build.start' ? ev.show : c?.show;
       if (check === undefined || !track) continue;
       try {
-        own.addConsent({ chapter: ev.chapter, event: ev.id, check, track: [...track], at: ev.at });
+        own.addConsent({ chapter: ev.chapter, event: ev.id, check, track: [...track], at: ev.at, ...(setup !== undefined ? { setup } : {}), ...(show !== undefined ? { show } : {}) });
       } catch (e) {
         log(`could not keep the owner's consent to build "${ev.chapter}": ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -772,7 +1034,29 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     for (const event of events) broadcast({ t: 'event', event });
     // After the build driver has heard the same events.
     queueMicrotask(pushBuild);
-    pushShows();
+    pushWorks();
+  });
+
+  // What the owner presses on a built idea, and what follows from the events for its show
+  // and its branch. Only live events reach here: a log read from disk merges and runs nothing.
+  board.subscribe((events, state) => {
+    let recount = false;
+    for (const ev of events) {
+      // A build changes the canvas's copy, which every show on that canvas runs in.
+      if (ev.type === 'build.start' || ev.type === 'build.resume') {
+        const on = state.chapters[ev.chapter]?.canvas;
+        for (const c of on !== undefined ? chaptersOn(state, on) : []) void shows.drop(c.id);
+      }
+      if (ev.by === 'owner' && ev.type === 'canvas.approve') setImmediate(() => void approve(ev.canvas));
+      if (ev.by === 'owner' && ev.type === 'canvas.remove') setImmediate(() => void remove(ev.canvas));
+      if (ev.type === 'part.state' || ev.type.startsWith('build.') || ev.type.startsWith('canvas.')) recount = true;
+    }
+    // An idea that is no longer built, or is merged, has nothing to try.
+    for (const id of shows.running()) {
+      const c = state.chapters[id];
+      if (!c || c.state !== 'built' || c.merged) void shows.drop(id);
+    }
+    if (recount) refreshWorks();
   });
   presence.subscribe((p) => broadcast({ t: 'presence', presence: p }));
 
@@ -800,6 +1084,10 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       }
       clearInterval(heartbeat);
       clearInterval(buildWatch);
+      // Every show ends with the server, and so does a call to the remote.
+      await shows.close();
+      stopGit.abort();
+      await gitChain;
       for (const ws of clients.keys()) ws.close(1001, 'The board server stopped.');
       try {
         await link?.close();
@@ -808,6 +1096,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       }
       for (const ws of clients.keys()) ws.terminate();
       wss.close();
+      showWss.close();
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
         server.closeAllConnections();
@@ -857,6 +1146,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       systemToken: tokens.system,
       presence: (u) => builds?.builderPresence(u),
       log: (m) => log(`builder: ${m}`),
+      place: (chapter, where) => takePlace(chapter, where),
     };
     const loaded = await loadBuilder(opts.builder, opts.link ?? 'none', bctx);
     if (loaded) {
@@ -868,6 +1158,179 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     throw e;
   }
 
+  /* --------------------------------------------- branches and approval */
+
+  /** The builder says where a canvas's build lives. Kept for this machine, never in the log. */
+  function takePlace(canvas: Id, where: unknown): void {
+    const branch = (where as { branch?: unknown } | null)?.branch;
+    if (!branchNameOk(branch)) {
+      log(`builder: the branch it reported for canvas "${canvas}" is not a branch name, so it is not kept.`);
+      return;
+    }
+    if (branch === homeLook?.branch) {
+      log(`builder: it reported the home branch ${branch} as the build of canvas "${canvas}". Not kept: a build has a branch of its own.`);
+      return;
+    }
+    try {
+      own.setWork({ canvas, branch });
+    } catch (e) {
+      log(`could not keep the branch of canvas "${canvas}": ${e instanceof Error ? e.message : String(e)}`);
+    }
+    refreshWorks();
+  }
+
+  /**
+   * Take a canvas's build away, through the builder: its copy and its branch. Then forget what
+   * this machine kept for its chapters, and its place unless the branch is still there.
+   * Returns the builder's note when it did not take it away.
+   */
+  async function discard(canvas: Id, chapters: readonly Id[]): Promise<string | undefined> {
+    const b = builder;
+    let refused: string | undefined;
+    if (b?.discard) {
+      try {
+        const r = await b.discard({ canvas, branch: true });
+        if (!r?.ok) refused = r?.note ?? 'The builder did not say why.';
+      } catch (e) {
+        refused = e instanceof Error ? e.message : String(e);
+      }
+      if (refused !== undefined) log(`builder: the build of canvas "${canvas}" was not taken away: ${refused}`);
+    }
+    try {
+      const place = own.workOf(canvas);
+      own.forget(canvas, chapters);
+      if (refused !== undefined && place !== undefined) own.setWork({ canvas, branch: place });
+      showServer?.retain(new Set(own.shows.map((x) => x.chapter)));
+    } catch (e) {
+      log(`could not write the board's private file: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    return refused;
+  }
+
+  /**
+   * The owner approved a canvas: merge its branch into the home branch, by fast-forward only,
+   * after the home branch is level with its remote and, when it moved, joined into the branch
+   * with every agreed check passing (record 0014). What stops it is said in the feed of each
+   * idea it would merge. Nothing is half done: the home branch moved, or it did not.
+   */
+  async function approve(canvas: Id): Promise<void> {
+    if (closing || busy.has(canvas)) return;
+    const waiting = canvasBuilds(board.state, canvas).waiting;
+    if (waiting.length === 0) return;
+    setBusy(canvas, 'merging');
+    try {
+      await merge(canvas, waiting.map((c) => c.id));
+    } catch (e) {
+      log(`approve: ${e instanceof Error ? e.message : String(e)}`);
+      for (const id of waiting) say(id.id, `The merge stopped: ${oneSentence(e instanceof Error ? e.message : String(e))}`, 'problem');
+    } finally {
+      setBusy(canvas, undefined);
+      refreshWorks();
+    }
+  }
+
+  async function merge(canvas: Id, waiting: readonly Id[]): Promise<void> {
+    const tell = (text: string, kind: 'update' | 'problem' = 'problem') => {
+      for (const id of waiting) say(id, text, kind);
+    };
+    const here = chaptersOn(board.state, canvas);
+    for (const c of here) await shows.drop(c.id);
+    await syncNow(true);
+    const look = homeLook;
+    if (!look) return tell("This board's folder is not a git repository with a main branch, so there is nothing to merge into.");
+    const diverged = home?.sync === 'diverged' ? (home.upstream ?? 'its remote') : undefined;
+    const branch = own.workOf(canvas);
+    const tip = branch ? await gitJob(() => commitOf(look.top, `refs/heads/${branch}`)) : undefined;
+    if (!branch || !tip) return tell('This machine has no branch for this idea, so there is nothing to merge.');
+
+    const held = look.commit !== undefined && (await gitJob(() => holds(look.top, look.commit!, tip)));
+    if (!held && look.commit !== undefined && !(await gitJob(() => holds(look.top, tip, look.commit!)))) {
+      // The home branch moved since the build started: the builder joins it in, and the checks run on the result.
+      const b = builder;
+      const moved = `${look.branch} has changed since this was built`;
+      if (!b) return tell(`${moved}, and no builder is linked to join the two. Open the board with a builder, then approve again.`);
+      if (!b.refresh) return tell(`${moved}, and the builder linked here cannot join the two. Nothing was merged.`);
+      const built = here.filter((c) => c.state === 'built' && !c.merged);
+      const checks = [...new Set(built.flatMap((c) => (c.check !== undefined ? [c.check] : [])))];
+      const setups = [...new Set(built.flatMap((c) => (c.setup !== undefined ? [c.setup] : [])))];
+      if (checks.length === 0) return tell(`${moved}, and there is no agreed check to run on the two joined. Nothing was merged.`);
+      setBusy(canvas, 'joining');
+      let r: RefreshResult;
+      try {
+        r = await b.refresh({ canvas, home: { branch: look.branch, commit: look.commit }, checks, setups });
+      } catch (e) {
+        r = { outcome: 'failed', note: e instanceof Error ? e.message : String(e) };
+      }
+      // The join moved the branch: what the page says of it is read again before anything is said.
+      await syncNow(false);
+      setBusy(canvas, 'merging');
+      if (r?.outcome === 'resolved') {
+        return tell(`${look.branch} had changed the same places as this idea. The builder joined the two and the checks passed. What you tried has changed: try it again, then approve again.`, 'update');
+      }
+      if (r?.outcome !== 'joined' && r?.outcome !== 'level') {
+        return tell(`${look.branch} could not be joined into this idea, so nothing was merged: ${oneSentence(r?.note ?? 'the builder gave no reason')}`);
+      }
+    }
+
+    const done = await gitJob(async (): Promise<{ ok: true; commit: string; into: string } | { ok: false; note: string }> => {
+      const now = await lookHome(repoDir);
+      if (!now) return { ok: false, note: "This board's folder is no longer a git repository. Nothing was merged." };
+      const at = await commitOf(now.top, `refs/heads/${branch}`);
+      if (!at) return { ok: false, note: 'This machine has no branch for this idea, so there is nothing to merge.' };
+      if (now.commit !== undefined && (await holds(now.top, now.commit, at))) return { ok: true, commit: at, into: now.branch };
+      if (now.commit !== undefined && !(await holds(now.top, at, now.commit))) {
+        return { ok: false, note: `${now.branch} moved while this idea was joined to it. Nothing was merged: approve again.` };
+      }
+      const m = await fastForward(now, at);
+      if (!m.ok) {
+        return {
+          ok: false,
+          note: m.files
+            ? `Your changes in ${nameFiles(m.files)} are in the way of ${now.branch}. Commit or stash them, then approve again.`
+            : `Git did not move ${now.branch}. ${oneSentence(m.note)}`,
+        };
+      }
+      homeLook = (await lookHome(repoDir)) ?? now;
+      return { ok: true, commit: at, into: now.branch };
+    });
+    if (!done.ok) return tell(done.note);
+
+    // The log's own line says "Merged into main." on each idea.
+    const r = board.post([{ type: 'canvas.merged', canvas, commit: done.commit, into: done.into }], 'system');
+    if (!r.ok) return tell(`The merge is done, but the board did not take it: ${r.reason}`);
+    const refused = await discard(canvas, []);
+    if (refused !== undefined) tell(`It is merged into ${done.into}, but its build was not taken away: ${oneSentence(refused)}`);
+    if (diverged) tell(`${done.into} here and ${diverged} have both moved, so this merge is in ${done.into} on this machine only. Run git pull in the board's folder, then push.`, 'update');
+  }
+
+  /** The owner deleted a canvas: the builds on it stop, their shows stop, and its copy and branch go. */
+  async function remove(canvas: Id): Promise<void> {
+    const chapters = Object.values(board.state.removedChapters)
+      .filter((c) => c.canvas === canvas)
+      .map((c) => c.id);
+    setBusy(canvas, 'deleting');
+    try {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.all(chapters.map((id) => runner.drop(id))),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            log(`builder: it did not pause the build on the deleted canvas "${canvas}" within ${DELETE_WAIT_MS / 1000} s. Its branch is taken away anyway.`);
+            resolve();
+          }, DELETE_WAIT_MS);
+          timer.unref();
+        }),
+      ]);
+      if (timer !== undefined) clearTimeout(timer);
+      for (const id of chapters) await shows.drop(id);
+      // A blank canvas has nothing to take away.
+      if (chapters.length > 0 || own.workOf(canvas) !== undefined) await discard(canvas, chapters);
+    } finally {
+      setBusy(canvas, undefined);
+      refreshWorks();
+    }
+  }
+
   /* ------------------------------------------------------------ shows */
 
   /** The listener for shows, started once, the first time there is something to show. */
@@ -875,7 +1338,8 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     if (showStarting) return showStarting;
     // None starts once the server is closing: nothing would close it.
     if (closing) return Promise.reject(new Error('the board server is closing'));
-    showStarting = startShowServer(log).then(
+    // What is shown may be framed by the board's own page, and by nothing else.
+    showStarting = startShowServer(log, [...allowed]).then(
       (s) => (showServer = s),
       (e: unknown) => {
         // The next show tries again.
@@ -903,7 +1367,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     const kept: KeptShow = { chapter, dir: checked.dir, page: checked.page, at: now().toISOString() };
     own.addShow(kept);
     listener.retain(new Set(own.shows.map((x) => x.chapter)));
-    pushShows();
+    pushWorks();
     const url = listener.url(chapter);
     let opened = false;
     if (opts.openShow && url) {
@@ -948,7 +1412,12 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const rest = (): PresenceUpdate => (link ? { state: 'listening' } : { state: 'away', note: NO_AGENT });
   const runner = new BuildRunner({
     builder,
-    consent: (chapter, check, track) => own.consentFor(chapter, check, track),
+    consent: (chapter, check, track, terms) => own.consentFor(chapter, check, track, terms),
+    // Every build starts from the home branch, brought level with its remote just before.
+    base: async () => {
+      await syncNow(true);
+      return homeLook?.commit ? { branch: homeLook.branch, commit: homeLook.commit } : undefined;
+    },
     state: () => board.state,
     post: (drafts) => {
       const r = board.post(drafts, 'system');
@@ -957,19 +1426,23 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     presence,
     inWake: () => scheduler?.busy ?? false,
     rest,
+    canvasBusy: (canvas) => busy.has(canvas),
+    began: () => pushWorks(),
     show: (chapter, given) => {
       takeShow(chapter, given).catch((e: unknown) => log(`could not show the build of "${chapter}": ${e instanceof Error ? e.message : String(e)}`));
     },
+    ended: () => refreshWorks(),
     log: (m) => log(`build: ${m}`),
   });
   builds = runner;
+  inWork = () => runner.canvasInWork;
   try {
     await restoreShows();
   } catch (e) {
     log(`could not serve what the builds showed before: ${e instanceof Error ? e.message : String(e)}`);
   }
   // A page that connected while the server started hears what is served again. Later ones get it with their init.
-  pushShows();
+  pushWorks();
 
   if (link) {
     linkName = link.name;
@@ -1015,7 +1488,9 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     scheduler,
     builderName,
     builds: runner,
+    works: worksNow,
     shows: showsNow,
+    home: () => home,
     showOrigin: () => showServer?.origin,
     close,
     closed,
@@ -1040,6 +1515,13 @@ function summarise(board: Board, log: (m: string) => void): void {
 }
 
 /* ---------------------------------------------------------------- helpers */
+
+/** What a builder or git said, as one sentence for the feed. */
+function oneSentence(s: string): string {
+  const t = plain(s).replace(/\s+/g, ' ').trim() || 'No reason was given';
+  const clipped = t.length > 240 ? `${t.slice(0, 239)}…` : t;
+  return /[.!?…]$/.test(clipped) ? clipped : `${clipped}.`;
+}
 
 function newToken(): string {
   return crypto.randomBytes(24).toString('base64url');

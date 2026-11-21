@@ -228,6 +228,7 @@ describe('2. no cookie: the token, and the headers', () => {
       "img-src 'self' data: blob:",
       "font-src 'self' data:",
       `connect-src 'self' ws://127.0.0.1:${s.port} ws://localhost:${s.port}`,
+      'frame-src http://127.0.0.1:*',
       "object-src 'none'",
       "base-uri 'none'",
       "frame-ancestors 'none'",

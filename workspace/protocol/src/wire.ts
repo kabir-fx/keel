@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { Digest } from './digest';
 import type { BoardEvent } from './events';
 import { Actor, Id, Point } from './ids';
+import { ShowPlan } from './pictures';
 import type { RuleId } from './rules';
 
 /**
@@ -38,15 +39,20 @@ export type ClientMessage = z.infer<typeof ClientMessage>;
 
 /** From the server to the app, over the websocket. */
 export type ServerMessage =
-  | { t: 'init'; name: string; role: z.infer<typeof Actor>; events: BoardEvent[]; presence: Presence; build?: BoardInfo['build']; shows?: BoardInfo['shows'] }
+  | { t: 'init'; name: string; role: z.infer<typeof Actor>; events: BoardEvent[]; presence: Presence; build?: BoardInfo['build']; works?: BoardInfo['works']; shows?: BoardInfo['shows']; home?: BoardInfo['home'] }
   | { t: 'event'; event: BoardEvent }
   | { t: 'ok'; ref: string; event: BoardEvent }
   | { t: 'refused'; ref: string; rule: RuleId; reason: string }
   | { t: 'presence'; presence: Presence }
   /** What the server's build driver does now, sent when it changes. `null` when no build is going. */
   | { t: 'build'; build: NonNullable<BoardInfo['build']> | null }
-  /** Every built chapter the owner can look at now, sent to the owner's page when it changes. Empty when there is none. */
-  | { t: 'shows'; shows: NonNullable<BoardInfo['shows']> }
+  /**
+   * What this machine's repository says about each canvas's branch, what each built chapter
+   * has to try, and the home branch, sent to the owner's page whenever any of it changes.
+   * `works` and `shows` are whole: a canvas or a chapter not in them has nothing here.
+   * `home` is left out where there is no repository.
+   */
+  | { t: 'works'; works: NonNullable<BoardInfo['works']>; shows: NonNullable<BoardInfo['shows']>; home?: HomeInfo }
   | { t: 'pong' };
 
 /** The reply to a refused post, over HTTP. `index` is the draft that failed, when several were sent. */
@@ -97,9 +103,113 @@ export const ROUTES = {
    * (`BoardInfo.foreign`). From then on they are the board's own, like any other.
    */
   keep: '/api/keep',
+  /**
+   * POST a `ShowAsk`, the owner only: start or stop what a built chapter shows. A start names
+   * the command as the page showed it, and the server runs it only when it is the chapter's
+   * own, word for word: that press is the owner's agreement to run it. 409 with `{ reason }`
+   * when it cannot start.
+   */
+  show: '/api/show',
+  /** POST, the owner only: push the home branch to the remote it follows. `{ ok, note, home }`. Never forced. */
+  push: '/api/push',
+  /** POST, the owner only: look at the remote again and bring the home branch level when that is a fast-forward. `{ home }`. */
+  sync: '/api/sync',
   /** The websocket. */
   ws: '/ws',
+  /**
+   * A websocket for one running show, the owner only: `?chapter=<id>`. The server sends what
+   * the command printed so far, then what it prints (`ShowServerMessage`); the page sends
+   * what the owner types (`ShowClientMessage`). It closes when the show ends.
+   */
+  showWs: '/ws/show',
 } as const;
+
+/** What the owner's page asks of `ROUTES.show`. */
+export const ShowAsk = z.discriminatedUnion('action', [
+  z.strictObject({
+    action: z.literal('start'),
+    chapter: Id,
+    /** The command the page showed beside the button. */
+    run: z.string().min(1).max(300),
+    cols: z.number().int().min(20).max(400).optional(),
+    rows: z.number().int().min(5).max(200).optional(),
+  }),
+  z.strictObject({ action: z.literal('stop'), chapter: Id }),
+]);
+export type ShowAsk = z.infer<typeof ShowAsk>;
+
+/** From the page to a running show. */
+export const ShowClientMessage = z.discriminatedUnion('t', [
+  z.strictObject({ t: z.literal('in'), data: z.string().max(65536) }),
+  z.strictObject({ t: z.literal('size'), cols: z.number().int().min(20).max(400), rows: z.number().int().min(5).max(200) }),
+]);
+export type ShowClientMessage = z.infer<typeof ShowClientMessage>;
+
+/** From a running show to the page. The first `out` holds what was printed before the page joined, as far as it is kept. */
+export type ShowServerMessage = { t: 'out'; data: string } | { t: 'end'; code: number | null };
+
+/** The most of a show's output the server keeps for a page that joins late, in characters. */
+export const SHOW_OUTPUT_KEPT = 200_000;
+
+/**
+ * What the owner can try for a built chapter, and whether it runs now. Said to the owner's
+ * page only, never in the log: an address and a command's state are facts of this machine.
+ */
+export type ShowInfo =
+  /** A page that stands alone, served as files from an address of its own. */
+  | { kind: 'page'; url: string }
+  /**
+   * An app a command serves. `url` once it answers. `note` says why it failed, in a sentence.
+   * `boxed` is false when it runs with no box, on a machine that has none: the page says so.
+   */
+  | { kind: 'app'; run: string; state: 'off' | 'starting' | 'on' | 'failed'; url?: string; note?: string; boxed?: false }
+  /** A terminal in the build's copy. `ended` once the shell is gone, with its exit code. `boxed` as for an app. */
+  | { kind: 'terminal'; run: string; state: 'off' | 'on' | 'ended'; code?: number | null; boxed?: false };
+
+/** What this machine's repository says about one canvas's build. */
+export interface CanvasWork {
+  /** The canvas's branch, while this machine has it. */
+  branch?: string;
+  /** Commits on the branch that the home branch does not have. */
+  ahead?: number;
+  /** Commits the home branch has gained since the branch left it. */
+  behind?: number;
+  /**
+   * What is done with the branch right now. `building`: the builder's run on this canvas has
+   * not ended, which outlasts the last part by the build's last commit. `joining` and
+   * `merging`: an approve in two steps. `deleting`: a delete. Nothing is tried, approved or
+   * built on a busy canvas, and the server refuses it.
+   */
+  busy?: 'building' | 'joining' | 'merging' | 'deleting';
+}
+
+/**
+ * The home branch: where every build starts, and where an approved one goes. It is the
+ * repository's main branch. The server brings it level with its remote when the board
+ * opens and before each build, by fast-forward only.
+ */
+export interface HomeInfo {
+  branch: string;
+  /** Its commit here, short. Left out in a repository with no commit yet. */
+  commit?: string;
+  /** The remote branch it follows, such as `origin/main`. Left out when it follows none. */
+  upstream?: string;
+  /**
+   * How it stands with what it follows, as last looked at. `level`: the same commit.
+   * `ahead`: commits here to push. `behind`: the remote is ahead and the fast-forward was
+   * refused, `note` says why. `diverged`: each has commits the other lacks, nothing was
+   * moved. `unreachable`: the remote did not answer. `local`: it follows no remote.
+   */
+  sync: 'level' | 'ahead' | 'behind' | 'diverged' | 'unreachable' | 'local';
+  ahead?: number;
+  behind?: number;
+  /** One sentence for the owner when something needs them. */
+  note?: string;
+  /** When the remote was last looked at, ISO 8601. */
+  checkedAt?: string;
+  /** The branch the owner's folder is on, when it is not the home branch. Builds still start from the home branch. */
+  folderOn?: string;
+}
 
 /**
  * A run of events, by number and with both ends included, that came in a log this machine's
@@ -111,6 +221,9 @@ export const ForeignRange = z.strictObject({ from: z.number().int().min(1), to: 
 export type ForeignRange = z.infer<typeof ForeignRange>;
 /** At most this many runs are kept apart. Past it, the two oldest are joined. */
 export const MAX_FOREIGN_RANGES = 32;
+
+/** The most canvases whose branch is kept track of. The oldest go first. */
+export const MAX_WORKS = 200;
 
 /** The most built chapters whose result is kept to be shown. The oldest go first. */
 export const MAX_SHOWS = 40;
@@ -152,13 +265,20 @@ export interface BoardInfo {
     check?: string;
   };
   /**
-   * What the owner can look at: for each built chapter that has something to show, the
-   * address of its page. The address is on a port of its own, so the page shown is never in
-   * the board's origin and cannot act as the owner. It holds a key made new for each start of
-   * the server, and it is said to the owner only: never to the agent or the system, and never
-   * in the log. Left out when there is nothing to show.
+   * What this machine's repository holds for each canvas, by canvas id: its branch and how it
+   * stands with the home branch. Said to the owner only, and never in the log. Left out when
+   * no canvas has anything here.
    */
-  shows?: Record<string, string>;
+  works?: Record<string, CanvasWork>;
+  /**
+   * What the owner can try, by chapter id, for each built chapter that has something. An
+   * address here is on a port of its own, so what it serves is never in the board's origin
+   * and cannot act as the owner. Said to the owner only: never to the agent or the system,
+   * and never in the log. Left out when there is nothing to try.
+   */
+  shows?: Record<string, ShowInfo>;
+  /** The home branch, for the owner only. Left out where the board's folder is no repository. */
+  home?: HomeInfo;
 }
 
 /** How long a one-time code in a printed address works, in ms. It also stops working the first time it is used. */
@@ -216,7 +336,19 @@ export const PrivateBoardFile = z.strictObject({
    * nothing: a repository can ship a log that says anything.
    */
   consents: z
-    .array(z.strictObject({ chapter: Id, event: z.string(), check: z.string().min(1).max(300), track: z.array(Id).max(40), at: z.string() }))
+    .array(
+      z.strictObject({
+        chapter: Id,
+        event: z.string(),
+        check: z.string().min(1).max(300),
+        track: z.array(Id).max(40),
+        at: z.string(),
+        /** The setup command agreed to with the same press, when there was one. */
+        setup: z.string().min(1).max(300).optional(),
+        /** How the result is tried, as the press agreed to it. */
+        show: ShowPlan.optional(),
+      }),
+    )
     .optional(),
   /**
    * The log as this machine's server last wrote it: its size, and the SHA-256 of its bytes.
@@ -237,6 +369,11 @@ export const PrivateBoardFile = z.strictObject({
     .array(z.strictObject({ chapter: Id, dir: z.string().min(1).max(4096), page: z.string().min(1).max(300), at: z.string(), opened: z.boolean().optional() }))
     .max(MAX_SHOWS)
     .optional(),
+  /**
+   * Where each canvas's build lives in this machine's repository: its branch, as the builder
+   * reported it. A branch is a fact of this machine, so it is kept here and not in the log.
+   */
+  works: z.array(z.strictObject({ canvas: Id, branch: z.string().min(1).max(200) })).max(MAX_WORKS).optional(),
 });
 export type PrivateBoardFile = z.infer<typeof PrivateBoardFile>;
 

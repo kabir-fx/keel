@@ -96,7 +96,8 @@ export function useLog(source: BoardSource, camera: CameraStore, say: (text: str
   const postMark = useCallback((item: MarkItem): Promise<boolean> => postNew(item.id, markDrafts(source.state, item)), [source, postNew]);
 
   const newId = useCallback(() => {
-    const id = nextMarkId(source.state, reserved.current);
+    // From the whole board: an id one canvas does not show may be another's.
+    const id = nextMarkId(source.whole ?? source.state, reserved.current);
     reserved.current.add(id);
     made(id);
     return id;

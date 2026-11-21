@@ -1,3 +1,4 @@
+import type { Id } from '@keel/protocol';
 import { subId, subKind } from '@keel/protocol';
 import type { PictureAct, PictureView } from '@keel/pictures';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
@@ -13,13 +14,14 @@ import type { Log } from './log';
  * reports each as an act; this is the board's side of every one.
  *
  * `lastDragEnd` is when the last drag on the board ended: a tap that comes right after it is
- * the end of that drag, not a tap.
+ * the end of that drag, not a tap. `tryIdea` opens an idea's try room.
  */
 export function usePictureActs(
   board: Board,
   send: Log['send'],
   setView: Dispatch<SetStateAction<PictureView>>,
   lastDragEnd: RefObject<number>,
+  tryIdea: (chapter: Id) => void,
 ): (act: PictureAct) => void {
   return useCallback(
     (act: PictureAct) => {
@@ -44,6 +46,9 @@ export function usePictureActs(
         case 'choice.pick':
           void send(act);
           return;
+        case 'try':
+          tryIdea(act.chapter);
+          return;
         case 'build.start': {
           // "Build this" agrees to the blueprint's check: with no check shown, there is nothing to agree to.
           if (!act.check) {
@@ -57,6 +62,6 @@ export function usePictureActs(
         }
       }
     },
-    [send, board, setView, lastDragEnd],
+    [send, board, setView, lastDragEnd, tryIdea],
   );
 }

@@ -1,4 +1,5 @@
 import type { Box, Id, InkItem } from '@keel/protocol';
+import { chaptersOn } from '@keel/protocol';
 import type { PictureView } from '@keel/pictures';
 import { Picture } from '@keel/pictures';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -57,7 +58,9 @@ import { ChapterLabels } from './labels';
 import { Lineage } from './lineage';
 import { Live, LiveStore } from './live';
 import { openLasso, picksOf, solidifyDraft } from './marks';
-import { ConnectionNotice, ForeignNotice, ForeignTags, Nudge } from './notices';
+import { allBuilt } from './canvases';
+import { CanvasDoneNotice, ConnectionNotice, ElsewhereNotice, ForeignNotice, ForeignTags, HomeNotice, Nudge, homeNeeds } from './notices';
+import { canvasName } from './tryit';
 import { canNotify } from './notify';
 import { AgentCursor } from './overlay/cursor';
 import { AgentCursorStore } from './overlay/cursorStore';
@@ -75,7 +78,13 @@ import { NO_SPEECH } from './speech';
 import { Story } from './StoryView';
 import { createTools, drawsOrMoves, toolFor } from './tools';
 import { Tooltip } from './Tooltip';
+import { readView, viewKey } from './view';
+import type { Camera } from './camera/camera';
+import { CanvasSource, canvasToShow, newCanvasId } from './canvasSource';
+import { useBuildPlace, useCanvasInView, useElsewhere } from './board/canvasView';
+import { TryRoom } from './TryRoom';
 import { createUndo } from './undo';
+import { createCanvasUndo } from './board/canvasUndo';
 import { stepFrom, walkOf } from './walk';
 import { Watch } from './WatchPanel';
 
@@ -119,14 +128,27 @@ export interface AppProps {
  * camera is written to the page before anything is measured, pictures are placed before the
  * subs are measured, and the first view is fitted after both.
  */
-export function App({ source, show, view: firstView = {}, focus: firstFocus, mode: firstMode = 'board', remember = false, clock }: AppProps) {
-  /* ------------------------------------------------------------ the source */
+export function App({ source: board0, show, view: firstView = {}, focus: firstFocus, mode: firstMode = 'board', remember = false, clock }: AppProps) {
+  /* ------------------------------------------------------------ the source, as the canvas in view shows it */
 
+  /** The whole board: the Story, the try room and the canvases out of view read it. */
+  const whole = useSyncExternalStore(board0.subscribe, () => board0.state);
+  /** The canvas the owner asked for. While it is there it is in view, else the newest one. */
+  const [askedCanvas, setAskedCanvas] = useState<Id>();
+  /** On a reload, the canvas the owner had in view, as this page kept it. */
+  const keptCanvas = useMemo(() => (remember && whole.name ? readView(viewKey(whole.name))?.canvas : undefined), [remember, whole.name]);
+  const canvas = canvasToShow(whole, askedCanvas ?? keptCanvas);
+  const canvasRef = useRef<Id | undefined>(canvas);
+  canvasRef.current = canvas;
+  /** The board as the canvas in view shows it: everything below reads this one (record 0014). */
+  const source = useMemo(() => new CanvasSource(board0, () => canvasRef.current), [board0]);
   const state = useSyncExternalStore(source.subscribe, () => source.state);
   const connection = useSyncExternalStore(source.subscribe, () => source.connection);
   const build = useSyncExternalStore(source.subscribe, () => source.build);
   const foreign = useSyncExternalStore(source.subscribe, () => source.foreign);
+  const works = useSyncExternalStore(source.subscribe, () => source.works);
   const shows = useSyncExternalStore(source.subscribe, () => source.shows);
+  const home = useSyncExternalStore(source.subscribe, () => source.home);
   const canPlace = source.role !== 'agent';
   const isOwner = source.role === 'owner';
   const fontsReady = useFontsReady();
@@ -154,6 +176,13 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
   /** The Board, or the Story of every chapter. The board stays laid out under the Story. */
   const [mode, setMode] = useState<ViewMode>(firstMode);
   const [watchFolded, setWatchFolded] = useState(false);
+  /** The idea whose try room is open. */
+  const [trying, setTrying] = useState<Id>();
+  /** The owner has read what the board said about the home branch: it is not said again while the page is open. */
+  const [homeRead, setHomeRead] = useState(false);
+  /** Where the camera was on each canvas the owner left, while the page is open. */
+  const cameras = useRef(new Map<Id, Camera>());
+
   /** Where each anchored sub is now, measured from the DOM, in world units. */
   const [subRects, setSubRects] = useState<ReadonlyMap<string, Box>>(() => new Map());
   /** Draws the board again, so what was skipped while a picture was drawn on is measured. */
@@ -190,7 +219,8 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
   const [tools] = useState(createTools);
   const [pointers] = useState(() => createPointers(board, (press) => toolFor(tools, press, board)));
   // Undo posts straight to the source: what it posts is no new step, and it says its own line.
-  const [undoer] = useState(() => createUndo(board, tools.pen, (draft) => source.post(draft)));
+  // One list of steps per canvas: Undo takes back only what was done on the canvas in view.
+  const [undoer] = useState(() => createCanvasUndo(() => createUndo(board, tools.pen, (draft) => source.post(draft)), () => canvasRef.current));
   const [nudger] = useState(() => createNudge(board));
 
   /* ------------------------------------------------------------ where things are */
@@ -226,6 +256,7 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
   usePlacement({ source, camera, state, fontsReady, canPlace, ahead, subRects, measureLayer: measureRef, say });
   const subsSettled = useSubRects({ camera, layer: layerRef, live, stored: shown.stored, subRects, setSubRects });
   useFirstView({
+    canvas,
     camera,
     state,
     // Read as of this render, with no subscription, so a change of presence does not draw the
@@ -253,7 +284,7 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
     fitted,
     known,
   });
-  useKeptView({ camera, source, remember, mode, modeNow: board.mode, inView: chapters.inView, chapterRef: chapters.chapterRef, fitted });
+  useKeptView({ camera, source, remember, mode, modeNow: board.mode, inView: chapters.inView, chapterRef: chapters.chapterRef, fitted, canvas });
   // A selected mark that left the board is no longer selected.
   useEffect(() => {
     if (selection.some((id) => !state.items[id] || state.items[id]!.removed)) setSelection((sel) => sel.filter((id) => state.items[id] && !state.items[id]!.removed));
@@ -285,8 +316,14 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
   });
   useFollowChapter(camera, boxes, chapters.look);
   useWatching(state, chapters.chapter, connection);
-  const story = useStoryNav({ board, camera, mode, boxes, fit, focus, pinView: chapters.pin });
-  const onAct = usePictureActs(board, log.send, setView, lastDragEnd);
+  const story = useStoryNav({ board, mode, fit, focus, pinView: chapters.pin });
+  const onAct = usePictureActs(board, log.send, setView, lastDragEnd, setTrying);
+  // A try room closes when its idea leaves the board.
+  useEffect(() => {
+    if (trying && !whole.chapters[trying]) setTrying(undefined);
+  }, [trying, whole]);
+  useCanvasInView({ canvas, camera, cameras, fitted, known, live, boxes, fit, viewport, focus, select: () => setSelection([]) });
+  const away = useElsewhere(whole, canvas);
 
   /* ------------------------------------------------------------ what the board's object does, as of this render */
 
@@ -325,6 +362,41 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
     const step = stepFrom(source.state, walk, view.walk?.id === walk ? view.walk.step : undefined, dir);
     if (step !== undefined) setView((v) => ({ ...v, walk: { id: walk, step } }));
     return true;
+  };
+
+  /** Show another canvas on the board. Its camera comes back as the owner left it. */
+  const showCanvas = (next: Id) => {
+    if (canvas && next !== canvas) cameras.current.set(canvas, camera.get());
+    setAskedCanvas(next);
+  };
+
+  /** A new, blank canvas: the way to a new branch. The board goes to it. */
+  const newCanvas = async (): Promise<string | undefined> => {
+    const id = newCanvasId(source.whole);
+    const r = await log.send({ type: 'canvas.open', canvas: id });
+    if (!r.ok) return r.reason;
+    showCanvas(id);
+    setMode('board');
+    return undefined;
+  };
+
+  /**
+   * Delete a canvas the owner said yes to. A build that runs on it is paused first. When it was
+   * the one in view, the newest one left comes into view; with none left, the board is one
+   * empty canvas, ready for a first note.
+   */
+  const deleteCanvas = async (gone: Id): Promise<string | undefined> => {
+    for (const c of chaptersOn(source.whole, gone)) {
+      if (c.state !== 'building' || c.paused) continue;
+      const paused = await log.send({ type: 'build.pause', chapter: c.id });
+      if (!paused.ok) return paused.reason;
+    }
+    const r = await log.send({ type: 'canvas.remove', canvas: gone });
+    if (!r.ok) return r.reason;
+    cameras.current.delete(gone);
+    undoer.forget(gone);
+    if (canvas === gone) setAskedCanvas(source.whole.canvasOrder[source.whole.canvasOrder.length - 1]);
+    return undefined;
   };
 
   /** Fit the whole board. A fit is a look round: the chapter the owner works in stays theirs. */
@@ -427,7 +499,11 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
   /* ------------------------------------------------------------ draw */
 
   /** What every picture is told about how the owner looks: with the focus view open, which picture it shows large (it may drop its own title: the crumb says it). */
-  const pictureView = useMemo<PictureView>(() => (focusView ? { ...view, focus: focusView.id } : view), [view, focusView]);
+  const buildPlace = useBuildPlace(whole, canvas, home, works, shows);
+  const pictureView = useMemo<PictureView>(() => {
+    const where: PictureView = buildPlace ? { ...view, build: buildPlace } : view;
+    return focusView ? { ...where, focus: focusView.id } : where;
+  }, [view, focusView, buildPlace]);
 
   const miniBoxes: MiniBox[] = useMemo(
     () =>
@@ -568,19 +644,36 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
       )}
       {mode === 'story' && (
         <Story
-          state={state}
-          boxOf={boxOf}
+          state={whole}
+          boxOf={(id) => boxOf(id) ?? whole.items[id]?.item.box}
           markings={marks}
           isOwner={isOwner}
-          onGo={story.goTo}
+          onGo={(ids) => {
+            const on = whole.chapters[whole.items[ids[0] ?? '']?.chapter ?? '']?.canvas;
+            if (on) showCanvas(on);
+            story.goTo(ids);
+          }}
+          onOpen={(id) => {
+            showCanvas(id);
+            setMode('board');
+          }}
           onPart={(part) => {
             setMode('board');
             focus.open({ part });
           }}
-          onNextIdea={story.startNextIdea}
+          onNewCanvas={newCanvas}
+          works={works}
+          shows={shows}
+          home={home}
+          server={build}
+          onTry={setTrying}
+          post={log.send}
+          onDelete={deleteCanvas}
+          push={source.push}
+          sync={source.sync}
         />
       )}
-      <BoardPill state={state} chapter={chapters.chapter} mode={mode} />
+      <BoardPill state={mode === 'story' ? whole : state} chapter={chapters.chapter} mode={mode} canvas={canvas ? canvasName(whole, canvas) : undefined} />
       <ViewSwitch
         mode={mode}
         onMode={(m) => {
@@ -605,11 +698,52 @@ export function App({ source, show, view: firstView = {}, focus: firstFocus, mod
           post={log.send}
           notifies={canNotify()}
           onPart={showPart}
-          showUrl={shows.get(watchChapter)}
+          work={works.get(state.chapters[watchChapter]?.canvas ?? '')}
+          home={home}
+          show={shows.get(watchChapter)}
+          onTry={() => setTrying(watchChapter)}
+          push={source.push}
+          onNewCanvas={() => void newCanvas()}
+        />
+      )}
+      {trying && whole.chapters[trying] && isOwner && (
+        <TryRoom
+          key={trying}
+          state={whole}
+          chapter={trying}
+          show={shows.get(trying)}
+          work={works.get(whole.chapters[trying]!.canvas)}
+          home={home}
+          source={source}
+          isOwner={isOwner}
+          post={log.send}
+          onClose={() => setTrying(undefined)}
         />
       )}
       <div className="notices">
         <ConnectionNotice connection={connection} />
+        {mode === 'board' && isOwner && !homeRead && homeNeeds(home) && (
+          <HomeNotice
+            words={homeNeeds(home)!}
+            onShow={() => {
+              setHomeRead(true);
+              setMode('story');
+            }}
+            onDismiss={() => setHomeRead(true)}
+          />
+        )}
+        {away[0] && (
+          <ElsewhereNotice
+            news={away}
+            onGo={(id) => {
+              showCanvas(id);
+              setMode('board');
+            }}
+          />
+        )}
+        {mode === 'board' && isOwner && !watchChapter && allBuilt(state, canvas) && (
+          <CanvasDoneNotice branch={canvas ? works.get(canvas)?.branch : undefined} onNewCanvas={() => void newCanvas()} />
+        )}
         <Nudge ids={news.fresh} state={state} onGo={news.showNews} />
         {mode === 'board' && !focusView && <BackToBoard camera={camera} boxes={boxes} fit={fit} rect={rect} />}
         {mode === 'board' && foreign && tagged.length > 0 && (

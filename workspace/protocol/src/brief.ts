@@ -105,6 +105,26 @@ export function renderBrief(state: BoardState, chapter: Id): string | undefined 
     lines.push('## The check', '', 'A part is built when this command passes after its commit:', '', `    ${one(check)}`, '');
   }
 
+  const setup = started ? c.setup : blueprint?.setup;
+  if (setup) {
+    lines.push('## Setup', '', 'A fresh copy is made ready with this command, run once before the build:', '', `    ${one(setup)}`, '');
+  }
+
+  const show = started ? c.show : blueprint?.show;
+  if (show) {
+    lines.push('## How the owner tries it', '');
+    if (show.kind === 'page') lines.push('A page that stands alone: it opens in a browser with nothing run. Every script and style it names is a file beside it.', '');
+    else if (show.kind === 'app') {
+      lines.push(
+        `The board runs this command in the built copy and opens the app when it answers. It listens on ${show.port !== undefined ? `port ${show.port}` : 'the port in `PORT`, on 127.0.0.1'}:`,
+        '',
+        `    ${one(show.run)}`,
+        '',
+      );
+    } else lines.push('The board opens a terminal in the built copy and types this command:', '', `    ${one(show.run)}`, '');
+    lines.push('The build is not done until this works: the parts must include what makes it run.', '');
+  }
+
   return `${lines.join('\n').trimEnd()}\n`;
 }
 

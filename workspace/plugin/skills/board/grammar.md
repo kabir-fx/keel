@@ -178,8 +178,14 @@ Draw it when the owner taps a part, not before. Give `part` or `lane`, not both.
 
 Post it after the owner solidifies, then wait for "Build this". Each pick is something the owner chose, and says where it came from; a question the owner asked is never a pick. `assumed` lists everything you decided that the owner did not say. `proof` is what the owner can run or see. `parts` is the build track, in order, one commit each: solid parts only, because a new part is an idea and only the owner makes it solid. `check` is required: the one command that proves a part works, such as `make check`, found in the repository. By pressing "Build this" the owner agrees to it, and a part is built only when it has passed after the part's commit.
 
+`show` is how the owner tries the result once it is built; name one on every blueprint. `setup` is the one command that makes a fresh copy ready, such as `npm ci`: name it when the repository already holds what it installs from, a lock file. The owner agrees to both with "Build this".
+
 ```keys blueprint
-{kind: "blueprint", title: text≤70, summary?: text≤320, picks: {text: text≤160, from?: {item: id, sub?: sub}}[1-10], leftOut?: {text: text≤160, why?: text≤160}[≤8], assumed?: text≤200[≤8], proof: text≤200[1-6], parts: id[1-40], check: text≤300, walk?: id, gaps?: text≤200[≤6]}
+{kind: "blueprint", title: text≤70, summary?: text≤320, picks: {text: text≤160, from?: {item: id, sub?: sub}}[1-10], leftOut?: {text: text≤160, why?: text≤160}[≤8], assumed?: text≤200[≤8], proof: text≤200[1-6], parts: id[1-40], check: text≤300, setup?: text≤300, show?: show, walk?: id, gaps?: text≤200[≤6]}
+```
+
+```keys show
+{kind: "page"} | {kind: "app", run: text≤300, port?: int 1024-65535} | {kind: "terminal", run: text≤300}
 ```
 
 ```json
@@ -187,7 +193,13 @@ Post it after the owner solidifies, then wait for "Build this". Each pick is som
  "picks":[{"text":"Resize in a worker","from":{"item":"spread-1","sub":"approach:b"}},{"text":"The small size first","from":{"item":"circle-1"}}],
  "leftOut":[{"text":"No image cache yet","why":"the store serves the sizes for now"}],
  "proof":["20 uploads at once: every tile fills in within 10 s.","A failed resize is tried 3 times, then shows the original."],
- "parts":["upload","jobs","resizer","try-it"],"check":"make test","walk":"one-photo"}
+ "parts":["upload","jobs","resizer","try-it"],"check":"make test","setup":"pip install -r requirements.txt","show":{"kind":"app","run":"make serve"},"walk":"one-photo"}
+```
+
+The three kinds of `show`, one of each. `page`: an `index.html` that stands alone, opened as files. `app`: a command that serves it; it must read `PORT` and listen on 127.0.0.1, or give the one `port` it always uses. `terminal`: a command typed into a terminal in the built copy, for a command line tool or a library.
+
+```json show
+[{"kind":"page"},{"kind":"app","run":"npm start"},{"kind":"terminal","run":"python -m calc 7 x 8"}]
 ```
 
 ## choice: a decision you made alone

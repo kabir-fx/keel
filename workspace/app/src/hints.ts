@@ -30,6 +30,8 @@ export interface HintFacts {
   readonly lassoed: number;
   /** A blueprint is in view whose idea is solid and not built: it waits for "Build this". */
   readonly toBuild: boolean;
+  /** The idea in view is built and not in the home branch yet: it waits to be tried and approved. */
+  readonly toTry: boolean;
   readonly tool: ToolId;
   /** Nothing is on the board yet. */
   readonly empty: boolean;
@@ -55,7 +57,7 @@ export const TOOL_LINES: Partial<Record<ToolId, string>> = {
   note: 'Click where the note goes, then type.',
   pin: 'Click a place inside a picture.',
   lasso: 'Draw a loop round the pictures you pick.',
-  eraser: 'Drag across a mark of yours to take it off.',
+  eraser: 'Drag across a mark of yours, or a picture, to take it off.',
 };
 
 /** The words for an empty board. They say the agent is there only when it is. */
@@ -103,6 +105,11 @@ export const HINTS: readonly HintRule[] = [
     says: () => 'Read the blueprint, then press Build this.',
   },
   {
+    when: 'the idea in view is built and not approved',
+    applies: (f) => f.toTry,
+    says: () => 'Press Try it to run what was built. When it does what you asked, approve it.',
+  },
+  {
     when: 'a tool is in hand',
     applies: (f) => TOOL_LINES[f.tool] !== undefined,
     says: (f) => TOOL_LINES[f.tool] ?? '',
@@ -118,6 +125,12 @@ export const HINTS: readonly HintRule[] = [
 export function hintFor(facts: HintFacts, mac: boolean = onMac()): string | undefined {
   const rule = HINTS.find((r) => r.applies(facts));
   return rule?.says(facts, (name) => keyWords(name, mac));
+}
+
+/** True when the chapter in view is built and not merged: the owner has a build to try and approve. */
+export function buildWaits(state: BoardState, chapter: Id | undefined): boolean {
+  const c = chapter ? state.chapters[chapter] : undefined;
+  return c?.state === 'built' && !c.merged;
 }
 
 /** True when the chapter in view is solid and holds a blueprint: the owner has a build to agree to. */

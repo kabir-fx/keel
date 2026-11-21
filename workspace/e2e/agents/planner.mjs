@@ -8,6 +8,14 @@
 //   build track and one check command;
 // - "Build this": a card that says the owner can leave;
 // - Pause, Resume and anything else: an answer that says it heard.
+//
+// Each idea gets its own model: the first idea's parts are `door`, `queue`, `loop` and
+// `reply`; a later idea's carry its number, `2-door`. Three settings come from the server's
+// environment, so a test that starts the server can set them:
+//
+// - KEEL_E2E_SHOW: the blueprint's `show`, as JSON, such as {"kind":"app","run":"node app.mjs"};
+// - KEEL_E2E_SETUP: the blueprint's `setup` command;
+// - KEEL_E2E_PLANNER_WAIT_MS: how long it thinks before it draws a model.
 
 const LANES = [
   { id: 'api', name: 'API thread', note: 'asyncio' },
@@ -31,6 +39,15 @@ const EDGES = [
 /** The check the blueprint shows. The builder runs it in its own copy after every commit. */
 export const CHECK = 'test -s parts.txt';
 
+/** The ideas it drew a model for, in order: the prefix of each one's parts. */
+const drawn = new Map();
+const prefixOf = (chapter) => {
+  if (!drawn.has(chapter)) drawn.set(chapter, drawn.size === 0 ? '' : `${drawn.size + 1}-`);
+  return drawn.get(chapter);
+};
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 const ACTS = new Set(['solidify', 'build.start', 'build.pause', 'build.resume', 'choice.pick', 'ask']);
 
 export async function answer(wake, post) {
@@ -41,18 +58,23 @@ export async function answer(wake, post) {
   const acts = open.filter((o) => ACTS.has(o.kind));
   const rest = open.filter((o) => !notes.includes(o) && !acts.includes(o));
   const drafts = [];
-  const hasModel = d.model.parts.some((p) => p.id === 'door');
+  const noteChapter = notes.find((n) => n.chapter)?.chapter ?? chapter;
+  const hasModel = drawn.has(noteChapter);
 
-  if (notes.length > 0 && chapter) {
+  if (notes.length > 0 && noteChapter) {
+    const chapter = noteChapter;
     const answers = notes.map((n) => n.id);
     if (!hasModel) {
+      const pre = prefixOf(chapter);
+      const wait = Number(process.env.KEEL_E2E_PLANNER_WAIT_MS ?? 0);
+      if (wait > 0) await sleep(wait);
       drafts.push({
         type: 'model.patch',
         chapter,
         ops: [
           ...LANES.map((lane) => ({ op: 'lane.set', lane })),
-          ...PARTS.map((part) => ({ op: 'part.set', part })),
-          ...EDGES.map((edge) => ({ op: 'edge.set', edge })),
+          ...PARTS.map((part) => ({ op: 'part.set', part: { ...part, id: pre + part.id, name: pre ? `${part.name} ${pre.slice(0, -1)}` : part.name } })),
+          ...EDGES.map((edge) => ({ op: 'edge.set', edge: { ...edge, from: pre + edge.from, to: pre + edge.to } })),
         ],
       });
       drafts.push({
@@ -98,6 +120,8 @@ export async function answer(wake, post) {
             proof: ['parts.txt lists every part, one commit each'],
             parts: parts.length > 0 ? parts : PARTS.map((p) => p.id),
             check: CHECK,
+            ...(process.env.KEEL_E2E_SETUP ? { setup: process.env.KEEL_E2E_SETUP } : {}),
+            ...(process.env.KEEL_E2E_SHOW ? { show: JSON.parse(process.env.KEEL_E2E_SHOW) } : {}),
           },
           answers: [a.id],
         },

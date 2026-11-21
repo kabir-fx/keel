@@ -95,7 +95,8 @@ export interface Digest {
   reads: Array<{ answers: Id[]; read: string }>;
   /** What the owner holds in a lasso now, not yet solidified. It asks nothing by itself. */
   selected: Array<{ id: Id; items: Id[] }>;
-  chapters: Array<{ id: Id; title: string; state: ChapterState }>;
+  /** `merged`: the home branch has it. A built chapter without it waits for the owner to try and approve it. */
+  chapters: Array<{ id: Id; canvas: Id; title: string; state: ChapterState; merged?: boolean }>;
 }
 
 export interface DigestBuild {
@@ -194,7 +195,7 @@ export function digest(state: BoardState, opts: DigestOptions = {}): Digest {
     selected: heldLassos(state).map((l) => ({ id: l.id, items: l.items })),
     chapters: state.chapterOrder.flatMap((id) => {
       const c = state.chapters[id];
-      return c ? [{ id: c.id, title: c.title, state: c.state }] : [];
+      return c ? [{ id: c.id, canvas: c.canvas, title: c.title, state: c.state, ...(c.merged ? { merged: true } : {}) }] : [];
     }),
   };
 
@@ -584,7 +585,9 @@ export function renderDigest(d: Digest): string {
   }
 
   if (d.chapters.length > 1) {
-    lines.push(`CHAPTERS ${d.chapters.map((c) => `${c.id} [${c.state}]`).join(' · ')}`);
+    const stateOf = (c: Digest['chapters'][number]) => (c.state !== 'built' ? c.state : c.merged ? 'built, merged' : 'built, not approved yet: not in the home branch');
+    // Each canvas is a blank place of its own, with its own branch: ideas on one canvas share it.
+    lines.push(`CHAPTERS ${d.chapters.map((c) => `${c.id} on canvas ${c.canvas} [${stateOf(c)}]`).join(' · ')}`);
   }
   return lines.join('\n');
 }

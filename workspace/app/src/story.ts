@@ -1,11 +1,9 @@
-import type { BoardState, Box, ChapterState, Id, NoteItem } from '@keel/protocol';
+import type { BoardState, ChapterState, Id } from '@keel/protocol';
 import { alreadyThere, liveParts, pictureTitle } from '@keel/protocol';
-import type { Draft } from './drafts';
-import { chapterId, titleFromText } from './drafts';
 
 /**
  * The Story (storyboard screen 7), as plain data: every idea as a chapter with its moments,
- * the project's progress, and where the next idea starts on the board.
+ * and the project's progress.
  */
 
 export interface StoryMoment {
@@ -141,37 +139,6 @@ export function projectProgress(state: BoardState): { parts: Progress; already: 
     already: parts.length - ours.length,
     chapters: { built: chapters.filter((c) => c!.state === 'built').length, total: chapters.length },
   };
-}
-
-/* ------------------------------------------------------------ the next idea */
-
-/** How far beyond everything on the board the next idea starts, in world units. */
-export const NEXT_GAP = 240;
-
-/**
- * Where the next idea's note goes: to the right of everything on the board, level with the top
- * of it, so it starts on bare ground and the agent's pictures for it have room below.
- */
-export function nextIdeaSpot(boxes: Iterable<Box>, size: readonly [number, number]): Box {
-  let right = -Infinity;
-  let top = Infinity;
-  for (const [x, y, w] of boxes) {
-    right = Math.max(right, x + w);
-    top = Math.min(top, y);
-  }
-  if (!Number.isFinite(right)) return [0, 0, size[0], size[1]];
-  return [Math.round(right + NEXT_GAP), Math.round(top), size[0], size[1]];
-}
-
-/** The next idea: a new chapter, titled from the note, and the owner's note in it. */
-export function nextIdeaDrafts(state: BoardState, note: { id: Id; text: string; box: Box }): Draft[] {
-  const title = titleFromText(note.text);
-  const chapter = chapterId(title, state);
-  const item: NoteItem = { id: note.id, kind: 'note', box: note.box.map((n) => Math.round(n)) as unknown as Box, text: note.text };
-  return [
-    { type: 'chapter.open', chapter, title },
-    { type: 'item.add', chapter, item },
-  ];
 }
 
 /** "14:02" today, "16 Nov 14:02" on another day. */

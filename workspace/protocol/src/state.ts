@@ -4,14 +4,28 @@ import { seqOf, subId, subKind } from './ids';
 import type { Item, MarkItem, PictureItem } from './items';
 import { isMark, targetsOf } from './items';
 import type { Check, Edge, Lane, Part, Walk } from './model';
+import type { ShowPlan } from './pictures';
 
 /** The state of a board: the log, reduced. Plain data, so it can be sent and compared. */
 export interface BoardState {
   name: string;
   /** The number of the last event applied. The next event is `e${seq + 1}`. */
   seq: number;
+  /**
+   * The canvases of the board, oldest first. A canvas is a blank place for an idea, and it
+   * owns a branch: every idea on it is built there. Every chapter is on one canvas.
+   */
+  canvases: Record<Id, Canvas>;
+  canvasOrder: Id[];
   chapters: Record<Id, Chapter>;
   chapterOrder: Id[];
+  /**
+   * The canvases the owner deleted, and the ideas that were on them, as they were. They are
+   * in none of the maps above, so nothing that walks the board meets one. An id is still
+   * used once.
+   */
+  removedCanvases: Record<Id, RemovedCanvas>;
+  removedChapters: Record<Id, RemovedChapter>;
   items: Record<Id, ItemState>;
   itemOrder: Id[];
   model: ModelState;
@@ -43,9 +57,23 @@ export interface Read {
 
 export type ChapterState = 'idea' | 'solid' | 'building' | 'built';
 
+/** A blank place for an idea, with a branch of its own. */
+export interface Canvas {
+  id: Id;
+  /** A title of its own. Left out, the canvas is called by its first idea: see `canvasTitle`. */
+  title?: string;
+  openedAt: string;
+}
+
+export interface RemovedCanvas extends Canvas {
+  removedAt: string;
+}
+
 /** One idea, from its first note to built. */
 export interface Chapter {
   id: Id;
+  /** The canvas it is on. Its build goes onto that canvas's branch. */
+  canvas: Id;
   title: string;
   state: ChapterState;
   paused: boolean;
@@ -56,11 +84,30 @@ export interface Chapter {
   blueprint?: Id;
   /** The check command the owner agreed to with "Build this". The only command the build's tools run on their own. */
   check?: string;
+  /** The setup command the owner agreed to with "Build this", when the blueprint named one. */
+  setup?: string;
+  /** How the owner tries the result, as the blueprint said it when "Build this" was pressed. */
+  show?: ShowPlan;
   openedAt: string;
   solidAt?: string;
   /** The number of the event that first made the chapter solid. What the owner says on a part after it reaches the builder. */
   solidSeq?: number;
   builtAt?: string;
+  /**
+   * The app this chapter is tried as started and answered once, for the parts as they are
+   * built now. A chapter with an `app` show is built only with this. Gone when a part on
+   * the track is not built, and at the next "Build this".
+   */
+  proved?: true;
+  /**
+   * The home branch has this chapter's work: the commit the home branch was moved to, and
+   * its name. Only on a built chapter. A chapter that builds again loses it.
+   */
+  merged?: { commit: string; into: string; at: string };
+}
+
+export interface RemovedChapter extends Chapter {
+  removedAt: string;
 }
 
 export interface ItemState {
@@ -138,8 +185,12 @@ export function emptyState(): BoardState {
   return {
     name: '',
     seq: 0,
+    canvases: {},
+    canvasOrder: [],
     chapters: {},
     chapterOrder: [],
+    removedCanvases: {},
+    removedChapters: {},
     items: {},
     itemOrder: [],
     model: { lanes: [], parts: {}, partOrder: [], edges: [], walks: {}, walkOrder: [] },
@@ -445,4 +496,96 @@ export function currentChapter(state: BoardState): Id | undefined {
     if (id && state.chapters[id]?.state !== 'built') return id;
   }
   return state.chapterOrder[state.chapterOrder.length - 1];
+}
+
+/* -------------------------------------------------------------- canvases */
+
+/** The chapters on a canvas, oldest first. */
+export function chaptersOn(state: BoardState, canvas: Id): Chapter[] {
+  const out: Chapter[] = [];
+  for (const id of state.chapterOrder) {
+    const c = state.chapters[id];
+    if (c && c.canvas === canvas) out.push(c);
+  }
+  return out;
+}
+
+/** What a canvas is called: its own title, else its first idea's, else nothing yet. */
+export function canvasTitle(state: BoardState, canvas: Id): string {
+  const own = Object.hasOwn(state.canvases, canvas) ? state.canvases[canvas]?.title : undefined;
+  return own ?? chaptersOn(state, canvas)[0]?.title ?? '';
+}
+
+/**
+ * The chapter the owner is working in on one canvas: the one with the newest open thing
+ * there, else the newest one there that is not built. Undefined on a blank canvas, and on
+ * one where every idea is built: the next mark there opens a new idea, on the same canvas.
+ */
+export function chapterInWorkOn(state: BoardState, canvas: Id): Id | undefined {
+  const open = openThings(state);
+  for (let i = open.length - 1; i >= 0; i--) {
+    const c = open[i]?.chapter;
+    if (c && state.chapters[c]?.canvas === canvas && state.chapters[c]!.state !== 'built') return c;
+  }
+  const here = chaptersOn(state, canvas);
+  for (let i = here.length - 1; i >= 0; i--) if (here[i]!.state !== 'built') return here[i]!.id;
+  return undefined;
+}
+
+/** The parts on a chapter's track that are to be built: not dropped, not put off. */
+export function dueParts(state: BoardState, chapter: Chapter): Id[] {
+  return chapter.track.filter((id) => {
+    const p = state.model.parts[id];
+    return p !== undefined && !p.dropped && p.state !== 'later';
+  });
+}
+
+/**
+ * True while a building chapter has every part built and its app has not answered yet: the
+ * build's last step. The builder starts the app once; when it does not answer, the build
+ * stops here, and going on with the build tries again.
+ */
+export function awaitsProof(state: BoardState, chapter: Id): boolean {
+  const c = state.chapters[chapter];
+  if (!c || c.state !== 'building' || c.show?.kind !== 'app' || c.proved) return false;
+  const due = dueParts(state, c);
+  return due.length > 0 && due.every((id) => state.model.parts[id]?.state === 'built');
+}
+
+/**
+ * How a canvas's branch stands, from the board's side. `waiting`: the built ideas the home
+ * branch does not have yet, which an approval would merge. `building`: the ideas still
+ * building there. They share the branch, so nothing on it is approved while one builds.
+ */
+export function canvasBuilds(state: BoardState, canvas: Id): { waiting: Chapter[]; building: Chapter[]; merged: Chapter[] } {
+  const here = chaptersOn(state, canvas);
+  return {
+    waiting: here.filter((c) => c.state === 'built' && !c.merged),
+    building: here.filter((c) => c.state === 'building'),
+    merged: here.filter((c) => c.state === 'built' && c.merged !== undefined),
+  };
+}
+
+/**
+ * The board as one canvas shows it: only that canvas's chapters, and only their items, feed
+ * lines and moments. The model is the project's and stays whole. What waits on another
+ * canvas is not in it, so a count taken from it is that canvas's own. An act that names no
+ * chapter, such as a tap on a part, is asked of the whole board and stays in every canvas.
+ */
+export function scopeToCanvas(state: BoardState, canvas: Id): BoardState {
+  const mine = (chapter: Id | undefined) => chapter !== undefined && state.chapters[chapter]?.canvas === canvas;
+  const chapterOrder = state.chapterOrder.filter((id) => mine(id));
+  const itemOrder = state.itemOrder.filter((id) => mine(state.items[id]?.chapter));
+  return {
+    ...state,
+    canvases: Object.hasOwn(state.canvases, canvas) ? { [canvas]: state.canvases[canvas]! } : {},
+    canvasOrder: state.canvasOrder.filter((id) => id === canvas),
+    chapters: Object.fromEntries(chapterOrder.map((id) => [id, state.chapters[id]!])),
+    chapterOrder,
+    items: Object.fromEntries(itemOrder.map((id) => [id, state.items[id]!])),
+    itemOrder,
+    acts: Object.fromEntries(Object.entries(state.acts).filter(([, a]) => a.chapter === undefined || mine(a.chapter))),
+    feed: state.feed.filter((f) => mine(f.chapter)),
+    moments: state.moments.filter((m) => mine(m.chapter)),
+  };
 }

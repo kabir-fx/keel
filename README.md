@@ -1,6 +1,6 @@
 # Keel
 
-Keel is a board where you work out an idea with an agent, solidify it, and watch it get built. The board is a canvas in your browser, one per repository. You write, draw, drop files in, or talk. The agent is on the board with you, and it answers in pictures. When the idea is right, you solidify it. Then a builder writes the code in the background, and the same pictures fill in as it goes.
+Keel is a board where you work out an idea with an agent, solidify it, watch it get built, try it, and approve it into your main branch. The board is a canvas in your browser, one per repository. You write, draw, drop files in, or talk. The agent is on the board with you, and it answers in pictures. When the idea is right, you solidify it. Then a builder writes the code in the background, and the same pictures fill in as it goes.
 
 It runs on your machine, beside Claude Code, on your own Claude Code sign-in. It is early work: it has run on recorded boards and toy repositories, not yet in daily use.
 
@@ -9,12 +9,21 @@ Keel also holds an earlier way of working: rules, skills, review agents and hook
 ## The loop
 
 1. **Ideate.** You mark the board: a note, a sketch, a circle, a cross, a dropped file, a spoken remark. There is no send button: when you pause, the agent answers in pictures. It shows how it read you, what the repository already has, and two to four approaches side by side. Each approach names its risk, and the agent gives its lean. You circle what you like and cross out the rest.
-2. **Solidify.** You lasso the pictures you pick and press Solidify. The agent reads the idea back as one picture, the blueprint. It lists your picks, where each came from, and what was left out. It says how you will know it works, and names the parts to build and one check command. Nothing is built before this step.
-3. **Watch.** You press "Build this" on the blueprint. A builder writes the code in its own copy of the repository, one commit per part. A part fills in only when the agreed check passes after its commit. A panel shows the build track, a feed of what the builder did, and a Pause button. You can keep marking, or leave: the board can tell you with a notification when something needs you. When every part is built and the result is a page a browser can open by itself, the board opens it in your browser, and the panel keeps a "See it" button for it.
+2. **Solidify.** You lasso the pictures you pick and press Solidify. The agent reads the idea back as one picture, the blueprint. It lists your picks, where each came from, and what was left out. It says how you will know it works, and names the parts to build and one check command. It names how you will try the result: a page, an app or a terminal, with its command. It may name one setup command, such as `npm ci`, that makes a fresh copy ready to run. Beside "Build this" it shows these commands, and where the build starts: "This build starts from main at abc1234, on a branch of its own." Nothing is built before this step.
+3. **Watch.** You press "Build this" on the blueprint. A builder writes the code in its own copy of the repository, on the canvas's branch, one commit per part. It runs the setup once first. A part fills in only when the agreed check passes after its commit. A panel shows the build track, a feed of what the builder did, and a Pause button. You can keep marking, or leave: the board can tell you with a notification when something needs you.
+4. **Try it.** When every part is built and the builder's run has ended, the panel offers "Try it". An app counts as built only once the builder has started it in its copy, as you will try it, and it answered: until then the panel says the builder is starting it. When it does not answer, the build stops with what it printed, and "Try again" runs that step again. "Try it" opens the try room, where the board runs what the blueprint named, in the build's own copy, only when you press Start ([0013](docs/adr/0013-a-finished-build-is-run-to-be-tried.md)). An app runs with `PORT` set and shows in a frame on the board, with a link that opens it in a tab, and what it printed. A terminal opens in the copy with the command typed in, and you go on from there. A page opens as files. Beside it is the blueprint's "How you will know it works", as a list you tick. When the app does not start, the room shows why and the last lines it printed. Esc closes the room, except inside the terminal.
+5. **Approve.** "Approve: merge into main" merges the canvas's branch into your main branch, on your machine ([0014](docs/adr/0014-the-board-keeps-the-home-branch.md)). Main moves by fast-forward only, to a commit the agreed check passed on. When main moved since the build began, the builder joins the new commits into the branch first and runs the check again. When both changed the same lines, it joins them, and the board asks you to try it again and approve again. When your uncommitted changes are in the way, the board names the files and moves nothing. Approve waits until the builder's run on the canvas has ended, so main never takes a build without its last commit. After the merge, the branch and the copy are taken away. "Push main to origin" is a second press, and is never forced. When origin has commits that main here does not have, it does not take the push: the board says so in one sentence, with git's own line folded under it, and the home line says the two have both moved. One `git pull` in the board's folder joins them; the board does not do it for you.
 
 A mark on a decided part reopens that part only. The build waits until you decide that part again, and then it builds the change. Then the loop starts again from step 1.
 
-The Story is the second view of the board. It lists every idea as a chapter, newest first, with its moments and how far it is built. A part the repository already had shows as "already there", apart from the parts built here.
+The Story is the second view of the board. A board has many canvases. A canvas is a blank place for an idea, and it owns a branch, `board/<its title>`. The Board view shows one canvas at a time, and the pill names it. The Story lists every canvas, newest first: each idea on it in words (idea, building part 3 of 6, built: try it, merged into main), its branch, and what can be done now: Open, Try it, Approve and Delete. A part the repository already had shows as "already there", apart from the parts built here.
+
+- **Start a new canvas** in the Story for an idea of its own, on a branch of its own. A first note on it starts the idea.
+- **A second idea on one canvas.** A note on a canvas where everything is built starts another idea there, on the same branch. Ideas on one canvas are approved together: the press names them all, and asks first. Approve waits while one of them still builds.
+- **The next idea while one waits.** A build on another canvas starts from main, so it does not have an idea that is built and not approved yet. The blueprint says so, with a link to try that idea first.
+- **Delete** takes a canvas off the board, with every idea on it, its build and its show. Its branch and copy go, with every commit main does not have. The confirmation names each idea and counts those commits. What was merged stays in main. The log keeps every line.
+- **The home line** on top of the Story says how main stands with its remote: level, commits to push (with Push), behind with your files in the way, diverged (run `git pull`, then look again), not answering, or following no remote. When main needs you, the Board view says so once too, with the way to the Story.
+- When the agent draws on another canvas, or a build there is done or needs you, a notice says so, and one press goes there.
 
 ## Quick start
 
@@ -38,7 +47,7 @@ keel-board
 
 `./install.sh` builds the board in `workspace/` and links the `keel-board` command into `~/.local/bin` (or `$KEEL_BIN_DIR`). It says so when that folder is not on your PATH. It also installs the rules and skills below. After a `git pull`, run it again: it rebuilds the board.
 
-`keel-board` makes `.keel/board/` in the folder, starts the board server, and opens the board in your browser. Open it in a folder for the project, not in your home folder: the agent can read the files in the folder a board is opened in, so the command refuses your home folder. It prints an address that works once, for five minutes. The page trades it for a key that lasts until the server stops, and keeps that key for the address. For a second tab, or after a restart, `keel-board link` prints a fresh address. The server runs until you press Ctrl-C or run `keel-board stop`. The agent shows as present in the pill at the top right.
+`keel-board` makes `.keel/board/` in the folder, starts the board server, and opens the board in your browser. Before it loads the board, it fetches the remote your main branch follows, and fast-forwards main when the remote is ahead and main has nothing of its own. It never asks for a password, and it holds the board up a few seconds at most. When your changes are in the way, the two have diverged, or the remote does not answer, the board says so and builds from main as it is here. Open it in a folder for the project, not in your home folder: the agent can read the files in the folder a board is opened in, so the command refuses your home folder. It prints an address that works once, for five minutes. The page trades it for a key that lasts until the server stops, and keeps that key for the address. For a second tab, or after a restart, `keel-board link` prints a fresh address. The server runs until you press Ctrl-C or run `keel-board stop`. The agent shows as present in the pill at the top right.
 
 The folder may be new and empty, and it need not be a git repository. When you press "Build this" there, the builder makes it a repository and starts its branch from nothing ([0011](docs/adr/0011-an-empty-folder-is-built-from-nothing.md)). A folder that holds files of yours and no commit is different: the build stops and asks you to commit them first, because the builder does not commit your files for you.
 
@@ -60,15 +69,15 @@ Options for `open`: `--link none` runs no agent. `--link-opt model=opus` and `--
 
 | Tool | Key | What it does |
 |---|---|---|
-| Select | V | Pick, move and resize items. Delete takes the selected item off, an agent's picture too. Nothing is deleted from the log, and undo puts it back. |
+| Select | S | Pick, move and resize items. A click anywhere inside a box picks the box, unless it lands on something the box was drawn round. Delete takes the selected item off, an agent's picture too. Nothing is deleted from the log, and undo puts it back. |
 | Pan | H, or hold Space | Move around the board |
 | Pen | P | Draw by hand. A circle on a picture picks it. A cross drops it. A sketch is a request too. |
-| Box | B | Draw a box |
+| Box | B | Draw a box, then type its label inside it. The box grows down to fit the words. |
 | Arrow | A | Draw an arrow. An end that lands on a thing, or stops just short of one it points at, holds on to that thing when either moves. |
 | Note | N | Write a note. When you change its words, the agent reads it again. |
 | Pin | I | Pin one place inside an item, such as one step of a picture |
 | Lasso | L | Hold several items together. Solidify takes what the lasso holds. A lasso asks the agent nothing. |
-| Erase | E | Drag across your own ink, boxes, arrows and pins to take them off |
+| Erase | E | Drag across your own ink, boxes, arrows and pins, or one of the agent's pictures, to take it off. A sweep that reaches your drawing takes only the drawing, never the picture under it. Undo brings back what a sweep took. |
 | Drop in | D | Add a file, a picture or a link. A file is kept in `.keel/board/assets/`, up to 20 MB. |
 | Talk | hold T | Speak a remark. It needs a browser with speech recognition, such as Chrome or Safari. |
 | Solidify | Shift+S | Turn the pictures in your lasso into the decided idea |
@@ -104,7 +113,11 @@ A log read from disk grants nothing ([0009](docs/adr/0009-a-log-read-from-disk-g
 
 When the log file is replaced while the board runs, as a pull or a checkout does, the board stops saving and says why. Stop it and open it again.
 
-A finished build is shown from an address of its own ([0012](docs/adr/0012-a-finished-build-is-shown-from-an-address-of-its-own.md)). The page shown is code a model wrote, so the server never serves it from the board's address, where your token is. It serves a copy of the built files from a second port on 127.0.0.1, at an address that holds a key made new for each start. The board refuses every request that comes from that address. The server runs no command to show a build: a build that is not a page a browser can open by itself is not shown, and the feed names the branch as before. The address is told to your page only, never to the agent, and it is never written to the log. With `--no-browser`, nothing opens by itself, and "See it" on the build panel opens it.
+A finished page is shown from an address of its own ([0012](docs/adr/0012-a-finished-build-is-shown-from-an-address-of-its-own.md)). The page shown is code a model wrote, so the server never serves it from the board's address, where your token is. It serves a copy of the built files from a second port on 127.0.0.1, at an address that holds a key made new for each start. Only the board's own page may frame it. The board refuses every request that comes from that address. The address is told to your page only, never to the agent, and it is never written to the log. With `--no-browser`, nothing opens by itself, and "Try it" on the build panel opens it.
+
+A build is run to be tried, on your press only ([0013](docs/adr/0013-a-finished-build-is-run-to-be-tried.md)). The press carries the command the page showed, and the server runs it only when it is the idea's own command, word for word, as you agreed to it with "Build this". It runs in the build's copy, boxed in like the check, with two differences: it has the network, and an app may listen on 127.0.0.1. An app is on a port of its own, so it is another origin than the board and cannot read your token. A show stops when you stop it, when the idea is approved, deleted or built again, and when the server stops. Its address and its state are never written to the log.
+
+The server moves your main branch only as record [0014](docs/adr/0014-the-board-keeps-the-home-branch.md) says: by fast-forward, when the board opens and on your Approve. It never rewrites it, never stashes, commits or overwrites your uncommitted changes, and never pushes without your press. Fetching and pushing use your own git credentials. With none stored, the remote counts as not answering.
 
 **The board agent.** The server starts one headless Claude Code process and wakes it when you pause ([0003](docs/adr/0003-the-board-server-hosts-the-agent.md)). It runs on your own Claude Code sign-in: keel starts it without `ANTHROPIC_API_KEY`. By default it uses Sonnet at low effort.
 
@@ -118,8 +131,10 @@ What this does not cover: the deny list is a list of names. A secret under anoth
 
 **The builder.** It starts only when you press "Build this" ([0007](docs/adr/0007-the-owner-agrees-to-one-check-and-only-it-calls-a-part-built.md)). By default it uses Sonnet at medium effort.
 
-- It works in its own git worktree, on the branch `board/<chapter>`, kept outside the repository. It never touches your checkout.
-- In a folder with no commit and no file of yours, its branch starts from an empty first commit, made on no branch of yours. In a folder that is no git repository it runs `git init` first. Your own branch has no commit until you merge.
+- It works in its own git worktree, one per canvas, kept outside the repository. The canvas's branch is named from its title at its first "Build this": `board/<title>`, with `-2` when the name is taken. It starts from main as the server just read it, never from where your folder is. Every later idea on the canvas is built on the same branch. It never touches your checkout.
+- In a folder with no commit and no file of yours, its branch starts from an empty first commit, made on no branch of yours. In a folder that is no git repository it runs `git init` first. Your own branch has no commit until you approve.
+- It runs the setup you agreed to once, in the worktree, before the first part, with the network on. It may write to the worktree, a temp folder and the usual package caches (`~/.npm`, `~/.cache`, `~/Library/Caches` and the like). For an app, the build is done only when the app has started and answered on its port once.
+- The worktree stays when the build ends, so Try it runs in it. It is made again from the branch when it is gone.
 - Its file tools write inside its folder in that worktree, and nowhere else.
 - Its git is told where the worktree's own git folder is, and runs no hook. The code a check runs can write in the worktree, so nothing it leaves there is what git obeys.
 - Its shell runs `git status`, `diff`, `log`, `show`, `add`, `commit`, `rev-parse` and `ls-files`, and the commands you add with `--link-opt builder-allow="npm test;npm run lint"`. Anything else is denied and reported on the board. It reads files with its file tools, not inside `.git/` and not files with secret names.
@@ -127,9 +142,9 @@ What this does not cover: the deny list is a list of names. A secret under anoth
 - The check runs code the builder wrote, so it runs in a sandbox: `sandbox-exec` on macOS, `bwrap` on Linux. It has no network. It writes only inside the worktree and a temp folder of its own. It cannot read keel's private folder, `~/.ssh`, `~/.aws`, `~/.claude` and a few more key folders. Its environment is a short allow-list, not yours. Its processes are stopped when the server stops. Where the system has no sandbox, only the allow-list holds, and the feed says so.
 - It commits a brief and a decision record on its branch. It uses the repository's own folders for them, else `docs/briefs/` and `docs/adr/`. Its commits name you as the author and "Keel builder" as the committer.
 - When the build is done and it holds a page that stands alone, the builder copies the committed files into keel's private folder for the server to show. It leaves out files whose names start with a dot, files with secret names, and links.
-- Merging the branch is your act. A part may take 30 minutes, and the check 10 minutes.
+- Merging the branch is your act: Approve on the board. A part may take 30 minutes, and the check 10 minutes.
 
-By pressing "Build this", you agree to run that one check command in the builder's worktree. The check is the one the blueprint shows, word for word. The server keeps that agreement outside the repository: the chapter, the check and the parts. A build whose check or parts differ from what you agreed to does not run. When the log changes outside the board, every agreement is dropped, and you press Resume to agree again.
+By pressing "Build this", you agree to run that one check command in the builder's worktree, the setup command, and the command that shows the build when you press Try it. They are the ones the blueprint shows, word for word. The server keeps that agreement outside the repository: the chapter, the commands and the parts. A build whose check or parts differ from what you agreed to does not run. When the log changes outside the board, every agreement is dropped, and you press Resume to agree again.
 
 What this does not cover:
 
@@ -137,6 +152,11 @@ What this does not cover:
 - The Mac sandbox also stops the check from asking the system to open a file, to script another program or to start a job. That is a list, not a wall.
 - On a system with no sandbox, the check runs as you, with only its environment cut down.
 - The builder is a model that reads your repository. The fence limits what it can do, not what it can be told.
+- An app is told to listen on 127.0.0.1, and the macOS sandbox cannot hold it to that: an app that listens on every address can be reached from the network you are on while it runs.
+- Where the system has no sandbox, as on Windows, Try it runs the command with a short environment and no box, and the try room says so.
+- An app that needs a secret the repository does not hold, such as an `.env` file, will not start in the build's copy. The try room shows what it printed.
+- The terminal needs the `script` command, which macOS and most Linux systems have. Where it is missing, the command runs on plain pipes: line tools work, full-screen ones do not. A terminal has no box against you: what you type there is yours to run, inside the box.
+- Deleting a canvas with unmerged work loses its commits. Git keeps them for a while by their hashes, and the board does not promise that.
 - The page a finished build shows runs in your browser like any page you open. It cannot act on the board, but it can reach the network, and every page the board shows shares one address, so one can read what another kept in the browser.
 
 **Your own Claude Code session.** The installer registers a guard hook. It denies a Write or an Edit inside `.keel/board/`, and a shell command that writes there. It denies any read or write of keel's private folder, `~/.keel/boards/`, which holds the running server's tokens and the builds you agreed to. It reads the words of a command, so it stops mistakes, not an attacker.
@@ -149,7 +169,7 @@ What this does not cover:
 | Snapshots and dropped files | `.keel/board/assets/` | The log names them. Large files need not be committed. |
 | That a server is up: its process and its port, no token | `.keel/board/server.json` | No. `.keel/board/.gitignore` keeps it out. |
 | The board's key, the running server's tokens, the port, the builds you agreed to, the seal of the log, which lines came from outside, the agent's session, the builder's worktrees, the copy of each finished build that is shown | `~/.keel/boards/<key>/`, or `$KEEL_STATE_DIR/boards/` | No. It is outside the repository. |
-| A build's brief and decision record | on the branch `board/<chapter>` | They arrive when you merge. |
+| A build's brief and decision record | on the canvas's branch, `board/<title>` | They arrive in main when you approve. |
 
 The port stays the same across restarts. The tokens do not: after a restart, use the tab the command opens, or run `keel-board link`. A tab from before says so.
 

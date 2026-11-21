@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { OwnerFilesError, dirtyFiles, ensureWorktree, folderFiles, gitEnv, gitOk, headOf, ownerFiles, pinEnv, samePath, worktreeGitDir } from '../src/git';
+import { BRANCH_MAX, GitError, OwnerFilesError, branchFor, branchNames, dirtyFiles, ensureWorktree, folderFiles, gitEnv, gitOk, headOf, ownerFiles, pinEnv, samePath, worktreeGitDir } from '../src/git';
 import { makeRepo, sh } from './build-board';
 
 /**
@@ -42,7 +42,7 @@ describe('the worktree\'s own git folder', () => {
     expect(await worktreeGitDir(repo, tree)).toBe(wt.gitDir);
     expect(await worktreeGitDir(repo, path.join(tmp, 'elsewhere'))).toBeUndefined();
     // Used again as it is.
-    expect(await ensureWorktree(repo, tree, 'board/x')).toEqual({ created: false, gitDir: wt.gitDir });
+    expect(await ensureWorktree(repo, tree, 'board/x')).toEqual({ created: false, gitDir: wt.gitDir, reused: true });
   });
 
   it('in a repository with no commit, starts its branch from nothing and leaves the owner\'s HEAD, index and files alone', async () => {
@@ -67,7 +67,7 @@ describe('the worktree\'s own git folder', () => {
     expect(fs.readdirSync(empty).sort()).toEqual(['.DS_Store', '.git', '.keel']);
 
     // Used again as it is, and not started from nothing again.
-    expect(await ensureWorktree(empty, tree, 'board/x')).toEqual({ created: false, gitDir: wt.gitDir });
+    expect(await ensureWorktree(empty, tree, 'board/x')).toEqual({ created: false, gitDir: wt.gitDir, reused: true });
     // Its commits come into the owner's unborn branch with a merge.
     fs.writeFileSync(path.join(tree, 'part.txt'), 'the part\n');
     const pin = { ...pinEnv(wt.gitDir, tree), GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x.invalid', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x.invalid' };
@@ -201,5 +201,44 @@ describe('the worktree\'s own git folder', () => {
       for (const k of Object.keys(process.env)) if (!(k in before)) delete process.env[k];
       Object.assign(process.env, before);
     }
+  });
+});
+
+describe('a build\'s branch', () => {
+  it('starts from the base commit it is given, never from the owner\'s HEAD', async () => {
+    const base = sh(repo, 'git', 'rev-parse', 'main');
+    // The owner's folder is on another branch, a commit ahead.
+    sh(repo, 'git', 'checkout', '--quiet', '-b', 'feat/x');
+    fs.writeFileSync(path.join(repo, 'mine.txt'), 'mine\n');
+    sh(repo, 'git', 'add', 'mine.txt');
+    sh(repo, 'git', 'commit', '--quiet', '-m', 'mine');
+    const wt = await ensureWorktree(repo, tree, 'board/an-adder', { base });
+    expect(wt).toMatchObject({ created: true, base });
+    expect(await headOf(tree, pinEnv(wt.gitDir, tree))).toBe(base);
+    expect(fs.existsSync(path.join(tree, 'mine.txt'))).toBe(false);
+    expect(sh(repo, 'git', 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feat/x');
+    // A base the repository does not have is refused, and nothing is made.
+    const err = await ensureWorktree(repo, path.join(tmp, 'other'), 'board/b', { base: 'f'.repeat(40) }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitError);
+    expect((err as Error).message).toContain('is not in this repository');
+    expect(await branchNames(repo)).not.toContain('board/b');
+  });
+
+  it('is named from the title: ASCII, at most 60 characters, and -2, -3 when taken', () => {
+    expect(branchFor('Animated typing calculator', 'c1', [])).toBe('board/animated-typing-calculator');
+    expect(branchFor('Café: crème brûlée!', 'c1', [])).toBe('board/cafe-creme-brulee');
+    expect(branchFor('计算器', 'calc', [])).toBe('board/calc');
+    expect(branchFor('An adder', 'c1', ['board/an-adder'])).toBe('board/an-adder-2');
+    expect(branchFor('An adder', 'c1', ['board/an-adder', 'board/an-adder-2'])).toBe('board/an-adder-3');
+    // A branch under the name takes it too: git keeps a ref and a folder of refs apart.
+    expect(branchFor('An adder', 'c1', ['board/an-adder/old'])).toBe('board/an-adder-2');
+    const long = branchFor('a very long title '.repeat(10), 'c1', []);
+    expect(long.length).toBeLessThanOrEqual(BRANCH_MAX);
+    expect(long).toMatch(/^board\/[a-z0-9-]+[a-z0-9]$/);
+    const taken = branchFor('a very long title '.repeat(10), 'c1', [long]);
+    expect(taken.length).toBeLessThanOrEqual(BRANCH_MAX);
+    expect(taken.endsWith('-2')).toBe(true);
+    // Every name is one git takes.
+    for (const name of [long, taken, branchFor('..lock//x', 'c1', [])]) sh(repo, 'git', 'check-ref-format', '--branch', name);
   });
 });

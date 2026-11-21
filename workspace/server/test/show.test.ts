@@ -93,7 +93,7 @@ describe('the listener for shows', () => {
     expect(sv.url('other')).toBeUndefined();
   });
 
-  it('serves a good file, with the headers on every response and no content security policy', async () => {
+  it('serves a good file, with the headers on every response, framed by no one when no board is named', async () => {
     const r = await get(`${base}/index.html`);
     expect(r.status).toBe(200);
     expect(r.body).toBe('<!doctype html><h1>Built</h1>');
@@ -104,9 +104,9 @@ describe('the listener for shows', () => {
         'cache-control': 'no-store',
         'referrer-policy': 'no-referrer',
         'cross-origin-resource-policy': 'same-origin',
-        'x-frame-options': 'DENY',
+        'content-security-policy': "frame-ancestors 'none'",
       });
-      expect(res.headers['content-security-policy']).toBeUndefined();
+      expect(res.headers['x-frame-options']).toBeUndefined();
     }
   });
 

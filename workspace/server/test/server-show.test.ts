@@ -94,6 +94,16 @@ async function buildAll(s: RunningServer, fake: Fake, result: Record<string, unk
   await until(() => !s.builds.busy);
 }
 
+/** The address of the page a finished build shows, as the owner's page hears it. */
+const pageUrl = (s: RunningServer): string | undefined => {
+  const show = s.shows()[CH];
+  return show?.kind === 'page' ? show.url : undefined;
+};
+const pageIn = (m: ServerMessage): string | undefined => {
+  const show = m.t === 'works' ? m.shows[CH] : undefined;
+  return show?.kind === 'page' ? show.url : undefined;
+};
+
 const feedTexts = (s: RunningServer) => s.board.state.feed.filter((f) => f.by === 'system' && f.kind === 'update').map((f) => f.text);
 const settle = () => new Promise((r) => setTimeout(r, 50));
 const connect = async (s: RunningServer, token: string, headers: Record<string, string> = {}) => {
@@ -115,7 +125,7 @@ describe('a finished build that has something to show', () => {
     await buildAll(s, fake, { outcome: 'done', show: { dir, page: 'index.html' } });
     await until(() => feedTexts(s).length === 1);
 
-    const url = s.shows()[CH]!;
+    const url = pageUrl(s)!;
     const show = new URL(url);
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[\w-]{32}\/first-idea\/index\.html$/);
     expect(Number(show.port)).not.toBe(s.port);
@@ -125,10 +135,10 @@ describe('a finished build that has something to show', () => {
     expect(page.body).toBe('<!doctype html><h1>Built</h1>');
 
     // The owner's page hears it over the socket, and asks for it with the board's info.
-    expect(await owner.next((m) => m.t === 'shows')).toEqual({ t: 'shows', shows: { [CH]: url } });
-    expect((await call(s.origin, s.tokens.owner, ROUTES.board)).body.shows).toEqual({ [CH]: url });
+    expect(await owner.next((m) => pageIn(m) !== undefined)).toEqual({ t: 'works', works: {}, shows: { [CH]: { kind: 'page', url } } });
+    expect((await call(s.origin, s.tokens.owner, ROUTES.board)).body.shows).toEqual({ [CH]: { kind: 'page', url } });
     const late = await connect(s, s.tokens.owner);
-    expect(late.messages[0]).toMatchObject({ t: 'init', shows: { [CH]: url } });
+    expect(late.messages[0]).toMatchObject({ t: 'init', shows: { [CH]: { kind: 'page', url } } });
 
     // The agent and the system never learn it.
     for (const token of [s.tokens.agent, s.tokens.system]) {
@@ -138,7 +148,7 @@ describe('a finished build that has something to show', () => {
     }
     await settle();
     for (const c of [agent, system]) {
-      expect(c.messages.some((m: ServerMessage) => m.t === 'shows')).toBe(false);
+      expect(c.messages.some((m: ServerMessage) => m.t === 'works')).toBe(false);
       expect(JSON.stringify(c.messages)).not.toContain(show.pathname.split('/')[1]);
     }
 
@@ -176,7 +186,7 @@ describe('a finished build that has something to show', () => {
     await until(() => feedTexts(s).length === 1);
     expect(feedTexts(s)).toEqual([SHOW_WAITS]);
     expect(opened).toEqual([]);
-    expect(s.shows()[CH]).toBeDefined();
+    expect(pageUrl(s)).toBeDefined();
     expect(readPrivate(s.board.dir)?.shows?.[0]).not.toHaveProperty('opened');
   });
 
@@ -192,7 +202,7 @@ describe('a finished build that has something to show', () => {
       await until(() => logged.some((l) => /refused/.test(l)));
       await settle();
       expect(logged.filter((l) => /to show/.test(l))).toHaveLength(1);
-      expect(s.shows()).toEqual({});
+      expect(pageUrl(s)).toBeUndefined();
       expect(s.showOrigin()).toBeUndefined();
       expect(opened).toEqual([]);
       expect(feedTexts(s)).toEqual([]);
@@ -205,12 +215,14 @@ describe('a finished build that has something to show', () => {
     const { s, fake } = await start();
     const owner = await connect(s, s.tokens.owner);
     await buildAll(s, fake, { outcome: 'done', show: { dir: showFolder(fake), page: 'index.html' } });
-    await owner.next((m) => m.t === 'shows' && Object.keys(m.shows).length === 1);
+    await owner.next((m) => pageIn(m) !== undefined);
 
     // The owner sends a built part back to an idea: the chapter is building again.
+    const from = owner.messages.length;
     as(s, 'owner')({ type: 'part.state', part: 'bridge', state: 'idea' });
     expect(s.board.state.chapters[CH]!.state).toBe('building');
-    expect(await owner.next((m) => m.t === 'shows' && Object.keys(m.shows).length === 0)).toEqual({ t: 'shows', shows: {} });
+    await until(() => owner.messages.slice(from).some((m) => m.t === 'works'));
+    expect(owner.messages.slice(from).find((m) => m.t === 'works')).toEqual({ t: 'works', works: {}, shows: {} });
     expect(s.shows()).toEqual({});
     expect((await call(s.origin, s.tokens.owner, ROUTES.board)).body).not.toHaveProperty('shows');
   });
@@ -222,12 +234,12 @@ describe('the shows across a restart', () => {
     const first = await start({ repoDir });
     await buildAll(first.s, first.fake, { outcome: 'done', show: { dir: showFolder(first.fake), page: 'index.html' } });
     await until(() => first.opened.length === 1);
-    const before = new URL(first.s.shows()[CH]!);
+    const before = new URL(pageUrl(first.s)!);
     await first.s.close();
     await expect(raw(Number(before.port), before.pathname)).rejects.toThrow();
 
     const second = await start({ repoDir });
-    const url = second.s.shows()[CH];
+    const url = pageUrl(second.s);
     expect(url).toBeDefined();
     const after = new URL(url!);
     // A new key for each start.
@@ -236,7 +248,7 @@ describe('the shows across a restart', () => {
     expect(second.opened).toEqual([]);
     expect(feedTexts(second.s)).toEqual([SHOW_OPENED]);
     const owner = await connect(second.s, second.s.tokens.owner);
-    expect(owner.messages[0]).toMatchObject({ shows: { [CH]: url } });
+    expect(owner.messages[0]).toMatchObject({ shows: { [CH]: { kind: 'page', url } } });
   });
 
   it('drops a kept show whose folder or page is gone, or whose chapter is no longer built', async () => {
@@ -249,7 +261,7 @@ describe('the shows across a restart', () => {
 
     fs.rmSync(path.join(dir, 'index.html'));
     const second = await start({ repoDir });
-    expect(second.s.shows()).toEqual({});
+    expect(pageUrl(second.s)).toBeUndefined();
     expect(second.s.showOrigin()).toBeUndefined();
     expect(readPrivate(second.s.board.dir)?.shows).toBeUndefined();
     await second.s.close();
@@ -277,7 +289,7 @@ describe('the shows across a restart', () => {
     fs.appendFileSync(first.s.board.logPath, '\n');
     const second = await start({ repoDir });
     expect(second.s.board.state.chapters[CH]!.state).toBe('built');
-    expect(second.s.shows()).toEqual({});
+    expect(pageUrl(second.s)).toBeUndefined();
     expect(readPrivate(second.s.board.dir)?.shows).toBeUndefined();
   });
 });

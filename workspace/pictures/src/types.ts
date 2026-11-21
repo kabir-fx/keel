@@ -1,4 +1,4 @@
-import type { BoardState, Id, Markings, PictureItem } from '@keel/protocol';
+import type { BoardState, Id, Markings, PictureItem, ShowPlan } from '@keel/protocol';
 
 /**
  * The seam between the app and the pictures. The app gives a renderer the item, the board's
@@ -19,6 +19,11 @@ export interface PictureView {
   zoom?: number;
   /** The focus picture the app shows large, by its item id. That picture may drop its own title: the app's crumb says it. */
   focus?: Id;
+  /**
+   * Where a build on the canvas in view goes, as this machine sees it: the blueprint says it
+   * above "Build this". Left out where no server speaks.
+   */
+  build?: BuildPlace;
 }
 
 /**
@@ -26,6 +31,7 @@ export interface PictureView {
  *
  * - `tap`: a plain tap on something inside. The app decides what it means for the tool in hand.
  * - `ask`, `choice.pick`, `build.start`: drafts of the contract, without `by`. The app posts them.
+ * - `try`: the owner wants to try another idea's build. The app opens its try room.
  * - `walk.step`, `view.pipeline`: the owner changed how they look. The app keeps it in its
  *   own view state and hands it back through `view`. Nothing is posted.
  */
@@ -33,9 +39,23 @@ export type PictureAct =
   | { type: 'tap'; item: Id; sub?: string }
   | { type: 'ask'; what: 'focus'; item: Id; part?: Id; lane?: Id }
   | { type: 'choice.pick'; item: Id; option: Id }
-  | { type: 'build.start'; chapter: Id; track: Id[]; blueprint: Id; check: string }
+  | { type: 'build.start'; chapter: Id; track: Id[]; blueprint: Id; check: string; setup?: string; show?: ShowPlan }
+  | { type: 'try'; chapter: Id }
   | { type: 'walk.step'; walk: Id; step: number }
   | { type: 'view.pipeline'; view: 'flat' | 'layers' };
+
+/** Where a build on the canvas in view goes (record 0014). */
+export interface BuildPlace {
+  /** The home branch, where a canvas's first build starts. Left out where the folder is no repository. */
+  home?: { branch: string; commit?: string };
+  /** The canvas's own branch, once it has one: every build on the canvas goes onto it. */
+  branch?: string;
+  /**
+   * Ideas on other canvases that are built and not merged: a build here will not have them.
+   * `running`: its show runs now. `held`: why it cannot be tried now, in a sentence.
+   */
+  waiting: Array<{ chapter: Id; title: string; running?: true; held?: string }>;
+}
 
 export interface PictureProps {
   item: PictureItem;

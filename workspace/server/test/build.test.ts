@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import type { Actor, BuildJob, BuildResult, BuildShow, Builder, BuilderContext, FeedEntry, Wake } from '@keel/protocol';
-import { ROUTES, renderBrief } from '@keel/protocol';
+import type { Actor, BuildJob, BuildResult, BuildShow, Builder, BuilderContext, FeedEntry, ShowPlan, Wake } from '@keel/protocol';
+import { ROUTES, awaitsProof, renderBrief } from '@keel/protocol';
 import { Board } from '../src/board';
 import { BuildRunner, NO_BUILDER } from '../src/build';
 import type { Io, RunDeps } from '../src/cli';
@@ -22,6 +22,7 @@ interface Fake {
   maxActive: number;
   throwOnRun?: string;
   auto?: BuildResult;
+  plays: Array<(job: BuildJob, fake: Fake) => Promise<BuildResult>>;
   pauseEnds: boolean;
   current?: unknown;
   finish(result?: BuildResult): void;
@@ -89,6 +90,13 @@ const said = (s: RunningServer): FeedEntry[] => s.board.state.feed.filter((f) =>
 const problems = (s: RunningServer) => said(s).filter((f) => f.kind === 'problem');
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
+
+/** The address of the page a finished build shows, as the owner's page hears it. */
+const pageUrl = (s: RunningServer): string | undefined => {
+  const show = s.shows()[CH];
+  return show?.kind === 'page' ? show.url : undefined;
+};
+
 describe('the build', () => {
   it('starts the builder on "Build this", with the job and the context, and leaves out parts already built', async () => {
     const { s, fake } = await start();
@@ -105,6 +113,9 @@ describe('the build', () => {
 
     expect(fake.jobs[0]).toEqual({
       chapter: CH,
+      // An old log's chapters are on the board's first canvas, named for the first chapter.
+      canvas: CH,
+      canvasTitle: `Idea ${CH}`,
       title: `Idea ${CH}`,
       track: [
         { id: 'door', name: 'The door' },
@@ -240,14 +251,14 @@ describe('the build', () => {
 
     fake.finish({ outcome: 'failed', note: 'the check would not pass' });
     await until(() => problems(s).length === 1);
-    expect(problems(s)[0]!.text).toBe(`The build of "Idea ${CH}" stopped: the check would not pass. 0 of 3 parts are built. Pause and resume to try again.`);
+    expect(problems(s)[0]!.text).toBe(`The build of "Idea ${CH}" stopped: the check would not pass. 0 of 3 parts are built. Press Try again to go on.`);
     expect(s.builds.status()).toMatchObject({ state: 'stopped' });
 
     await again(2);
     await buildPart(fake, 'door');
     fake.finish({ outcome: 'done' });
     await until(() => problems(s).length === 2);
-    expect(problems(s)[1]!.text).toBe('The builder stopped (it said "done"), but nobody paused it and 2 parts are not built: "The bridge", "The engine". Pause and resume to try again.');
+    expect(problems(s)[1]!.text).toBe('The builder stopped (it said "done"), but nobody paused it and 2 parts are not built: "The bridge", "The engine". Press Try again to go on.');
 
     await again(3);
     fake.finish({ outcome: 'paused' });
@@ -257,10 +268,53 @@ describe('the build', () => {
     fake.throwOnRun = 'out of disk';
     await again(4);
     await until(() => problems(s).length === 4);
-    expect(problems(s)[3]!.text).toBe(`The builder failed: out of disk. The build of "Idea ${CH}" stopped, and 1 of 3 parts are built. Pause and resume to try again.`);
+    expect(problems(s)[3]!.text).toBe(`The builder failed: out of disk. The build of "Idea ${CH}" stopped, and 1 of 3 parts are built. Press Try again to go on.`);
     expect(s.builds.busy).toBe(false);
     // Each stop was said once, and nothing else was.
     expect(said(s)).toHaveLength(4);
+  });
+
+  it('says once that an app with every part built did not answer, keeps it building, and starts the app again on resume', async () => {
+    const { s, fake } = await start();
+    solidChapter(s, CH, ['door']);
+    const app: ShowPlan = { kind: 'app', run: 'npm start' };
+    fake.plays.push(
+      async () => {
+        await buildPart(fake, 'door');
+        return { outcome: 'failed', note: 'the app did not answer on its port in 60 s' };
+      },
+      async () => {
+        await fake.post({ type: 'build.proved', chapter: CH });
+        return { outcome: 'done' };
+      },
+    );
+    as(s, 'owner')({ type: 'build.start', chapter: CH, track: ['door'], check: 'npm test', show: app });
+    await until(() => problems(s).length === 1 && !s.builds.busy);
+    expect(problems(s).map((p) => p.text)).toEqual([`The build of "Idea ${CH}" stopped: the app did not answer on its port in 60 s. 1 of 1 parts are built. Press Try again to go on.`]);
+    expect(s.board.state.chapters[CH]?.state).toBe('building');
+    expect(awaitsProof(s.board.state, CH)).toBe(true);
+    expect(s.builds.status()).toMatchObject({ state: 'stopped', built: 1, total: 1 });
+
+    as(s, 'owner')({ type: 'build.pause', chapter: CH });
+    as(s, 'owner')({ type: 'build.resume', chapter: CH });
+    await until(() => fake.jobs.length === 2);
+    expect(fake.jobs[1]).toMatchObject({ chapter: CH, resume: true, track: [], show: app });
+    await until(() => s.board.state.chapters[CH]?.state === 'built' && !s.builds.busy);
+    await settle();
+    expect(problems(s)).toHaveLength(1);
+  });
+
+  it('says so when a run ends done and the app has not answered', async () => {
+    const { s, fake } = await start();
+    solidChapter(s, CH, ['door']);
+    fake.plays.push(async () => {
+      await buildPart(fake, 'door');
+      return { outcome: 'done' };
+    });
+    as(s, 'owner')({ type: 'build.start', chapter: CH, track: ['door'], check: 'npm test', show: { kind: 'app', run: 'npm start' } });
+    await until(() => problems(s).length === 1);
+    expect(problems(s)[0]!.text).toBe(`The builder stopped (it said "done"), but the app of "Idea ${CH}" has not answered yet, so it is not built. Press Try again to go on.`);
+    expect(s.board.state.chapters[CH]?.state).toBe('building');
   });
 
   it('ends a builder\'s reason with one full stop, when the reason brings its own', async () => {
@@ -271,7 +325,7 @@ describe('the build', () => {
 
     fake.finish({ outcome: 'failed', note: 'The repository has no commit yet. Make a first commit.' });
     await until(() => problems(s).length === 1);
-    expect(problems(s)[0]!.text).toBe(`The build of "Idea ${CH}" stopped: The repository has no commit yet. Make a first commit. 0 of 3 parts are built. Pause and resume to try again.`);
+    expect(problems(s)[0]!.text).toBe(`The build of "Idea ${CH}" stopped: The repository has no commit yet. Make a first commit. 0 of 3 parts are built. Press Try again to go on.`);
   });
 
   it('says once that no builder is linked, and still admits "Build this"', async () => {
@@ -556,7 +610,7 @@ describe('keel-board with a builder', () => {
     expect(said(s).map((f) => f.text)).toEqual([SHOW_OPENED]);
     expect(browsed).toEqual([
       [s.url, false],
-      [s.shows()[CH], true],
+      [pageUrl(s), true],
     ]);
 
     const { repo: quiet, commit: other } = gitRepo();
@@ -564,7 +618,7 @@ describe('keel-board with a builder', () => {
     const q = await cliWith({ browse }, 'open', quiet, '--no-browser', '--port', '0', '--app-dir', path.join(quiet, 'no-app'), '--builder', FAKE);
     await buildWithShow(q.server!, fakes[n]!, other);
     expect(said(q.server!).map((f) => f.text)).toEqual([SHOW_WAITS]);
-    expect(q.server!.shows()[CH]).toBeDefined();
+    expect(pageUrl(q.server!)).toBeDefined();
     expect(browsed).toHaveLength(2);
   });
 
