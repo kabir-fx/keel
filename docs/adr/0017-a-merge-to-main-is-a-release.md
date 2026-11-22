@@ -8,7 +8,7 @@
 
 | File | Runs on | What it does |
 |---|---|---|
-| `.github/workflows/ci.yml` | every pull request, and from `release.yml` | lints the workflows and the shell scripts, then runs `KEEL_E2E=1 scripts/check.sh` on Ubuntu with Node 24 and 22, and on macOS with Node 24 |
+| `.github/workflows/ci.yml` | every pull request, and from `release.yml` | lints the workflows and the shell scripts, then runs `scripts/check.sh` on Ubuntu with Node 24 and 22, and on macOS with Node 24. The browser tests (`KEEL_E2E=1`) run on one of them, Ubuntu with Node 24 |
 | `.github/workflows/release.yml` | every push to `main` | `ci.yml`, then package, publish, verify, promote, record |
 
 `scripts/check.sh` stays the one list of checks. The workflow says where it runs and adds nothing a contributor cannot run. Two targets are new: `shell` (shellcheck) and `package` (build, stage, install the tarball, start the board from it). `board` now lints the TypeScript with oxlint.
@@ -49,6 +49,7 @@ A published version cannot be removed in practice. To put users back on the last
 
 - `get.sh` itself is served from `main` the moment a merge lands, before the release that follows it has finished. A change to `get.sh` that needs a new package is ahead of npm for those minutes.
 - The check is as good as `scripts/check.sh`. The pipeline adds no test of its own beyond installing the published version.
+- The browser tests run on Ubuntu only, where Chrome has no GPU. The checks that compare ink pixel for pixel hold only on a GPU, so they run on a Mac by hand (`KEEL_E2E=1 scripts/check.sh`) and not in the pipeline. The try-it flows in the macOS box are covered there by unit tests, not through the page.
 - A real agent turn is not run: it needs a Claude sign-in, and the runners have none.
 - Reaching 1.0.0, or any version the commits do not ask for, is a publish by hand, from a clean checkout of `origin/main`: `node release/pack.mjs --version <x.y.z>`, then `npm publish` in `release/keel-workspace`. The pipeline carries on from whatever version is newest on npm. A version published from a commit that is not on `main` stops every later release, because nothing on `main` comes after it.
 - The workflows have not run on GitHub at the time of writing. Their steps were run by hand, on macOS and in a Linux container, up to a publish that sends nothing.

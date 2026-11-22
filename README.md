@@ -222,7 +222,7 @@ scripts/check.sh get                # get.sh, against a throwaway home, with sta
 scripts/check.sh shell              # shellcheck, over keel's own scripts
 ```
 
-Every pull request runs the whole of `KEEL_E2E=1 scripts/check.sh` on GitHub, on Ubuntu and on macOS.
+Every pull request runs `scripts/check.sh` on GitHub, on Ubuntu and on macOS. The browser tests run there once, on Ubuntu. On a Mac, where Chrome draws with the GPU, `KEEL_E2E=1 scripts/check.sh` also compares the ink pixel for pixel.
 
 To see the board with no agent and no cost, run `keel-board open --link none` in a scratch repository. To see one real agent turn, run `npm run live-check -w @keel/board-plugin` in `workspace/`. It posts a note and prints how many seconds the card took. It costs one turn on your subscription.
 

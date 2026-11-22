@@ -1,5 +1,7 @@
 # The checks every change passes: on a pull request, and again on main before a release.
 # scripts/check.sh is the one list. This file only says where it runs.
+# The browser tests run once, on Ubuntu with Node 24: they drive the page in Chrome, which is the same
+# on every leg, and they are most of a run's time. The other legs run everything else.
 name: CI
 
 on:
@@ -47,7 +49,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, node: 24 }
+          - { os: ubuntu-latest, node: 24, browser: 1 }
           - { os: ubuntu-latest, node: 22 }
           - { os: macos-latest, node: 24 }
     steps:
@@ -61,12 +63,12 @@ jobs:
       - name: npm ci
         working-directory: workspace
         run: npm ci --no-audit --no-fund
-      - name: scripts/check.sh, with the browser tests
+      - name: scripts/check.sh
         run: scripts/check.sh
         env:
-          KEEL_E2E: 1
+          KEEL_E2E: ${{ matrix.browser }}
       - name: keep what the browser tests left
-        if: failure()
+        if: failure() && matrix.browser
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-${{ matrix.os }}-node${{ matrix.node }}
