@@ -982,14 +982,17 @@ workspace_ready() { # workspace_ready <what needs it>
   [ -d workspace/node_modules ] || { fail "workspace/node_modules is missing: run ./install.sh, or npm install in workspace/"; return 1; }
 }
 
-in_workspace() { # in_workspace <description> <command...>: sets $out, and shows its end when the command fails
+in_workspace() { # in_workspace <description> <command...>: sets $out, without colour codes, and shows it when the command fails
   local what="$1"
   shift
   if out="$(cd "$root/workspace" && "$@" 2>&1)"; then
+    out="$(printf '%s\n' "$out" | sed $'s/\x1b\\[[0-9;]*m//g')"
     ok
   else
+    out="$(printf '%s\n' "$out" | sed $'s/\x1b\\[[0-9;]*m//g')"
     fail "$what"
-    printf '%s\n' "$out" | tail -n 30 | sed 's/^/      /'
+    # On a machine nobody can look into, the end of the output is not enough to find every failure.
+    if [ -n "${CI:-}" ]; then printf '%s\n' "$out" | sed 's/^/      /'; else printf '%s\n' "$out" | tail -n 30 | sed 's/^/      /'; fi
   fi
 }
 
