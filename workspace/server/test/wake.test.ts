@@ -828,7 +828,12 @@ describe('where the agent’s cursor is during a wake', () => {
 describe('inputOf', () => {
   const ev = (by: string, rest: Record<string, unknown>) => ({ id: 'e9', at: '2026-11-17T13:00:00Z', by, ...rest }) as unknown as BoardEvent;
   const add = (kind: string, by = 'owner') => ev(by, { type: 'item.add', chapter: CH, item: { id: 'x', kind } });
-  const state = (kind: string) => ({ items: { x: { item: { id: 'x', kind } } } }) as unknown as BoardState;
+  /** A real board with one thing of the owner's on it, `x`. */
+  const state = (kind: 'note' | 'box' | 'arrow'): BoardState => {
+    const t = setup();
+    t.owner(kind === 'note' ? note('x', 'old words') : kind === 'box' ? box('x') : arrow('x'));
+    return t.board.state;
+  };
   const none = state('note');
 
   it('sorts the owner\'s input into words, files, shapes and marks', () => {
@@ -856,14 +861,12 @@ describe('inputOf', () => {
   });
 
   it('a box or an arrow on one of the agent\'s pictures is a mark; on bare board or on the owner\'s own marks, a shape', () => {
-    const items = (byP: string) =>
-      ({
-        items: {
-          p: { by: byP, item: { id: 'p', kind: 'picture' } },
-          b: { by: 'owner', item: { id: 'b', kind: 'box' } },
-        },
-      }) as unknown as BoardState;
-    const theirs = items('agent');
+    // A real board: the agent's picture `p`, and the owner's box `b`.
+    const t = setup();
+    t.owner(note('n0', 'earlier'));
+    t.agent({ type: 'item.add', chapter: CH, item: { id: 'p', kind: 'picture', picture: { kind: 'text', title: 'Earlier' }, answers: ['n0'] } });
+    t.owner(box('b'));
+    const theirs = t.board.state;
     const shape = (item: Record<string, unknown>) => ev('owner', { type: 'item.add', chapter: CH, item: { id: 'x', ...item } });
     expect(inputOf(shape({ kind: 'box', anchor: { item: 'p', box: [0, 0, 1, 1] } }), theirs)).toBe('mark');
     expect(inputOf(shape({ kind: 'arrow', fromTarget: { item: 'p', sub: 'part:door' } }), theirs)).toBe('mark');
@@ -872,10 +875,12 @@ describe('inputOf', () => {
     expect(inputOf(shape({ kind: 'arrow', fromTarget: { item: 'b' }, toTarget: { item: 'b' } }), theirs)).toBe('shape');
     expect(inputOf(shape({ kind: 'arrow', toTarget: { item: 'gone' } }), theirs)).toBe('shape');
     // A change of the label of a box that is on the agent's picture is a mark too.
-    const onTheirs = { items: { ...theirs.items, x: { by: 'owner', item: { id: 'x', kind: 'box', anchor: { item: 'p', box: [0, 0, 1, 1] } } } } } as unknown as BoardState;
-    expect(inputOf(ev('owner', { type: 'item.update', item: 'x', patch: { text: 'new words' } }), onTheirs)).toBe('mark');
     // The owner's own picture, should there be one, is the owner's drawing.
-    expect(inputOf(shape({ kind: 'box', anchor: { item: 'p', box: [0, 0, 1, 1] } }), items('owner'))).toBe('shape');
+    const mine: BoardState = { ...theirs, items: { ...theirs.items, p: { ...theirs.items.p!, by: 'owner' } } };
+    expect(inputOf(shape({ kind: 'box', anchor: { item: 'p', box: [0, 0, 1, 1] } }), mine)).toBe('shape');
+    // A change of the label of a box that is on the agent's picture is a mark too.
+    t.owner({ ...box('x'), item: { ...box('x').item, anchor: { item: 'p', box: [0, 0, 1, 1] } } });
+    expect(inputOf(ev('owner', { type: 'item.update', item: 'x', patch: { text: 'new words' } }), t.board.state)).toBe('mark');
   });
 
   it('ignores what is not the owner\'s input', () => {

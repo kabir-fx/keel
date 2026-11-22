@@ -12,7 +12,7 @@ import { ECHO, appIsBuilt, startBoard, type RunningBoard } from './board-server'
 let board: RunningBoard | undefined;
 
 test.beforeAll(async () => {
-  test.skip(!appIsBuilt(), 'build first: npm run build, from workspace/');
+  expect(appIsBuilt(), 'build first: npm run build, from workspace/').toBe(true);
   board = await startBoard({ link: `script:${ECHO}` });
 });
 

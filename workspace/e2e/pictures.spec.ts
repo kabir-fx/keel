@@ -18,11 +18,22 @@ interface Item {
   mime?: string;
 }
 
+/** An event the board admitted, as the page says it on `keel:admit`. */
+interface Admitted {
+  type: string;
+  item?: unknown;
+}
+
+declare global {
+  interface Window {
+    __admitted: Admitted[];
+  }
+}
+
 async function open(page: Page) {
   await page.addInitScript(() => {
-    const w = window as unknown as { __admitted: unknown[] };
-    w.__admitted = [];
-    window.addEventListener('keel:admit', (e) => w.__admitted.push((e as CustomEvent).detail));
+    window.__admitted = [];
+    window.addEventListener('keel:admit', (e) => window.__admitted.push((e as CustomEvent<Admitted>).detail));
   });
   await page.goto('/?fixture=tools&at=1');
   await expect(page.getByTestId('board')).toBeVisible();
@@ -30,7 +41,7 @@ async function open(page: Page) {
 }
 
 const adds = (page: Page) =>
-  page.evaluate(() => (window as unknown as { __admitted: Array<{ type: string; item?: unknown }> }).__admitted.filter((e) => e.type === 'item.add').map((e) => e.item as Item));
+  page.evaluate(() => window.__admitted.filter((e) => e.type === 'item.add').map((e) => e.item as Item));
 
 /** A drag that holds one real PNG, 240 by 160, as the page's canvas makes it. */
 function pngDrag(page: Page): Promise<JSHandle<DataTransfer>> {
@@ -95,7 +106,7 @@ test.describe('on the real board server', () => {
   let board: RunningBoard | undefined;
 
   test.beforeAll(async () => {
-    test.skip(!appIsBuilt(), 'build first: npm run build, from workspace/');
+    expect(appIsBuilt(), 'build first: npm run build, from workspace/').toBe(true);
     board = await startBoard({ link: `script:${ECHO}` });
   });
 
