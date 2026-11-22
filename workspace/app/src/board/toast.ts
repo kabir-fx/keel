@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 /** How long the board's one line stays up, in ms. */
 const TOAST_MS = 6000;
@@ -13,5 +13,6 @@ export function useToast(): { toast: string | undefined; say: (text: string) => 
     timer.current = setTimeout(() => setToast(undefined), TOAST_MS);
   }, []);
   const close = useCallback(() => setToast(undefined), []);
+  useEffect(() => () => clearTimeout(timer.current), []);
   return { toast, say, close };
 }
