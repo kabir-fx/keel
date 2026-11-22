@@ -40,9 +40,9 @@ interface Watched {
   /**
    * While the band is seen, each time the board wrote the cursor's place for a frame: how far its
    * tip was from the band's far corner (here its bottom right: the card is placed right of the
-   * note), read in the same task, and whether it was inside it.
+   * note), read in the same task, whether it was inside it, and the band's size on the page.
    */
-  samples: Array<{ gap: number; inside: boolean }>;
+  samples: Array<{ gap: number; inside: boolean; w: number; h: number }>;
   /** Each time the board wrote the cursor's place while the card was drawn on: what was set on the root that would move or size it. */
   moved: string[];
 }
@@ -83,7 +83,7 @@ function watch(page: Page): Promise<void> {
         const m = /translate\(([-\d.e]+)px, ([-\d.e]+)px\)/.exec(cursor.style.transform);
         if (!m) return;
         const [x, y] = [Number(m[1]) + board.left, Number(m[2]) + board.top];
-        w.samples.push({ gap: Math.hypot(x - r.right, y - r.bottom), inside: (r.width > 4 || r.height > 4) && (x < r.right - 0.5 || y < r.bottom - 0.5) });
+        w.samples.push({ gap: Math.hypot(x - r.right, y - r.bottom), inside: (r.width > 4 || r.height > 4) && (x < r.right - 0.5 || y < r.bottom - 0.5), w: r.width, h: r.height });
       });
       tip.observe(cursor, { attributes: true, attributeFilter: ['style'] });
       // When the root is no longer drawn on.
@@ -247,8 +247,12 @@ interface PlanState {
   is: 'none' | 'placeholder' | 'finished';
   /** Where the board says it is, `data-box`. */
   box?: string;
-  /** Held out of sight, or its paper not shown. */
+  /** Held out of sight, or its paper not shown. A finished placeholder waiting its turn keeps its frame, and is not hidden. */
   hidden: boolean;
+  /** What holds it while it waits its turn, `data-arrival-waits`; null when nothing does. */
+  waits: string | null;
+  /** Its root is seen. */
+  shown: boolean;
   /** Its root is being drawn on. */
   playing: boolean;
   /** The root's size on the page. */
@@ -267,15 +271,18 @@ function record(page: Page): Promise<void> {
     w.__states = [];
     const look = () => {
       const item = document.querySelector<HTMLElement>('.layer [data-item^="drawn-"]');
-      if (!item) return w.__states.push({ is: 'none', hidden: true, playing: false, w: 0, h: 0, moving: 0, band: null });
+      if (!item) return w.__states.push({ is: 'none', hidden: true, waits: null, shown: false, playing: false, w: 0, h: 0, moving: 0, band: null });
       const root = item.querySelector<HTMLElement>('[data-build]');
       const r = root?.getBoundingClientRect();
       const band = item.querySelector<HTMLElement>('.arrival-band');
       const b = band && parseFloat(getComputedStyle(band).opacity) > 0.02 ? band.getBoundingClientRect() : null;
+      const waits = item.getAttribute('data-arrival-waits');
       w.__states.push({
         is: item.querySelector('[data-status="drawing"]') ? 'placeholder' : 'finished',
         box: item.dataset.box,
-        hidden: item.hasAttribute('data-arrival-waits') || parseFloat(getComputedStyle(item).opacity) < 0.02,
+        hidden: (waits !== null && waits !== 'frame') || parseFloat(getComputedStyle(item).opacity) < 0.02,
+        waits,
+        shown: !!root && parseFloat(getComputedStyle(root).opacity) > 0.02,
         playing: !!root?.hasAttribute('data-arrival'),
         w: r?.width ?? 0,
         h: r?.height ?? 0,
@@ -355,15 +362,22 @@ test.describe('a placeholder, finished, then drawn again', () => {
     expect(first).toBeGreaterThan(0);
     const was = made[first - 1]!;
     const finished = made.slice(first);
-    // From the placeholder straight to the pull: never gone, never held out of sight, never at the placeholder's spot.
+    // From the placeholder to the pull: never gone, never held out of sight, never at the placeholder's spot.
     expect(finished.filter((s) => s.hidden)).toEqual([]);
     expect(finished.filter((s) => s.box === was.box)).toEqual([]);
-    // The band stands at the box the placeholder had from the first state it is drawn on, and is
-    // dragged to the finished one; the picture itself is never drawn at another size.
-    expect(finished[0]!.playing).toBe(true);
-    expect(finished[0]!.band, 'the band stands where the placeholder was').not.toBeNull();
-    expect(Math.abs(finished[0]!.band!.w - was.w)).toBeLessThan(2);
-    expect(Math.abs(finished[0]!.band!.h - was.h)).toBeLessThan(2);
+    // Until its turn comes (record 0016: its cursor is still a moment after the placeholder's own
+    // film), its frame stands where the placeholder was and nothing of it is seen; from the first
+    // state it is drawn on, the band stands there and is dragged to the finished box. The picture
+    // itself is never drawn at another size.
+    const pulled = finished.findIndex((s) => s.playing);
+    expect(pulled, 'it was drawn on').toBeGreaterThanOrEqual(0);
+    for (const s of finished.slice(0, pulled + 1)) {
+      expect(s.band, 'the band stands where the placeholder was').not.toBeNull();
+      expect(Math.abs(s.band!.w - was.w)).toBeLessThan(2);
+      expect(Math.abs(s.band!.h - was.h)).toBeLessThan(2);
+    }
+    expect(finished.slice(0, pulled).filter((s) => s.waits !== 'frame' || s.shown)).toEqual([]);
+    expect(finished.slice(pulled).filter((s) => s.waits !== null)).toEqual([]);
     const done = finished[finished.length - 1]!;
     expect(Math.abs(done.w - was.w) + Math.abs(done.h - was.h), 'the finished picture has a size of its own').toBeGreaterThan(20);
     expect(finished.filter((s) => Math.abs(s.w - done.w) > 0.5 || Math.abs(s.h - done.h) > 0.5)).toEqual([]);
@@ -430,7 +444,6 @@ test.describe('a picture that arrives as the camera zooms out to show it', () =>
     // On every frame of the drag the tip is on the band's corner, by no more than the rest gap:
     // the camera has stopped before the band is dragged.
     const { samples, moved } = await watched();
-    expect(samples.length, 'frames sampled during the drag').toBeGreaterThan(10);
     for (const [i, s] of samples.entries()) expect(s.gap, `frame ${i}`).toBeLessThanOrEqual(REST_PX * Math.SQRT2 + 2);
     expect(moved).toEqual([]);
     // At rest, the board's rest gap below the card's real corner, and right of it.
@@ -440,8 +453,13 @@ test.describe('a picture that arrives as the camera zooms out to show it', () =>
       const board = document.querySelector('[data-testid="board"]')!.getBoundingClientRect();
       const m = /translate\(([-\d.e]+)px, ([-\d.e]+)px\)/.exec(document.querySelector<HTMLElement>('[data-testid="agent-cursor"]')!.style.transform)!;
       const size = document.querySelector('.agent-cursor__drop')!.getBoundingClientRect().width;
-      return [Number(m[1]) + board.left - card.right, Number(m[2]) + board.top - card.bottom, board.right - size - card.right];
+      return [Number(m[1]) + board.left - card.right, Number(m[2]) + board.top - card.bottom, board.right - size - card.right, card.width, card.height];
     });
+    // The frames sampled span the drag, however many the page drew: one while the band is still
+    // being dragged out, and one with it whole.
+    const whole = (s: { w: number; h: number }) => Math.abs(s.w - rest[3]!) < 2 && Math.abs(s.h - rest[4]!) < 2;
+    expect(samples.some((s) => !whole(s)), 'a frame sampled while the band is dragged out').toBe(true);
+    expect(samples.some(whole), 'a frame sampled with the band whole').toBe(true);
     // Right of it as far as the board lets the cursor be: it is kept inside the board's right edge by its own size.
     expect(Math.abs(rest[0]! - Math.min(REST_PX, rest[2]!)), `${rest[0]} px right of the corner`).toBeLessThan(1);
     expect(Math.abs(rest[1]! - REST_PX), `${rest[1]} px below the corner`).toBeLessThan(2);

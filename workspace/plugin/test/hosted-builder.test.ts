@@ -96,6 +96,18 @@ function job(resume = false): BuildJob {
   };
 }
 
+/**
+ * Wait until the builder has taken up a part: building, or built with the turn not yet over.
+ * A part is "building" for about 20 ms where the check has no box, so a wait for that state
+ * alone can sleep through it. FAKE_SLOW_MS holds the turn open after the part is built.
+ */
+async function taken(part: string): Promise<void> {
+  const state = () => board.state.model.parts[part]?.state;
+  for (const end = Date.now() + 10_000; state() !== 'building' && state() !== 'built'; await new Promise((r) => setTimeout(r, 10))) {
+    if (Date.now() >= end) throw new Error(`the builder did not take up ${part} within 10 s`);
+  }
+}
+
 /** The owner's checkout, as git and the disk see it. */
 function ownerView() {
   return {
@@ -266,8 +278,8 @@ describe('a build, end to end against a fake claude', () => {
     const before = ownerView();
     const b = await builder();
     const first = b.run(job());
-    // Ask for a pause while part 1 is in work.
-    for (let i = 0; i < 200 && board.state.model.parts.sum?.state !== 'building'; i++) await new Promise((r) => setTimeout(r, 50));
+    // Ask for a pause during the first part's turn.
+    await taken('sum');
     await b.pause();
     const r1 = await first;
     expect(r1.outcome).toBe('paused');
@@ -338,7 +350,7 @@ describe('a build, end to end against a fake claude', () => {
     process.env.FAKE_SLOW_MS = '400';
     const b = await builder();
     const run = b.run(job());
-    for (let i = 0; i < 200 && board.state.model.parts.sum?.state !== 'building'; i++) await new Promise((r) => setTimeout(r, 50));
+    await taken('sum');
     // The owner reopens a later part; the server pauses the run, as it does for a reopen.
     board.must('owner', { type: 'part.state', part: 'docs', state: 'idea' });
     await b.pause();
@@ -353,7 +365,7 @@ describe('a build, end to end against a fake claude', () => {
     process.env.FAKE_SLOW_MS = '400';
     const b = await builder();
     const run = b.run(job());
-    for (let i = 0; i < 200 && board.state.model.parts.sum?.state !== 'building'; i++) await new Promise((r) => setTimeout(r, 50));
+    await taken('sum');
     board.must('owner', { type: 'build.pause', chapter: BCH });
     await b.pause();
     expect((await run).outcome).toBe('paused');
@@ -475,7 +487,7 @@ describe('a build, end to end against a fake claude', () => {
     process.env.FAKE_SLOW_MS = '400';
     const b = await builder();
     const first = b.run(job());
-    for (let i = 0; i < 200 && board.state.model.parts.sum?.state !== 'building'; i++) await new Promise((r) => setTimeout(r, 50));
+    await taken('sum');
     await b.pause();
     expect((await first).outcome).toBe('paused');
     delete process.env.FAKE_SLOW_MS;

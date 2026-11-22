@@ -11,12 +11,16 @@ import { contactSheet, openReplay, playStatus, renderAt } from './replay';
  */
 
 /**
- * Drawn in software. With the GPU, Chrome now and then draws the edges of the chrome over the
- * board a shade apart between two loads of the same page (seen on 2026-11-20: 70 pixels, off by
- * up to 20 levels, with the same DOM, the same computed styles and no animation): that is the
- * GPU's rasteriser, not the board's clock. In software the same frame is the same, byte for byte.
+ * Drawn in software, and each tile drawn whole. With the GPU, Chrome now and then draws the edges
+ * of the chrome over the board a shade apart between two loads of the same page (seen on
+ * 2026-11-20: 70 pixels, off by up to 20 levels, with the same DOM, the same computed styles and
+ * no animation): that is the GPU's rasteriser, not the board's clock. In software on Linux it
+ * still does, by one level on the corners of the Solidify button (seen on 2026-11-22, on a board
+ * with no play at all), because Chrome draws again only the changed part of a tile and keeps the
+ * rest, so a frame depends on what was drawn before it. Drawn whole, the same frame is the same,
+ * byte for byte.
  */
-test.use({ launchOptions: { args: ['--disable-gpu'] } });
+test.use({ launchOptions: { args: ['--disable-gpu', '--disable-partial-raster'] } });
 
 /** Contact sheets go here: `workspace/e2e/shots/` is kept out of git. */
 const SHEETS = fileURLToPath(new URL('./shots/replay/', import.meta.url));

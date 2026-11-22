@@ -94,15 +94,8 @@ export function remoteMoves(w: World, files: Record<string, string>, message = '
   return w.otherGit('rev-parse', 'HEAD');
 }
 
-/** Is a process with this pid alive? */
-export function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
+/** Is the process alive that said this is its pid? A process the board runs is in the box, where bwrap gives it a pid of its own. */
+export { aliveInBox as alive } from '../plugin/test/box';
 
 /** The processes whose command line names this world's folder. */
 export function leftovers(w: World): string[] {

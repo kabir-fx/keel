@@ -110,6 +110,7 @@ function holdAll(clock: ManualClock): void {
  * clock both loops run in the same moves of it, so they keep one time.
  */
 export function startReplay(player: Player, clock?: ManualClock): void {
+  if (clock) new MutationObserver(() => holdAll(clock)).observe(document.documentElement, WATCH);
   const loop = clock ? new FrameLoop(clock, clock.now) : new FrameLoop();
   let begun = false;
   const ready = opened(clock).then(() => {
@@ -127,11 +128,13 @@ export function startReplay(player: Player, clock?: ManualClock): void {
  * the next, so the next frame starts from the same page every time.
  *
  * Every animation on the page goes on the clock, from the time of the frame it was first seen
- * in: one made by what a frame changed is seen at the first real frame after it was made, while
- * that frame settles, so it cannot run out in real time before the clock has it; one made while
- * the page stood between two calls is seen as the next call begins. A creator that knows its
- * start better says so with `FrameLoop.hold`. A cancelled animation is not on the page's list,
- * and the clock takes none that is idle.
+ * in: one made by a change to the page is seen at the end of the task that changed it
+ * (`startReplay`), before the page draws it; one made with no change to the page while it stood
+ * between two calls is seen as the next call begins. Seen a frame later, an animation has run a
+ * frame in the browser's compositor, and Chrome goes on drawing the value it ran to after the
+ * clock pauses it at its start. A creator that knows its start better says so with
+ * `FrameLoop.hold`. A cancelled animation is not on the page's list, and the clock takes none
+ * that is idle.
  */
 function renderer(clock: ManualClock, player: Player, ready: Promise<void>): (ms: number) => Promise<void> {
   let frame = 0;

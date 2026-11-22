@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { zoomTo } from './hand';
-import { nextFrame, pixelsApart, readCamera } from './pointer';
+import { nextFrame, pixelsApart, readCamera, screenshotWhole } from './pointer';
 
 /**
  * The owner's arrows on the system Chrome: an arrow drawn between two pictures holds on to both
@@ -247,7 +247,7 @@ for (const dpr of [1, 2]) {
         // From inside the first box to 8 px short of the second: its spot, and the second by its outline.
         await drag(page, [920.3, 705.3], [1092.3, 705.3], { lift: false });
         const clip = { x: 890, y: 660, width: 208, height: 90 };
-        const seenLive = await page.screenshot({ clip });
+        const seenLive = await screenshotWhole(page, clip);
         await page.mouse.up();
         await page.keyboard.press('Enter');
         const [add] = await postedSince(page, n);
@@ -256,7 +256,7 @@ for (const dpr of [1, 2]) {
         await page.keyboard.press('Escape');
         await page.mouse.move(300, 850);
         await nextFrame(page);
-        expect(await pixelsApart(page, seenLive, await page.screenshot({ clip }))).toBe(0);
+        expect(await pixelsApart(page, seenLive, await screenshotWhole(page, clip))).toBe(0);
       });
 
       test(`at ${z * 100}%, an end dragged to just short of a thing, where it ties: not one pixel of the arrow moves when it lands`, async ({ page }) => {

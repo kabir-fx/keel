@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { RunShow, ShowSession } from '@keel/protocol';
-import { sandboxPlan } from './sandbox';
+import { sandboxKind, sandboxPlan } from './sandbox';
 
 /**
  * A command that runs to show a built chapter (record 0013): an app, or a terminal. It runs in
@@ -360,7 +360,11 @@ export async function startTerminal(plan: Extract<RunShow, { kind: 'terminal' }>
   const rows = clampSize(size.rows, 24);
   const tmp = tempDir();
   const script = scriptKind();
-  const shell = 'exec /bin/sh -i';
+  // bwrap gives the box its own process numbers, so the terminal's foreground group is one the shell
+  // cannot name. dash then fails to hand the terminal back as it exits, and exits 2 whatever was typed.
+  // There the shell is a job of a small shell with job control, in the box, which notes the exit code.
+  const nested = script !== undefined && sandboxKind().kind === 'bwrap';
+  const shell = nested ? 'set -m; /bin/sh -i; echo $? >"$TMPDIR/exit"; exec 2>/dev/null' : 'exec /bin/sh -i';
   const inner = script ? `stty rows ${rows} cols ${cols} 2>/dev/null; ${shell}` : shell;
   const box = sandboxPlan(inner, { workdir: places.tree, tmp, denyRead: places.denyRead, denyWrite: [path.join(places.tree, '.git')], network: true });
   const env: NodeJS.ProcessEnv = { ...box.env, PS1: '$ ', HISTFILE: '/dev/null', TERM: script ? 'xterm-256color' : 'dumb', COLUMNS: String(cols), LINES: String(rows) };
@@ -370,10 +374,11 @@ export async function startTerminal(plan: Extract<RunShow, { kind: 'terminal' }>
     const cmd = [box.bin, ...box.args];
     // `script`'s exit code comes back on fd 3, and then `cat` is let go.
     const pty = script.kind === 'bsd' ? `"$SCRIPT" -q /dev/null "$@"` : `"$SCRIPT" -qfec "$KEEL_CMD" /dev/null`;
-    const wrap = `cat | { ${pty}; s=$?; printf '%s\\n' "$s" >&3; exit $s; }`;
+    const noted = nested ? ' if [ -r "$KEEL_EXIT" ]; then s=$(cat "$KEEL_EXIT"); fi;' : '';
+    const wrap = `cat | { ${pty}; s=$?;${noted} printf '%s\\n' "$s" >&3; exit $s; }`;
     proc = spawn('/bin/sh', ['-c', wrap, 'sh', ...cmd], {
       cwd: places.workdir,
-      env: { ...env, SCRIPT: script.bin, ...(script.kind === 'linux' ? { KEEL_CMD: cmd.map(quote).join(' ') } : {}) },
+      env: { ...env, SCRIPT: script.bin, ...(script.kind === 'linux' ? { KEEL_CMD: cmd.map(quote).join(' ') } : {}), ...(nested ? { KEEL_EXIT: path.join(tmp, 'exit') } : {}) },
       stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
       detached: true,
       windowsHide: true,

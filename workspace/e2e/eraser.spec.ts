@@ -99,13 +99,34 @@ test('with motion, the eraser’s trail fades behind the pointer to a dot under 
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await open(page);
   await page.keyboard.press('e');
+  // A point fades in 200 ms. A real mouse sends its moves on its own clock, and Chrome hands
+  // the page all it sent since the last frame, however slowly the page draws: the moves are sent
+  // at once here, where Playwright's steps would each wait for the page. The trail is read in the
+  // page as it is drawn, not after a round trip from here.
+  await page.evaluate(() => {
+    const w = window as unknown as { __trail: { reached: number; drawn: Array<[number, number]> } };
+    w.__trail = { reached: Infinity, drawn: [] };
+    window.addEventListener('pointermove', (e) => {
+      if (e.clientX >= 1120) w.__trail.reached = Math.min(w.__trail.reached, performance.now());
+    }, true);
+    new MutationObserver(() => {
+      const path = document.querySelector('[data-testid="trails"] path.trail--eraser');
+      if (path) w.__trail.drawn.push([performance.now(), path.getBoundingClientRect().width]);
+    }).observe(document.querySelector('[data-testid="trails"]')!, { subtree: true, childList: true, attributes: true });
+  });
   await page.mouse.move(820, 640);
   await page.mouse.down();
-  await page.mouse.move(1120, 640, { steps: 20 });
+  const cdp = await page.context().newCDPSession(page);
+  await Promise.all(Array.from({ length: 20 }, (_, i) => cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 820 + 15 * (i + 1), y: 640, button: 'left', buttons: 1 })));
+  await cdp.detach();
+  await page.mouse.move(1120, 640);
   await nextFrame(page);
+  const arrived = await page.evaluate(() => {
+    const { reached, drawn } = (window as unknown as { __trail: { reached: number; drawn: Array<[number, number]> } }).__trail;
+    return Math.max(0, ...drawn.filter(([t]) => t >= reached).map(([, width]) => width));
+  });
+  expect(arrived).toBeGreaterThan(40);
   const trail = page.locator('[data-testid="trails"] path.trail--eraser');
-  const moving = (await trail.boundingBox())!;
-  expect(moving.width).toBeGreaterThan(40);
   // The pointer rests: the line behind it fades, and a dot of 5 px stays under it.
   await page.waitForTimeout(400);
   const dot = (await trail.boundingBox())!;
