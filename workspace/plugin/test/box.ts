@@ -41,3 +41,12 @@ function boxedPids(): number[] {
 export function aliveInBox(pid: number, box: SandboxKind = sandboxKind().kind): boolean {
   return box === 'bwrap' ? boxedPids().includes(pid) : aliveHere(pid);
 }
+
+/**
+ * Wait for that process to end, and say whether it did. A killed process is gone a moment after
+ * the signal, not with it: until it is reaped it still answers as alive.
+ */
+export async function endedInBox(pid: number, box: SandboxKind = sandboxKind().kind, ms = 5000): Promise<boolean> {
+  for (const end = Date.now() + ms; aliveInBox(pid, box) && Date.now() < end; ) await new Promise((r) => setTimeout(r, 20));
+  return !aliveInBox(pid, box);
+}

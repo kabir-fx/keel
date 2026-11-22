@@ -272,6 +272,7 @@ test('approve with main level: merged at the branch\'s tip, the owner\'s folder 
   expect(fs.existsSync(copyOf(w, 'adder'))).toBe(false);
   expect(info.works?.adder?.branch).toBeUndefined();
   expect(info.shows?.adder).toBeUndefined();
+  await until('the app and its child to end', () => !alive(pid) && !alive(child));
   expect(alive(pid) || alive(child)).toBe(false);
   expect((await b.state()).chapters.adder?.merged).toMatchObject({ commit: at, into: 'main' });
 });

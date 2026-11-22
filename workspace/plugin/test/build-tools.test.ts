@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BuildEnv } from '../src/build-tools';
 import { CHECKS_DIR, buildEnvFrom, createBuilderMcp, gitPin, runCheck, stopAllChecks, stopLeftoverChecks, tailOf } from '../src/build-tools';
 import { ENV_ALLOWED, bwrapArgs, defaultDenyRead, sandboxKind, seatbeltProfile } from '../src/sandbox';
-import { aliveInBox } from './box';
+import { aliveInBox, endedInBox } from './box';
 import { BoardClient } from '../src/client';
 import { readStarts } from '../src/starts';
 import { BCH, buildBoard, makeRepo, sh } from './build-board';
@@ -377,7 +377,7 @@ describe('the check itself', () => {
     stopLeftoverChecks(own);
     const r = await run;
     expect(r.code).not.toBe(0);
-    expect(aliveInBox(bg)).toBe(false);
+    expect(await endedInBox(bg)).toBe(true);
     expect(fs.readdirSync(path.join(own, CHECKS_DIR))).toHaveLength(0);
     const again = runCheck('sleep 60', repo, 60_000);
     await new Promise((r) => setTimeout(r, 200));

@@ -10,7 +10,7 @@ import { canvasTitle, renderBrief } from '@keel/protocol';
 import { runCheck } from '../src/build-tools';
 import { buildPlaces, createBuilder, readPlace } from '../src/hosted-builder';
 import { sandboxKind } from '../src/sandbox';
-import { aliveInBox } from './box';
+import { aliveInBox, endedInBox } from './box';
 import { NO_PTY_LINE } from '../src/session';
 import { BCH, buildBoard, makeRepo, sh } from './build-board';
 import type { FakeBoard } from './fake-board';
@@ -422,7 +422,7 @@ describe('try it (5.3, the builder\'s rows)', () => {
     expect(aliveInBox(grand)).toBe(true);
     expect(pidFiles()).toHaveLength(1);
     await s.stop();
-    expect(aliveInBox(grand)).toBe(false);
+    expect(await endedInBox(grand)).toBe(true);
     expect(sh(tmp, 'sh', '-c', 'ps -A -o command= | grep -c "[s]leep 30[01]" || true')).toBe('0');
     expect(seen.exits).toHaveLength(1);
     expect(pidFiles()).toEqual([]);
@@ -546,7 +546,7 @@ describe('try it (5.3, the builder\'s rows)', () => {
     const pid = Number(/pid=(\d+)/.exec(seen.out)![1]);
     expect(pidFiles()).toHaveLength(1);
     await builder();
-    expect(aliveInBox(pid)).toBe(false);
+    expect(await endedInBox(pid)).toBe(true);
     expect(pidFiles()).toEqual([]);
     expect(logs.some((l) => l.includes('ended 1 show on canvas adder left from before'))).toBe(true);
   }, 60_000);

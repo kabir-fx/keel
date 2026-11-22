@@ -148,6 +148,7 @@ describe('signing in', () => {
     expect(again).toEqual({ name: 'Claude Code', state: 'signed-out', signIn: { url: ADDRESS } });
 
     await s.close();
+    await until(() => !alive(pids[1]!));
     expect(alive(pids[1]!)).toBe(false);
   });
 });
