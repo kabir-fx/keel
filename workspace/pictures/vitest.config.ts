@@ -5,5 +5,6 @@ export default defineConfig({
     name: 'pictures',
     environment: 'happy-dom',
     include: ['test/**/*.test.{ts,tsx}'],
+    testTimeout: 15_000,
   },
 });

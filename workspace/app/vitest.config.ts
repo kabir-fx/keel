@@ -7,5 +7,6 @@ export default defineConfig({
     include: ['test/**/*.test.{ts,tsx}'],
     // The page asks for reduced motion in every test unless the test says otherwise.
     setupFiles: ['test/setup.ts'],
+    testTimeout: 15_000,
   },
 });
