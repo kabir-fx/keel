@@ -43,8 +43,8 @@ interface Metrics {
 }
 
 /** A lanes picture: labels in a column on the left. A spread: labels on top, so approaches stay narrow. */
-const WIDE: Metrics = { boxW: 160, gut: 56, labelW: 124, padT: 14, padB: 14 };
-const COMPACT: Metrics = { boxW: 128, gut: 52, labelW: 0, padT: 8, padB: 12 };
+const WIDE: Metrics = { boxW: 160, gut: 84, labelW: 124, padT: 17, padB: 17 };
+const COMPACT: Metrics = { boxW: 128, gut: 84, labelW: 0, padT: 8, padB: 12 };
 
 /**
  * A column for each step. A numbered step is never left of the one before it. A step fed
@@ -220,15 +220,16 @@ export function layoutLanes(p: LanesBody, compact: boolean): LanesLayout {
     const labelRow = compact ? 8 + t.name.length * 14 + t.note.length * 13 + (hasDots ? 10 : 4) : 0;
     const labelH = compact ? 0 : 14 + t.name.length * 16 + t.note.length * 14 + 10;
     const padT = M.padT + labelRow;
-    const bottomPad = M.padB + (loopRows.has(i) ? 26 : 0);
+    const bottomPad = M.padB + (loopRows.has(i) ? 72 : 0);
     const h = Math.max(labelH, padT + boxH + bottomPad);
     grid.rows.push({ top: y, boxTop: y + padT, boxH, bottom: y + h });
     lanes.push({ id: t.id, top: y, bottom: y + h, name: t.name, note: t.note });
     y += h + LANE_GAP;
   });
   for (const b of boxes) grid.occupied.add(`${b.row}/${b.col}`);
-  // An arrow in the divider's gutter keeps off the dashed line.
-  if (dividerCol !== undefined) grid.gutterUse.set(dividerCol - 1, 1);
+  // An arrow in the divider's gutter keeps off the dashed line, on its left (the third of
+  // `OFFSETS`), so an arrow into the later side keeps the long leg before its head.
+  if (dividerCol !== undefined) grid.gutterUse.set(dividerCol - 1, 2);
 
   const arrows: LanesArrow[] = flows.map(({ f, index }) => {
     const a = byId.get(f.from)!;

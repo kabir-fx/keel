@@ -291,6 +291,8 @@ export interface BoardCtx {
    * before the first of them is posted.
    */
   together(ids: readonly Id[]): void;
+  /** The event on this thing that `together` said was coming will not be posted. */
+  notComing(id: Id): void;
   /**
    * Record a step of the owner's that the log does not show, so Undo can take it back. It becomes
    * the newest step. The answer takes the step out of the list again: for a step that turned out

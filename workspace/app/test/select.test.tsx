@@ -1467,6 +1467,23 @@ describe('resizing a box and a note', () => {
     expect(document.querySelectorAll('.select-handle')).toHaveLength(0);
   });
 
+  it('a file shown as a picture keeps its shape at a corner, and Shift frees it; a file that is a tile has no handles', async () => {
+    const { board, posted } = open(
+      owner({ type: 'item.add', chapter: CH, item: { id: 'f1', kind: 'file', box: [100, 100, 200, 100], name: 'shot.png', asset: 'assets/shot.png', mime: 'image/png' } }),
+      owner({ type: 'item.add', chapter: CH, item: { id: 'f2', kind: 'file', box: [100, 400, 340, 60], name: 'notes.txt', asset: 'assets/notes.txt', mime: 'text/plain' } }),
+    );
+    clickOn('f1', [150, 150]);
+    expect(document.querySelectorAll('.select-handle')).toHaveLength(4);
+    const z = camera().z;
+    await dragHandle(board, corner(300, 200, 1, 1), [100 * z, 10 * z], { meta: true });
+    expect(updates(posted()).at(-1)).toEqual(['f1', [100, 100, 300, 150]]);
+    await dragHandle(board, corner(400, 250, 1, 1), [-100 * z, 10 * z], { shift: true, meta: true });
+    expect(updates(posted()).at(-1)).toEqual(['f1', [100, 100, 200, 160]]);
+    clickOn('f2', [150, 410]);
+    expect(selectedIds()).toEqual(['f2']);
+    expect(document.querySelectorAll('.select-handle')).toHaveLength(0);
+  });
+
   it('there are no handles with several selected, or on what the owner cannot resize', () => {
     const { board } = withBox(owner(note('m1', [0, 400, 320, 100])), agent(text('a1', { answers: ['m1'] })), owner(placeAt('a1', [600, 0, 300, 200])));
     selectBox(board);

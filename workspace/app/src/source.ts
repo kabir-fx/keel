@@ -1,4 +1,4 @@
-import type { Actor, BoardEvent, BoardInfo, BoardState, CanvasWork, ForeignRange, HomeInfo, Id, Presence, PresenceUpdate, RuleId, ServerMessage, ShowAsk, ShowInfo } from '@keel/protocol';
+import type { Actor, BoardEvent, BoardInfo, BoardState, CanvasWork, ForeignRange, Hold, HomeInfo, Id, Presence, PresenceUpdate, RuleId, ServerMessage, ShowAsk, ShowInfo } from '@keel/protocol';
 import { ROUTES, admit, isMark, reduce, replay } from '@keel/protocol';
 import type { Draft } from './drafts';
 import { cleanAssetName } from './marks';
@@ -11,6 +11,13 @@ import { cleanAssetName } from './marks';
 export interface BoardSource {
   readonly state: BoardState;
   readonly presence: Presence;
+  /**
+   * Why the agent holds its answer, while it does: the owner draws, or pressed Hold. It comes in
+   * `init` and in a `hold` message whenever it changes. Undefined when it does not hold.
+   */
+  readonly holding?: Hold | undefined;
+  /** Hold the agent's answer (`true`), or have it answer now. The owner only. Left out where no agent wakes. */
+  hold?(on: boolean): void;
   /** Who this connection is. It sets `by` on every event the app posts. */
   readonly role: Actor;
   readonly connection: Connection;
@@ -268,6 +275,9 @@ export class LocalSource implements BoardSource {
 
   build: BuildInfo | undefined = undefined;
   foreign: readonly ForeignRange[] | undefined = undefined;
+  holding: Hold | undefined = undefined;
+  /** No agent wakes on a board in memory. A test that plays the server sets one. */
+  hold: ((on: boolean) => void) | undefined = undefined;
   /** A played fixture has no repository: nothing is built here. */
   works: ReadonlyMap<string, CanvasWork> = NO_WORKS;
   shows: ReadonlyMap<string, ShowInfo> = NO_SHOWS;
@@ -307,6 +317,12 @@ export class LocalSource implements BoardSource {
     this.setForeign(undefined);
     return true;
   };
+
+  /** Say whether the agent holds, as the server would: for tests. */
+  setHolding(by: Hold | undefined): void {
+    this.holding = by;
+    this.listeners.emit();
+  }
 
   /** Say what the server would say about the build: how a test plays the server on a board in memory. */
   setBuild(info: BuildInfo | undefined): void {
@@ -413,6 +429,7 @@ const OPEN = 1;
 export class ServerSource implements BoardSource {
   state: BoardState = replay([]);
   presence: Presence = { state: 'away', note: 'connecting to the board', since: nowIso() };
+  holding: Hold | undefined = undefined;
   role: Actor = 'owner';
   connection: Connection = 'connecting';
   build: BuildInfo | undefined = undefined;
@@ -484,6 +501,7 @@ export class ServerSource implements BoardSource {
         if (!this.state.name) this.state = { ...this.state, name: msg.name };
         this.role = msg.role;
         this.presence = msg.presence;
+        this.holding = msg.hold;
         // A page that (re)connects learns the build from `init`: none there means none goes.
         this.build = msg.build ?? undefined;
         // And what the repository holds: none there means nothing.
@@ -508,6 +526,9 @@ export class ServerSource implements BoardSource {
         break;
       case 'presence':
         this.presence = msg.presence;
+        break;
+      case 'hold':
+        this.holding = msg.by ?? undefined;
         break;
       case 'build':
         // The server's build driver changed what it does: `null` when no build goes any more.
@@ -565,6 +586,7 @@ export class ServerSource implements BoardSource {
     if (this.connection === 'refused') return;
     this.connection = 'closed';
     this.presence = { state: 'away', note: 'the board server is not reachable', since: nowIso() };
+    this.holding = undefined;
     // What a build shows is served by that server, at an address that is new for each start:
     // a link to it now may lead nowhere. The next `init` says what the repository holds.
     this.works = NO_WORKS;
@@ -611,6 +633,11 @@ export class ServerSource implements BoardSource {
       this.pending.set(ref, resolve);
       ws.send(JSON.stringify({ t: 'post', ref, draft }));
     });
+  };
+
+  /** Nothing is sent while offline: the owner sees the pill away, and presses again once it is back. */
+  hold = (on: boolean): void => {
+    if (this.connection === 'open' && this.ws?.readyState === OPEN) this.ws.send(JSON.stringify({ t: 'hold', on }));
   };
 
   /** Ask the board which events came from outside and are not kept yet. */

@@ -1,10 +1,12 @@
-import type { AgentLink, BoardEvent, BoardState, Digest, ForeignRange, Id, Presence, PresenceState, PresenceUpdate, WakeReason, WakeResult } from '@keel/protocol';
-import { ACT_TYPES, digest, isAct, isForeign, openCount, openThings, renderDigest } from '@keel/protocol';
+import type { AgentLink, BoardEvent, BoardState, Digest, ForeignRange, Hold, Id, MarkItem, Presence, PresenceState, PresenceUpdate, WakeReason, WakeResult } from '@keel/protocol';
+import { ACT_TYPES, digest, isAct, isForeign, openCount, openThings, renderDigest, targetsOf } from '@keel/protocol';
 import { plain } from './text';
 
 /**
  * The pause rule. Marks reach the log at once. The agent wakes once per pause: a short quiet
  * time after the owner's last input. One wake carries everything open since the last one.
+ * While the owner draws their own diagram, or has pressed Hold, the agent holds: it wakes when
+ * words come, or when the owner asks it to answer now.
  */
 
 export interface Clock {
@@ -52,22 +54,43 @@ export function wakePresence(d: Digest, state: BoardState): PresenceUpdate {
 }
 
 /**
- * How long to wait for quiet after this event, or undefined when it is not input for the
- * agent. Moves, placements, removals and system or agent events never wake anyone.
+ * What an event of the owner's is to the pause rule. `words` wake soon and end a hold. A
+ * `file` wakes soon too, but dropped in during a hold it is part of the drawing, and ends
+ * nothing. A `shape` (a box or an arrow of the owner's own drawing, new or with its label
+ * changed) holds at once. A `mark` (ink, a pin, a box or an arrow on one of the agent's
+ * pictures, new or with its label changed) waits long. Undefined for what is not the owner's input: a move, a resize, a
+ * removal, a placement, a lasso, a system or agent event.
  */
-export function quietAfter(ev: BoardEvent): number | undefined {
+export type Input = 'words' | 'file' | 'shape' | 'mark';
+
+/** True when the mark is drawn on one of the agent's pictures: its anchor, or an end of an arrow, is on one. */
+function onAgentPicture(item: MarkItem, state: BoardState): boolean {
+  return [item.anchor, ...targetsOf(item)].some((t) => {
+    const s = t && state.items[t.item];
+    return !!s && s.by === 'agent' && s.item.kind === 'picture';
+  });
+}
+
+/** A box or an arrow of the owner's own diagram, not a remark on the agent's picture. */
+function ownDrawing(item: MarkItem, state: BoardState): boolean {
+  return (item.kind === 'box' || item.kind === 'arrow') && !onAgentPicture(item, state);
+}
+
+export function inputOf(ev: BoardEvent, state: BoardState): Input | undefined {
   if (ev.by !== 'owner') return undefined;
   if (ev.type === 'item.add') {
     switch (ev.item.kind) {
       case 'note':
       case 'voice':
+        return 'words';
       case 'file':
-        return QUIET_SHORT;
-      case 'ink':
+        return 'file';
       case 'box':
       case 'arrow':
+        return ownDrawing(ev.item, state) ? 'shape' : 'mark';
+      case 'ink':
       case 'pin':
-        return QUIET_LONG;
+        return 'mark';
       case 'lasso':
         // The owner holding things together, not a remark: a lasso is never open, and wakes nobody.
         return undefined;
@@ -76,9 +99,13 @@ export function quietAfter(ev: BoardEvent): number | undefined {
     }
   }
   // The owner's acts, their own change to a part among them.
-  if (isAct(ev)) return QUIET_SHORT;
-  // Editing the words of a note or a label is a remark too.
-  if (ev.type === 'item.update' && ev.patch.text !== undefined) return QUIET_SHORT;
+  if (isAct(ev)) return 'words';
+  if (ev.type === 'item.update' && ev.patch.text !== undefined) {
+    // A changed label is what a new box or arrow with those words would be. Editing a note's words is a remark.
+    const item = state.items[ev.item]?.item;
+    if (item?.kind !== 'box' && item?.kind !== 'arrow') return 'words';
+    return ownDrawing(item, state) ? 'shape' : 'mark';
+  }
   return undefined;
 }
 
@@ -101,6 +128,8 @@ export interface WakeSchedulerOptions {
    * left open wakes nobody, and the digest tags it as not a request.
    */
   foreign?: () => readonly ForeignRange[] | undefined;
+  /** Called when a hold starts or ends, so the pages can show it. */
+  onHold?: (by: Hold | undefined) => void;
 }
 
 export class WakeScheduler {
@@ -112,8 +141,11 @@ export class WakeScheduler {
   private readonly wakeTimeoutMs: number;
   private readonly resting: (() => PresenceUpdate | undefined) | undefined;
   private readonly foreign: () => readonly ForeignRange[] | undefined;
+  private readonly onHold: (by: Hold | undefined) => void;
 
   private quietTimer: unknown;
+  /** Why the agent holds, while it does. Only `start`, `notify`, `hold` and `release` change it. */
+  private holdBy: Hold | undefined;
   private retryTimer: unknown;
   private running: Promise<void> | undefined;
   /** A pause ended while a wake ran: wake once more when it resolves. */
@@ -135,6 +167,7 @@ export class WakeScheduler {
     this.wakeTimeoutMs = opts.wakeTimeoutMs ?? WAKE_TIMEOUT;
     this.resting = opts.resting;
     this.foreign = opts.foreign ?? (() => undefined);
+    this.onHold = opts.onHold ?? (() => {});
   }
 
   /** The `seq` the agent saw at its last good wake. */
@@ -146,25 +179,61 @@ export class WakeScheduler {
     return this.running !== undefined;
   }
 
-  /** Wake now if something is open: the server just started, and marks may have waited. */
-  start(): void {
-    this.fire('start');
+  /** Why the agent holds its answer now, or undefined when it does not. */
+  get holding(): Hold | undefined {
+    return this.holdBy;
   }
 
-  /** Hear new events. The owner's input restarts the quiet time. */
+  /** The owner pressed Hold: no wake for shapes, ink or pins until words or `release`. */
+  hold(): void {
+    if (this.closed || this.holdBy === 'owner') return;
+    this.clearQuiet();
+    this.setHold('owner');
+  }
+
+  /** The owner asked for an answer now: one wake for everything open. */
+  release(): void {
+    if (this.closed || this.holdBy === undefined) return;
+    this.setHold(undefined);
+    this.fire('marks');
+  }
+
+  /**
+   * Wake now if something is open: the server just started, and marks may have waited. A hold is
+   * forgotten in a restart, so when all the owner left open is their own drawing, hold again.
+   */
+  start(): void {
+    if (this.closed || this.holdBy !== undefined) return;
+    const state = this.state();
+    const outside = this.foreign();
+    const own = openThings(state).filter((o) => !outside || !isForeign(outside, o.seq));
+    if (own.length > 0 && own.every((o) => o.kind === 'mark' && ownDrawing(o.item, state))) this.setHold('drawing');
+    else this.fire('start');
+  }
+
+  /** Hear new events. The owner's input restarts the quiet time, or keeps a hold on. */
   notify(events: readonly BoardEvent[]): void {
     if (this.closed) return;
-    let delay: number | undefined;
-    for (const ev of events) delay = quietAfter(ev) ?? delay;
-    if (delay === undefined) return;
+    const state = this.state();
+    const heard = new Set<Input>();
+    for (const ev of events) {
+      const input = inputOf(ev, state);
+      if (input) heard.add(input);
+    }
+    if (heard.size === 0) return;
     // The owner is here again: a failed link gets a fresh set of retries.
     this.clearRetry();
     this.failures = 0;
-    if (this.quietTimer !== undefined) this.clock.clearTimeout(this.quietTimer);
-    this.quietTimer = this.clock.setTimeout(() => {
-      this.quietTimer = undefined;
-      this.fire('marks');
-    }, delay);
+    const words = heard.has('words') || (heard.has('file') && this.holdBy === undefined);
+    if (words) {
+      // Words end any hold, and the one wake carries everything open.
+      if (this.holdBy !== undefined) this.setHold(undefined);
+      this.wait(QUIET_SHORT);
+      return;
+    }
+    if (heard.has('shape') && this.holdBy === undefined) this.setHold('drawing');
+    if (this.holdBy !== undefined) this.clearQuiet();
+    else this.wait(QUIET_LONG);
   }
 
   /** Resolves when no wake is running. */
@@ -174,9 +243,26 @@ export class WakeScheduler {
 
   close(): void {
     this.closed = true;
+    this.clearQuiet();
+    this.clearRetry();
+  }
+
+  private wait(delay: number): void {
+    this.clearQuiet();
+    this.quietTimer = this.clock.setTimeout(() => {
+      this.quietTimer = undefined;
+      this.fire('marks');
+    }, delay);
+  }
+
+  private clearQuiet(): void {
     if (this.quietTimer !== undefined) this.clock.clearTimeout(this.quietTimer);
     this.quietTimer = undefined;
-    this.clearRetry();
+  }
+
+  private setHold(by: Hold | undefined): void {
+    this.holdBy = by;
+    this.onHold(by);
   }
 
   private clearRetry(): void {
@@ -185,7 +271,8 @@ export class WakeScheduler {
   }
 
   private fire(reason: WakeReason): void {
-    if (this.closed) return;
+    // A hold lets nothing through: not a retry, and not a wake that was due. Its end fires.
+    if (this.closed || this.holdBy !== undefined) return;
     if (this.running) {
       this.due = true;
       return;

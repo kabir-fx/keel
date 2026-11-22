@@ -108,6 +108,7 @@ export function fakeBoard(over: { tool?: ToolId; isOwner?: boolean; spaceHeld?: 
       else if (!only || did.arrowsAhead.get(id) === only) did.arrowsAhead.delete(id);
     },
     together: (ids) => did.groups.push(ids),
+    notComing: () => {},
     recordStep: (step) => {
       did.steps.push(step);
       return () => {

@@ -183,7 +183,7 @@ export const PictureItem = z.strictObject({
   box: Box.optional(),
   place: Place.optional(),
   /** The marks and requests this picture answers. Each one stops being open. */
-  answers: z.array(Id).max(24).optional(),
+  answers: z.array(Id).max(40).optional(),
   /** The items this picture grew out of. The board draws an arrow from each. */
   from: z.array(Id).max(12).optional(),
   /** `drawing` is a placeholder the owner sees at once. Replace it with the finished picture. */
@@ -243,7 +243,7 @@ export const ItemPatch = z.strictObject({
   /** For a picture: the whole new spec. */
   picture: PictureSpec.optional(),
   status: z.enum(['drawing', 'done']).optional(),
-  answers: z.array(Id).max(24).optional(),
+  answers: z.array(Id).max(40).optional(),
   from: z.array(Id).max(12).optional(),
   /** For an arrow: one of its ends, set again by its author. */
   arrowFrom: ArrowEnd.optional(),

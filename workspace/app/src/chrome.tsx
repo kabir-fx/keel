@@ -1,4 +1,4 @@
-import type { BoardState, ChapterState, Id, Presence, PresenceState } from '@keel/protocol';
+import type { BoardState, ChapterState, Hold, Id, Presence, PresenceState } from '@keel/protocol';
 import { currentChapter, liveItems, openCount } from '@keel/protocol';
 import { Star } from '@keel/pictures';
 import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
@@ -140,18 +140,63 @@ export function leftToCursor(p: Presence, cursorOnBoard: boolean, titles: readon
   return cursorOnBoard && p.state !== 'away' && p.note && p.note.length > PILL_NOTE_MAX && !isOnlyTitle(p.note, titles) ? p.note : undefined;
 }
 
-export function PresencePill({ presence, cursorSays = false, titles = [] }: { presence: Presence; cursorSays?: boolean; titles?: readonly string[] }) {
+/** What the pill says while the agent holds its answer, with how many of the owner's marks wait. */
+export function holdText(by: Hold, open: number): string {
+  const said = by === 'drawing' ? 'holding while you draw' : 'holding';
+  if (open === 0) return said;
+  return `${said} · ${open === 1 ? '1 mark waits' : `${open} marks wait`}`;
+}
+
+/**
+ * `holding` and `open` say that the agent holds and how many marks wait. `onHold` is given to
+ * the owner's page only, when an agent wakes: the pill then has Hold, or Answer now. `ask`
+ * makes Answer now stand out, while the page points the owner at it.
+ */
+export function PresencePill({
+  presence,
+  cursorSays = false,
+  titles = [],
+  holding,
+  open = 0,
+  onHold,
+  ask = false,
+}: {
+  presence: Presence;
+  cursorSays?: boolean;
+  titles?: readonly string[];
+  holding?: Hold | undefined;
+  open?: number;
+  onHold?: ((on: boolean) => void) | undefined;
+  ask?: boolean;
+}) {
   const s = presence.state;
-  const text = presenceText(presence, cursorSays, titles);
+  const text = holding ? holdText(holding, open) : presenceText(presence, cursorSays, titles);
   // The cursor is drawn in the overlay, where a screen reader does not look: the pill says its note to one, and shows it whole in its tip.
-  const left = leftToCursor(presence, cursorSays, titles);
+  const left = holding ? undefined : leftToCursor(presence, cursorSays, titles);
+  const press = holding ? { on: false, word: 'Answer now', id: 'presence-answer' } : s === 'listening' ? { on: true, word: 'Hold', id: 'presence-hold' } : undefined;
   return (
-    <div className={`chrome pill pill--agent pill--${s}`} data-testid="presence" data-viewport-ui="top" data-state={s} role="status" aria-live="polite" data-tip={`The agent: ${left ?? text}`}>
+    <div className={`chrome pill pill--agent pill--${s}`} data-testid="presence" data-viewport-ui="top" data-state={s} data-hold={holding} role="status" aria-live="polite" data-tip={`The agent: ${left ?? text}`}>
       <Star />
       <span className="pill__said">
         <b>The agent:</b> {text}
       </span>
       {left && <span className="for-reader">{left}</span>}
+      {onHold && press && (
+        <button
+          type="button"
+          className="pill__hold"
+          data-testid={press.id}
+          data-ask={(holding && ask) || undefined}
+          // A press here is not a press on the board.
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onHold(press.on);
+          }}
+        >
+          {press.word}
+        </button>
+      )}
       {s !== 'away' && (
         <span className={`presence-sign presence-sign--${s}`} aria-hidden="true">
           <i />

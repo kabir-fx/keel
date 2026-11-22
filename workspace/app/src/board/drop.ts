@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { noteDrafts } from '../drafts';
 import { fitPaste, NOTE_MAX } from '../fieldText';
 import { typing } from '../input/keys';
-import { fileItem } from '../marks';
+import { FILE_TILE, fileItem, onGrid, pictureSize, shownAsPicture } from '../marks';
 import type { BoardSource } from '../source';
 import { MAX_UPLOAD } from '../source';
 import type { Board } from './context';
@@ -37,6 +37,21 @@ export function viewable(blob: Blob, name: string): Blob {
   if ((t.startsWith('image/') && !t.includes('svg')) || t === 'application/pdf') return blob;
   const texty = t.startsWith('text/') || /json|xml|yaml|javascript|svg/.test(t) || /\.(md|txt|csv|tsv|json|ya?ml|log|html?|svg|xml|[cm]?[jt]sx?|py|rs|go|sh|toml|ini)$/i.test(name);
   return texty ? new Blob([blob], { type: 'text/plain;charset=utf-8' }) : new Blob([blob], { type: 'application/octet-stream' });
+}
+
+/** A picture's natural size, as the page decodes it, or nothing when it cannot be decoded. */
+export async function naturalSize(file: Blob): Promise<[number, number] | undefined> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    return img.naturalWidth > 0 && img.naturalHeight > 0 ? [img.naturalWidth, img.naturalHeight] : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 /**
@@ -161,11 +176,11 @@ export function useDrop(board: Board, source: BoardSource): DropIn {
     [source, say],
   );
 
-  /** Where a file lands when no place is given: a little left of and above the middle of the screen. */
-  const centre = (): [number, number] => {
+  /** The middle of the screen, in world units: where files land when no place is given. */
+  const middle = (): [number, number] => {
     const cam = board.camera.get();
     const viewport = board.viewport();
-    return [(viewport.w / 2 - 170 - cam.x) / cam.z, (viewport.h / 2 - 60 - cam.y) / cam.z];
+    return [(viewport.w / 2 - cam.x) / cam.z, (viewport.h / 2 - cam.y) / cam.z];
   };
 
   /** A dropped file stored on the board: its asset, or nothing when it was not, and the board has said why. */
@@ -182,18 +197,27 @@ export function useDrop(board: Board, source: BoardSource): DropIn {
 
   const addFiles = async (files: readonly File[], client?: PagePoint) => {
     const rects = client ? board.measure() : [];
-    const [wx, wy] = client ? board.toWorld(client.x, client.y) : centre();
-    // The files go up first, side by side. Undo never waits for an upload, however long it
-    // takes: the files of one drop that are stored become one step only now, and are posted.
-    const assets = await Promise.all(files.map(store));
+    const at = client ? board.toWorld(client.x, client.y) : middle();
+    const zoom = board.camera.get().z;
+    const vh = board.viewport().h;
+    // The files go up first, side by side, and each picture's size is read meanwhile. Undo never
+    // waits for an upload, however long it takes: the files of one drop that are stored become
+    // one step only now, and are posted.
+    const [assets, naturals] = await Promise.all([Promise.all(files.map(store)), Promise.all(files.map((f) => (shownAsPicture({ mime: f.type }) ? naturalSize(f) : undefined)))]);
     const stored = files.flatMap((file, i) => {
       const asset = assets[i];
-      return asset === undefined ? [] : [{ file, asset, id: board.newId() }];
+      const natural = naturals[i];
+      return asset === undefined ? [] : [{ file, asset, id: board.newId(), size: natural && pictureSize(natural, vh, zoom) }];
     });
+    // Pictures land centred on the point, on a grid with any other file of the drop as a tile.
+    // Without a picture, the tiles stack down from the point, or from a little left of and above
+    // the middle of the screen.
+    const corner: [number, number] = client ? at : [at[0] - 170 / zoom, at[1] - 60 / zoom];
+    const grid = stored.some((s) => s.size) ? onGrid(stored.map((s) => s.size ?? FILE_TILE), at, 50 / zoom) : undefined;
     board.together(stored.map((s) => s.id));
     for (const [row, { file, asset, id }] of stored.entries()) {
       try {
-        await board.postMark(fileItem(id, [wx, wy + row * 76], file, asset, row === 0 ? rects : [], board.targetBox));
+        await board.postMark(fileItem(id, grid ? at : [corner[0], corner[1] + row * 76], file, asset, row === 0 ? rects : [], board.targetBox, grid?.[row]));
       } finally {
         // Posted or not, this file's id is free again, and Undo no longer waits for it.
         board.freeId(id);

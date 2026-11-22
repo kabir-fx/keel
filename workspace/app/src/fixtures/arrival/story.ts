@@ -36,8 +36,8 @@ const CH = 'reminders';
 export const SIZES: Readonly<Record<string, Size>> = {
   read: [380, 152],
   path: [540, 100],
-  ways: [1124, 532],
-  plan: [588, 367],
+  ways: [1156, 532],
+  plan: [616, 385],
   'by-text': [545, 100],
   'text-cost': [380, 149],
   pipe: [1276, 440],

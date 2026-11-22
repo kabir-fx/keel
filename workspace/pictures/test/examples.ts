@@ -72,9 +72,33 @@ export const EXAMPLES: Record<(typeof PICTURE_KINDS)[number], Record<string, unk
 
 /**
  * Pictures that push a layout to its limits, beyond the contract's one example per kind: a
- * focus with eight long crossings and long sample chips, and a blueprint with assumptions.
+ * focus with eight long crossings and long sample chips, a blueprint with assumptions, and
+ * lanes an agent drew from an owner's flowchart, whose arrows once came out as stubs.
  */
 export const STRESS: Record<string, Record<string, unknown>> = {
+  'ex-lanes-maths': {
+    kind: 'lanes',
+    title: 'A maths game: go, problem, answer, feedback',
+    lanes: [
+      { id: 'player', name: 'Player' },
+      { id: 'game', name: 'Game program' },
+    ],
+    steps: [
+      { id: 'start', lane: 'player', text: 'start', n: 1 },
+      { id: 'go', lane: 'player', text: 'player says go', n: 2 },
+      { id: 'problem', lane: 'game', text: 'gives a simple maths problem', n: 3 },
+      { id: 'answer', lane: 'player', text: 'player responds back', n: 4 },
+      { id: 'reply', lane: 'game', text: 'based on the answer, computer suggests', n: 5 },
+    ],
+    flows: [
+      { from: 'start', to: 'go' },
+      { from: 'go', to: 'problem' },
+      { from: 'problem', to: 'answer' },
+      { from: 'answer', to: 'reply' },
+    ],
+    caption: 'Read as: one flow, a turn of a maths game.',
+    gaps: ['"Suggests" is not clear.'],
+  },
   'ex-focus-crossings': {
     kind: 'focus',
     part: 'door',

@@ -382,6 +382,50 @@ describe('a link module', () => {
   });
 });
 
+describe('holding the agent', () => {
+  it('the owner holds and releases over the websocket; the agent cannot; a page that joins hears the hold in init', async () => {
+    const repoDir = tempRepo();
+    const mod = path.join(path.dirname(repoDir), 'quiet-link.mjs');
+    fs.writeFileSync(mod, `export function createLink() { return { name: 'quiet', async wake() { return { ok: true }; }, async close() {} }; }\n`);
+    const s = await start({ repoDir, link: mod });
+    const owner = await connect(s, s.tokens.owner);
+    const agent = await connect(s, s.tokens.agent);
+    expect(owner.messages[0]).not.toHaveProperty('hold');
+
+    agent.send({ t: 'hold', on: true });
+    expect(await agent.next((m) => m.t === 'refused')).toMatchObject({ rule: 'R6' });
+    expect(s.scheduler?.holding).toBeUndefined();
+
+    owner.send({ t: 'hold', on: true });
+    expect(await agent.next((m) => m.t === 'hold')).toEqual({ t: 'hold', by: 'owner' });
+    expect(s.scheduler?.holding).toBe('owner');
+    const late = await connect(s, s.tokens.owner);
+    expect(late.messages[0]).toMatchObject({ t: 'init', hold: 'owner' });
+
+    owner.send({ t: 'hold', on: false });
+    await owner.next((m) => m.t === 'hold' && m.by === null);
+    expect(s.scheduler?.holding).toBeUndefined();
+  });
+
+  it('a restart in the middle of a drawing begins held: the boxes wait, and a page that joins hears the hold in init', async () => {
+    const repoDir = tempRepo();
+    const a = await start({ repoDir });
+    const box = { type: 'item.add', chapter: CH, item: { id: 'b1', kind: 'box', box: [0, 0, 160, 80], text: 'the queue' } };
+    await call(a.origin, a.tokens.owner, ROUTES.events, { method: 'POST', json: { drafts: [chapter(), box] } });
+    await a.close();
+
+    const mod = path.join(path.dirname(repoDir), 'counting-link.mjs');
+    const woken = path.join(path.dirname(repoDir), 'woken.txt');
+    fs.writeFileSync(mod, `import fs from 'node:fs';\nexport function createLink() { return { name: 'counting', async wake() { fs.appendFileSync(${JSON.stringify(woken)}, 'w'); return { ok: true }; }, async close() {} }; }\n`);
+    const b = await start({ repoDir, link: mod });
+    expect(b.scheduler?.holding).toBe('drawing');
+    const owner = await connect(b, b.tokens.owner);
+    expect(owner.messages[0]).toMatchObject({ t: 'init', hold: 'drawing' });
+    expect(b.scheduler?.wakes).toBe(0);
+    expect(fs.existsSync(woken)).toBe(false);
+  });
+});
+
 function rawGet(port: number, route: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port, method: 'GET', path: route }, (res) => {

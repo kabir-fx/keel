@@ -1,4 +1,4 @@
-import type { Id, MarkItem, PinItem } from '@keel/protocol';
+import type { Box, Id, MarkItem, PinItem } from '@keel/protocol';
 import { useEffect } from 'react';
 import { LABEL_MAX, PIN_MAX } from '../fieldText';
 import { keyWords } from '../input/keytable';
@@ -8,6 +8,7 @@ import { arrowItem, boxItem } from '../marks';
 import type { LabelDraft } from '../noteDraft';
 import { readLabelDraft } from '../noteDraft';
 import type { Label } from '../tools/types';
+import { changeWords } from './changeWords';
 import type { FieldBoard, Opening } from './oneField';
 import { HAD_IT, asUndoLeftIt, useOneField } from './oneField';
 
@@ -61,8 +62,14 @@ export interface MarkLabels {
   label: Label | null;
   /** The field its words are typed in; null when no mark waits. */
   field: LabelField | null;
+  /** The mark on the board whose words are open, drawn by its field; null when none is. */
+  editing: Id | null;
   /** Open the field for the words of a mark that is drawn and not posted yet. */
   open(label: Label): void;
+  /** Open the label of one of the owner's boxes for a change. False when the id is not one. */
+  edit(id: Id): boolean;
+  /** True while a label's field is open, also before React has drawn it. */
+  isOpen(): boolean;
 }
 
 /**
@@ -98,11 +105,11 @@ function grownTo(l: Label, height: number | undefined): Label {
  * goes first: its hook runs before this one.
  */
 export function useMarkLabel(board: LabelBoard, remember = false, noteOpen: () => boolean = () => false): MarkLabels {
-  /** The words on the mark with this id, while the board holds it as a mark of this kind. */
-  const held = (l: Label, id: Id | undefined): { text: string } | undefined => {
+  /** The words on the mark with this id, and its box, while the board holds it as a mark of this kind. */
+  const held = (l: Label, id: Id | undefined): { text: string; box: Box } | undefined => {
     const s = id ? board.state().items[id] : undefined;
     if (!s || s.removed || s.item.kind !== l.kind) return undefined;
-    return { text: 'text' in s.item ? (s.item.text ?? '') : '' };
+    return { text: 'text' in s.item ? (s.item.text ?? '') : '', box: s.item.box };
   };
 
   const one = useOneField<Drawn, LabelDraft>({
@@ -165,15 +172,17 @@ export function useMarkLabel(board: LabelBoard, remember = false, noteOpen: () =
     const words = wordsOf(label, raw);
     const there = held(label, mark);
     if (there && mark) {
-      // The board holds the mark: the words go onto it. No words leave it as it is.
-      if (!words || words === there.text) {
+      // The board holds the mark: the words go onto it, and a box keeps the height its field grew to.
+      if (words === there.text) {
         one.forget(o);
         return mark;
       }
       // On its way, the change is still only the owner's: its words are in the browser until the board has them.
       one.keep(o, raw);
       one.flush();
-      const ok = (await board.send({ type: 'item.update', item: mark, patch: { text: words } })).ok;
+      const [x, y, w, h] = there.box;
+      const grew = label.kind === 'box' && label.box[3] > h;
+      const ok = (await changeWords(board, mark, { text: words, ...(grew ? { box: [x, y, w, label.box[3]] } : {}) })).ok;
       if (ok) one.forget(o);
       else one.bringBack(o.of, back);
       return ok ? mark : undefined;
@@ -200,19 +209,20 @@ export function useMarkLabel(board: LabelBoard, remember = false, noteOpen: () =
   };
 
   /**
-   * Esc: a pin goes; a box or an arrow stays with no words. Words that were typed go to Undo.
-   * Esc on the field Undo opened, with the words as Undo brought them, only puts it away: the
-   * step is on the redo list still, and nothing is posted (the mark is not posted again). Redo
-   * then changes nothing, and says again what the first Esc said.
+   * Esc: a pin goes; a box or an arrow stays with no words, and one on the board stays as it is.
+   * Words that were typed go to Undo. Esc on the field Undo opened, with the words as Undo
+   * brought them, only puts it away: the step is on the redo list still, and nothing is posted
+   * (the mark is not posted again). Redo then changes nothing, and says again what the first Esc said.
    */
   const cancel = (o: Opening<Drawn>, raw: string) => {
-    const { label } = o.of;
+    const { label, mark } = o.of;
     if (asUndoLeftIt(o, raw)) {
       close();
       one.forget(o);
       return;
     }
-    const typed = raw.trim() !== '';
+    const there = held(label, mark);
+    const typed = raw.trim() !== '' && wordsOf(label, raw) !== there?.text;
     if (label.kind === 'pin') {
       close();
       one.forget(o);
@@ -233,7 +243,7 @@ export function useMarkLabel(board: LabelBoard, remember = false, noteOpen: () =
     }
     // The words are recorded before the mark is posted, so the mark is the newer step: Undo
     // takes the mark off, and Undo again brings its field back with the words.
-    const step: { mark?: Id } = {};
+    const step: { mark?: Id } = there && mark ? { mark } : {};
     const forgetWords = typed
       ? board.recordStep({
           what: label.kind === 'box' ? 'the words on your box' : 'the words on your arrow',
@@ -245,6 +255,11 @@ export function useMarkLabel(board: LabelBoard, remember = false, noteOpen: () =
           redo: () => true,
         })
       : undefined;
+    if (step.mark) {
+      close();
+      one.forget(o);
+      return;
+    }
     void post(o, '', raw).then((mark) => {
       if (mark) step.mark = mark;
       // Refused: the field is back already, with the words in it. Their step has nothing more
@@ -271,7 +286,16 @@ export function useMarkLabel(board: LabelBoard, remember = false, noteOpen: () =
   return {
     label: open?.of.label ?? null,
     field: open ? fieldOf(open) : null,
+    editing: open && held(open.of.label, open.of.mark) ? (open.of.mark ?? null) : null,
     open: (label) => one.show({ label }, ''),
+    edit: (id) => {
+      const s = board.state().items[id];
+      const shown = board.boxes().get(id);
+      if (!s || s.removed || s.by !== 'owner' || s.item.kind !== 'box' || !shown) return false;
+      one.show({ label: { kind: 'box', box: shown, at: [shown[0], shown[1]] }, mark: id }, s.item.text ?? '');
+      return true;
+    },
+    isOpen: one.isOpen,
   };
 }
 

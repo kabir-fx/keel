@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { BoardEvent, ForeignRange } from '@keel/protocol';
+import type { BoardEvent, BoardState, ForeignRange } from '@keel/protocol';
 import { digest } from '@keel/protocol';
 import { Board } from '../src/board';
 import { PresenceHub } from '../src/presence';
-import { QUIET_LONG, QUIET_SHORT, WAKE_PRESENCE, WAKE_TIMEOUT, WakeScheduler, quietAfter, wakePresence } from '../src/wake';
+import { QUIET_LONG, QUIET_SHORT, WAKE_PRESENCE, WAKE_TIMEOUT, WakeScheduler, inputOf, wakePresence } from '../src/wake';
 import { CH, FakeClock, FakeLink, chapter, flush, ink, note, tempRepo } from './helpers';
 
 const boards: Board[] = [];
@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 /** A board, its scheduler, and what it needs. `foreign` says which events came with the log from outside. */
-function setup(opts: { foreign?: () => readonly ForeignRange[] | undefined } = {}) {
+function setup(opts: { foreign?: () => readonly ForeignRange[] | undefined; onHold?: (by: 'drawing' | 'owner' | undefined) => void } = {}) {
   const board = Board.open(tempRepo());
   boards.push(board);
   board.post([chapter()], 'owner');
@@ -36,6 +36,10 @@ function setup(opts: { foreign?: () => readonly ForeignRange[] | undefined } = {
 
 const freshIds = (w: { digest: { open: Array<{ id: string; fresh: boolean }> } }) =>
   w.digest.open.filter((o) => o.fresh).map((o) => o.id);
+
+const box = (id: string, text?: string) => ({ type: 'item.add', chapter: CH, item: { id, kind: 'box', box: [0, 0, 160, 80], ...(text ? { text } : {}) } });
+const file = (id: string) => ({ type: 'item.add', chapter: CH, item: { id, kind: 'file', box: [0, 0, 340, 60], name: 'shot.png', asset: 'assets/shot.png', mime: 'image/png' } });
+const arrow = (id: string) => ({ type: 'item.add', chapter: CH, item: { id, kind: 'arrow', box: [0, 0, 100, 10], from: [0, 5], to: [100, 5] } });
 
 describe('the pause rule', () => {
   it('waits 1500 ms after a stroke and 300 ms after a note', () => {
@@ -257,6 +261,394 @@ describe('the pause rule', () => {
   });
 });
 
+describe('holding while the owner draws', () => {
+  /** An agent's picture on the board, answering an earlier note, with nothing open after it. */
+  function withPicture(t: ReturnType<typeof setup>) {
+    t.board.post([note('n0', 'earlier')], 'owner');
+    t.agent({ type: 'item.add', chapter: CH, item: { id: 'p1', kind: 'picture', picture: { kind: 'text', title: 'Earlier' }, answers: ['n0'] } });
+    t.clock.advance(QUIET_SHORT);
+    expect(t.link.wakes).toHaveLength(0);
+  }
+  const onPicture = { anchor: { item: 'p1', box: [0, 0, 300, 200] } };
+
+  it('a lone box holds at once, and never wakes however long', () => {
+    const held: Array<string | undefined> = [];
+    const t = setup({ onHold: (by) => held.push(by) });
+    t.owner(box('b1', 'one engine'));
+    expect(t.scheduler.holding).toBe('drawing');
+    expect(held).toEqual(['drawing']);
+    t.clock.advance(60 * 60_000);
+    expect(t.link.wakes).toHaveLength(0);
+    expect(t.scheduler.holding).toBe('drawing');
+    expect(t.clock.pending).toBe(0);
+  });
+
+  it('a lone arrow on bare board holds as well', () => {
+    const t = setup();
+    t.owner(arrow('a1'));
+    expect(t.scheduler.holding).toBe('drawing');
+    t.clock.advance(60_000);
+    expect(t.link.wakes).toHaveLength(0);
+  });
+
+  it('a note during a drawing hold ends it, and wakes after 300 ms with every mark in one digest', () => {
+    const held: Array<string | undefined> = [];
+    const t = setup({ onHold: (by) => held.push(by) });
+    t.owner(box('b1'));
+    t.owner(box('b2'));
+    t.owner(arrow('a1'));
+    t.owner(ink('m1'));
+    t.clock.advance(5000);
+    expect(t.link.wakes).toHaveLength(0);
+    t.owner(note('n1', 'this is the flow'));
+    expect(t.scheduler.holding).toBeUndefined();
+    expect(held).toEqual(['drawing', undefined]);
+    t.clock.advance(QUIET_SHORT - 1);
+    expect(t.link.wakes).toHaveLength(0);
+    t.clock.advance(1);
+    expect(t.link.wakes).toHaveLength(1);
+    expect(freshIds(t.link.wakes[0]!)).toEqual(['b1', 'b2', 'a1', 'm1', 'n1']);
+  });
+
+  it('an act and an edit of a note\'s words end a drawing hold too', () => {
+    const t = setup();
+    t.owner(box('b1'));
+    t.owner({ type: 'solidify', chapter: CH, picks: [], parts: [] });
+    expect(t.scheduler.holding).toBeUndefined();
+    t.clock.advance(QUIET_SHORT);
+    expect(t.link.wakes).toHaveLength(1);
+
+    const u = setup();
+    u.board.post([note('n1', 'first words')], 'owner');
+    u.owner(box('b1'));
+    expect(u.scheduler.holding).toBe('drawing');
+    u.owner({ type: 'item.update', item: 'n1', patch: { text: 'other words' } });
+    expect(u.scheduler.holding).toBeUndefined();
+    u.clock.advance(QUIET_SHORT);
+    expect(u.link.wakes).toHaveLength(1);
+    expect(freshIds(u.link.wakes[0]!)).toEqual(['b1', 'n1']);
+  });
+
+  it('Answer now ends a drawing hold with one wake at once', () => {
+    const t = setup();
+    t.owner(box('b1'));
+    t.owner(arrow('a1'));
+    t.clock.advance(30_000);
+    t.scheduler.release();
+    expect(t.scheduler.holding).toBeUndefined();
+    expect(t.link.wakes).toHaveLength(1);
+    expect(freshIds(t.link.wakes[0]!)).toEqual(['b1', 'a1']);
+  });
+
+  it('a box drawn on one of the agent\'s pictures is a remark: it wakes after 1500 ms, and holds nothing', () => {
+    const t = setup();
+    withPicture(t);
+    t.owner({ ...box('b1', 'why this?'), item: { ...box('b1', 'why this?').item, ...onPicture } });
+    expect(t.scheduler.holding).toBeUndefined();
+    t.clock.advance(QUIET_LONG - 1);
+    expect(t.link.wakes).toHaveLength(0);
+    t.clock.advance(1);
+    expect(t.link.wakes).toHaveLength(1);
+    expect(freshIds(t.link.wakes[0]!)).toEqual(['b1']);
+  });
+
+  it('an arrow with one end on one of the agent\'s pictures is a remark too', () => {
+    const u = setup();
+    withPicture(u);
+    u.owner({ ...arrow('a1'), item: { ...arrow('a1').item, toTarget: { item: 'p1' } } });
+    expect(u.scheduler.holding).toBeUndefined();
+    u.clock.advance(QUIET_LONG - 1);
+    expect(u.link.wakes).toHaveLength(0);
+    u.clock.advance(1);
+    expect(u.link.wakes).toHaveLength(1);
+  });
+
+  it('an arrow between two of the owner\'s boxes is the owner\'s drawing: it holds', async () => {
+    const t = setup();
+    t.owner(box('b1'), box('b2'));
+    t.scheduler.release();
+    t.agent({ type: 'answer', answers: ['b1', 'b2'], read: 'Two steps.' });
+    t.link.finish();
+    await flush();
+    expect(t.scheduler.holding).toBeUndefined();
+    t.owner({ ...arrow('a1'), item: { ...arrow('a1').item, fromTarget: { item: 'b1' }, toTarget: { item: 'b2' } } });
+    expect(t.scheduler.holding).toBe('drawing');
+    t.clock.advance(60_000);
+    expect(t.link.wakes).toHaveLength(1);
+  });
+
+  it('a box tied to one of the owner\'s own marks is the owner\'s drawing: it holds', () => {
+    const t = setup();
+    t.board.post([box('b1')], 'owner');
+    t.scheduler.release();
+    t.owner({ ...box('b2'), item: { ...box('b2').item, anchor: { item: 'b1', box: [0, 0, 160, 80] } } });
+    expect(t.scheduler.holding).toBe('drawing');
+  });
+
+  it('ink and a pin with no hold on wake after 1500 ms', () => {
+    const t = setup();
+    t.owner({ type: 'item.add', chapter: CH, item: { id: 'p9', kind: 'pin', box: [0, 0, 10, 10], at: [5, 5] } });
+    expect(t.scheduler.holding).toBeUndefined();
+    t.clock.advance(QUIET_LONG - 1);
+    expect(t.link.wakes).toHaveLength(0);
+    t.clock.advance(1);
+    expect(t.link.wakes).toHaveLength(1);
+  });
+
+  it('ink and a pin during a hold wake nobody', () => {
+    const t = setup();
+    t.owner(box('b1'));
+    t.owner(ink('m1'));
+    t.owner({ type: 'item.add', chapter: CH, item: { id: 'p9', kind: 'pin', box: [0, 0, 10, 10], at: [5, 5] } });
+    t.clock.advance(10 * 60_000);
+    expect(t.link.wakes).toHaveLength(0);
+    expect(t.scheduler.holding).toBe('drawing');
+  });
+
+  it('a box on an agent\'s picture during a hold wakes nobody either', () => {
+    const t = setup();
+    withPicture(t);
+    t.owner(box('b1'));
+    t.owner({ ...box('b2'), item: { ...box('b2').item, ...onPicture } });
+    t.clock.advance(10 * 60_000);
+    expect(t.link.wakes).toHaveLength(0);
+    expect(t.scheduler.holding).toBe('drawing');
+  });
+
+  it('an ink stroke waiting for quiet waits on through a box that starts a hold', () => {
+    const t = setup();
+    t.owner(ink('m1'));
+    t.clock.advance(1000);
+    t.owner(box('b1'));
+    t.clock.advance(60_000);
+    expect(t.link.wakes).toHaveLength(0);
+    t.scheduler.release();
+    expect(freshIds(t.link.wakes[0]!)).toEqual(['m1', 'b1']);
+  });
+
+  it('a move, a resize or a removal during a hold wakes nobody and ends nothing', () => {
+    const t = setup();
+    t.owner(box('b1'));
+    t.owner(box('b2'));
+    t.owner({ type: 'item.update', item: 'b1', patch: { box: [40, 40, 160, 80] } });
+    t.owner({ type: 'item.remove', item: 'b2' });
+    t.clock.advance(10 * 60_000);
+    expect(t.link.wakes).toHaveLength(0);
+    expect(t.scheduler.holding).toBe('drawing');
+  });
+
+  it('an edit of a box\'s label never ends a hold', () => {
+    const t = setup();
+    t.owner(box('b1', 'first'));
+    t.owner({ type: 'item.update', item: 'b1', patch: { text: 'first, renamed' } });
+    expect(t.scheduler.holding).toBe('drawing');
+    t.clock.advance(10 * 60_000);
+    expect(t.link.wakes).toHaveLength(0);
+  });
+
+  it('an edit of a box\'s label with no hold on is work on the drawing: it holds, and wakes nobody', async () => {
+    const t = setup();
+    t.owner(box('b1', 'first'));
+    t.scheduler.release();
+    t.agent({ type: 'answer', answers: ['b1'], read: 'One step.' });
+    t.link.finish();
+    await flush();
+    expect(t.scheduler.holding).toBeUndefined();
+    t.owner({ type: 'item.update', item: 'b1', patch: { text: 'first, renamed' } });
+    expect(t.scheduler.holding).toBe('drawing');
+    t.clock.advance(10 * 60_000);
+    expect(t.link.wakes).toHaveLength(1);
+    t.scheduler.release();
+    expect(t.link.wakes).toHaveLength(2);
+    expect(freshIds(t.link.wakes[1]!)).toEqual(['b1']);
+  });
+
+  it('an edit of the label of a box on one of the agent\'s pictures is a remark: it wakes after 1500 ms', async () => {
+    const t = setup();
+    withPicture(t);
+    t.owner({ ...box('b1', 'why this?'), item: { ...box('b1', 'why this?').item, ...onPicture } });
+    t.clock.advance(QUIET_LONG);
+    t.agent({ type: 'answer', answers: ['b1'], read: 'Because.' });
+    t.link.finish();
+    await flush();
+    t.owner({ type: 'item.update', item: 'b1', patch: { text: 'why not that?' } });
+    expect(t.scheduler.holding).toBeUndefined();
+    t.clock.advance(QUIET_LONG - 1);
+    expect(t.link.wakes).toHaveLength(1);
+    t.clock.advance(1);
+    expect(t.link.wakes).toHaveLength(2);
+  });
+
+  it('a file dropped in during a hold is part of the drawing: it ends nothing, and wakes nobody', () => {
+    const t = setup();
+    t.owner(box('b1'));
+    t.owner(file('f1'));
+    expect(t.scheduler.holding).toBe('drawing');
+    t.clock.advance(10 * 60_000);
+    expect(t.link.wakes).toHaveLength(0);
+    t.scheduler.release();
+    expect(freshIds(t.link.wakes[0]!)).toEqual(['b1', 'f1']);
+
+    const u = setup();
+    u.scheduler.hold();
+    u.owner(file('f1'));
+    u.clock.advance(10 * 60_000);
+    expect(u.scheduler.holding).toBe('owner');
+    expect(u.link.wakes).toHaveLength(0);
+  });
+
+  it('a file dropped in with no hold on wakes after 300 ms, as before', () => {
+    const t = setup();
+    t.owner(file('f1'));
+    t.clock.advance(QUIET_SHORT - 1);
+    expect(t.link.wakes).toHaveLength(0);
+    t.clock.advance(1);
+    expect(t.link.wakes).toHaveLength(1);
+  });
+
+  it('an owner hold never wakes for shapes, however long, and release wakes at once', () => {
+    const t = setup();
+    t.scheduler.hold();
+    expect(t.scheduler.holding).toBe('owner');
+    t.owner(box('b1'));
+    expect(t.scheduler.holding).toBe('owner');
+    t.clock.advance(10 * 60_000);
+    t.owner(arrow('a1'));
+    t.owner(ink('m1'));
+    t.owner({ type: 'item.add', chapter: CH, item: { id: 'p9', kind: 'pin', box: [0, 0, 10, 10], at: [5, 5] } });
+    t.clock.advance(10 * 60_000);
+    expect(t.link.wakes).toHaveLength(0);
+    expect(t.scheduler.holding).toBe('owner');
+    t.scheduler.release();
+    expect(t.scheduler.holding).toBeUndefined();
+    expect(t.link.wakes).toHaveLength(1);
+    expect(freshIds(t.link.wakes[0]!)).toEqual(['b1', 'a1', 'm1', 'p9']);
+  });
+
+  it('an owner hold stops a wake that was waiting for quiet', () => {
+    const t = setup();
+    t.owner(ink('m1'));
+    t.clock.advance(1000);
+    t.scheduler.hold();
+    t.clock.advance(60_000);
+    expect(t.link.wakes).toHaveLength(0);
+  });
+
+  it('words end an owner hold', () => {
+    const t = setup();
+    t.scheduler.hold();
+    t.owner(box('b1'));
+    t.owner(note('n1', 'what do you think?'));
+    expect(t.scheduler.holding).toBeUndefined();
+    t.clock.advance(QUIET_SHORT);
+    expect(t.link.wakes).toHaveLength(1);
+    expect(freshIds(t.link.wakes[0]!)).toEqual(['b1', 'n1']);
+  });
+
+  it('a hold started during a wake lets that wake finish, and holds the next', async () => {
+    const t = setup();
+    t.owner(note('n1', 'first'));
+    t.clock.advance(QUIET_SHORT);
+    expect(t.link.wakes).toHaveLength(1);
+    t.owner(ink('m1'));
+    t.clock.advance(QUIET_LONG);
+    t.owner(box('b1'));
+    expect(t.scheduler.holding).toBe('drawing');
+    t.agent({ type: 'answer', answers: ['n1'], read: 'Read.' });
+    t.link.finish();
+    await flush();
+    expect(t.link.wakes).toHaveLength(1);
+    expect(t.presence.get().state).toBe('listening');
+    t.scheduler.release();
+    expect(t.link.wakes).toHaveLength(2);
+    expect(freshIds(t.link.wakes[1]!)).toEqual(['m1', 'b1']);
+  });
+
+  it('a failed wake is not retried through a hold', async () => {
+    const t = setup();
+    t.link.auto = { ok: false, note: 'no session' };
+    t.owner(note('n1', 'anyone there?'));
+    t.clock.advance(QUIET_SHORT);
+    await flush();
+    expect(t.link.wakes).toHaveLength(1);
+    t.owner(box('b1'));
+    expect(t.scheduler.holding).toBe('drawing');
+    t.clock.advance(60_000);
+    await flush();
+    expect(t.link.wakes).toHaveLength(1);
+    t.link.auto = { ok: true };
+    t.scheduler.release();
+    await flush();
+    expect(t.link.wakes).toHaveLength(2);
+  });
+
+  it('release with nothing open wakes nobody', () => {
+    const t = setup();
+    t.scheduler.hold();
+    t.scheduler.release();
+    expect(t.scheduler.holding).toBeUndefined();
+    expect(t.link.wakes).toHaveLength(0);
+  });
+
+  describe('at start', () => {
+    /** A second scheduler over the same board, as after a restart. */
+    function restart(t: ReturnType<typeof setup>, onHold?: (by: 'drawing' | 'owner' | undefined) => void) {
+      t.scheduler.close();
+      t.link.wakes.length = 0;
+      return new WakeScheduler({ link: t.link, state: () => t.board.state, presence: t.presence, clock: t.clock, ...(onHold ? { onHold } : {}) });
+    }
+
+    it('with only the owner\'s own shapes open, it begins held and wakes nobody', () => {
+      const t = setup();
+      t.owner(box('b1'), arrow('a1'));
+      const held: Array<string | undefined> = [];
+      const s = restart(t, (by) => held.push(by));
+      s.start();
+      expect(s.holding).toBe('drawing');
+      expect(held).toEqual(['drawing']);
+      t.clock.advance(60_000);
+      expect(t.link.wakes).toHaveLength(0);
+      s.release();
+      expect(t.link.wakes).toHaveLength(1);
+      expect(t.link.wakes[0]!.digest.open.map((o) => o.id)).toEqual(['b1', 'a1']);
+    });
+
+    it('with a note open as well, it wakes', () => {
+      const t = setup();
+      t.owner(box('b1'), note('n1', 'and this'));
+      const s = restart(t);
+      s.start();
+      expect(s.holding).toBeUndefined();
+      expect(t.link.wakes).toHaveLength(1);
+      expect(t.link.wakes[0]!.reason).toBe('start');
+    });
+
+    it('with a box on one of the agent\'s pictures open, it wakes', () => {
+      const t = setup();
+      withPicture(t);
+      t.owner({ ...box('b1'), item: { ...box('b1').item, ...onPicture } });
+      const s = restart(t);
+      s.start();
+      expect(s.holding).toBeUndefined();
+      expect(t.link.wakes).toHaveLength(1);
+    });
+
+    it('a shape that came with the log from outside is passed over: with nothing of the owner\'s open, it neither holds nor wakes', () => {
+      let outside: ForeignRange[] | undefined;
+      const t = setup({ foreign: () => outside });
+      const [x] = t.owner(box('x1'));
+      const n = Number(x!.id.slice(1));
+      outside = [{ from: n, to: n }];
+      t.scheduler.close();
+      t.link.wakes.length = 0;
+      const s = new WakeScheduler({ link: t.link, state: () => t.board.state, presence: t.presence, clock: t.clock, foreign: () => outside });
+      s.start();
+      expect(s.holding).toBeUndefined();
+      expect(t.link.wakes).toHaveLength(0);
+    });
+  });
+});
+
 describe('the presence pill during a wake', () => {
   it('says drawing, "reading your marks", busy reading, the moment a wake starts, and listening when it ends', async () => {
     const t = setup();
@@ -433,29 +825,63 @@ describe('where the agent’s cursor is during a wake', () => {
   });
 });
 
-describe('quietAfter', () => {
+describe('inputOf', () => {
   const ev = (by: string, rest: Record<string, unknown>) => ({ id: 'e9', at: '2026-11-17T13:00:00Z', by, ...rest }) as unknown as BoardEvent;
   const add = (kind: string, by = 'owner') => ev(by, { type: 'item.add', chapter: CH, item: { id: 'x', kind } });
+  const state = (kind: string) => ({ items: { x: { item: { id: 'x', kind } } } }) as unknown as BoardState;
+  const none = state('note');
 
-  it('waits long after strokes and short after closed input', () => {
-    for (const kind of ['ink', 'box', 'arrow', 'pin']) expect(quietAfter(add(kind)), kind).toBe(QUIET_LONG);
+  it('sorts the owner\'s input into words, files, shapes and marks', () => {
+    for (const kind of ['box', 'arrow']) expect(inputOf(add(kind), none), kind).toBe('shape');
+    for (const kind of ['ink', 'pin']) expect(inputOf(add(kind), none), kind).toBe('mark');
     // A lasso is the owner holding things together: never open, it wakes nobody.
-    expect(quietAfter(add('lasso'))).toBeUndefined();
-    for (const kind of ['note', 'voice', 'file']) expect(quietAfter(add(kind)), kind).toBe(QUIET_SHORT);
+    expect(inputOf(add('lasso'), none)).toBeUndefined();
+    for (const kind of ['note', 'voice']) expect(inputOf(add(kind), none), kind).toBe('words');
+    expect(inputOf(add('file'), none)).toBe('file');
     for (const type of ['solidify', 'build.start', 'build.pause', 'build.resume', 'choice.pick', 'ask']) {
-      expect(quietAfter(ev('owner', { type })), type).toBe(QUIET_SHORT);
+      expect(inputOf(ev('owner', { type }), none), type).toBe('words');
     }
     // The owner's own change to a part is input too. The builder's is not.
-    expect(quietAfter(ev('owner', { type: 'part.state', part: 'door', state: 'idea' }))).toBe(QUIET_SHORT);
-    expect(quietAfter(ev('agent', { type: 'part.state', part: 'door', state: 'building' }))).toBeUndefined();
-    expect(quietAfter(ev('system', { type: 'part.state', part: 'door', state: 'built' }))).toBeUndefined();
+    expect(inputOf(ev('owner', { type: 'part.state', part: 'door', state: 'idea' }), none)).toBe('words');
+    expect(inputOf(ev('agent', { type: 'part.state', part: 'door', state: 'building' }), none)).toBeUndefined();
+    expect(inputOf(ev('system', { type: 'part.state', part: 'door', state: 'built' }), none)).toBeUndefined();
+    // Editing a note's words is a remark. Editing the label of a box or an arrow of the owner's own is work on the drawing, as a new one is.
+    const edit = ev('owner', { type: 'item.update', item: 'x', patch: { text: 'new words' } });
+    expect(inputOf(edit, state('note'))).toBe('words');
+    expect(inputOf(edit, state('box'))).toBe('shape');
+    expect(inputOf(edit, state('arrow'))).toBe('shape');
+    // A move, a resize or a removal is no input: it wakes nobody, and ends nothing.
+    expect(inputOf(ev('owner', { type: 'item.update', item: 'x', patch: { box: [0, 0, 1, 1] } }), none)).toBeUndefined();
+    expect(inputOf(ev('owner', { type: 'item.remove', item: 'x' }), none)).toBeUndefined();
+  });
+
+  it('a box or an arrow on one of the agent\'s pictures is a mark; on bare board or on the owner\'s own marks, a shape', () => {
+    const items = (byP: string) =>
+      ({
+        items: {
+          p: { by: byP, item: { id: 'p', kind: 'picture' } },
+          b: { by: 'owner', item: { id: 'b', kind: 'box' } },
+        },
+      }) as unknown as BoardState;
+    const theirs = items('agent');
+    const shape = (item: Record<string, unknown>) => ev('owner', { type: 'item.add', chapter: CH, item: { id: 'x', ...item } });
+    expect(inputOf(shape({ kind: 'box', anchor: { item: 'p', box: [0, 0, 1, 1] } }), theirs)).toBe('mark');
+    expect(inputOf(shape({ kind: 'arrow', fromTarget: { item: 'p', sub: 'part:door' } }), theirs)).toBe('mark');
+    expect(inputOf(shape({ kind: 'arrow', fromTarget: { item: 'b' }, toTarget: { item: 'p' } }), theirs)).toBe('mark');
+    expect(inputOf(shape({ kind: 'box', anchor: { item: 'b', box: [0, 0, 1, 1] } }), theirs)).toBe('shape');
+    expect(inputOf(shape({ kind: 'arrow', fromTarget: { item: 'b' }, toTarget: { item: 'b' } }), theirs)).toBe('shape');
+    expect(inputOf(shape({ kind: 'arrow', toTarget: { item: 'gone' } }), theirs)).toBe('shape');
+    // A change of the label of a box that is on the agent's picture is a mark too.
+    const onTheirs = { items: { ...theirs.items, x: { by: 'owner', item: { id: 'x', kind: 'box', anchor: { item: 'p', box: [0, 0, 1, 1] } } } } } as unknown as BoardState;
+    expect(inputOf(ev('owner', { type: 'item.update', item: 'x', patch: { text: 'new words' } }), onTheirs)).toBe('mark');
+    // The owner's own picture, should there be one, is the owner's drawing.
+    expect(inputOf(shape({ kind: 'box', anchor: { item: 'p', box: [0, 0, 1, 1] } }), items('owner'))).toBe('shape');
   });
 
   it('ignores what is not the owner\'s input', () => {
-    expect(quietAfter(add('picture', 'agent'))).toBeUndefined();
-    expect(quietAfter(add('note', 'system'))).toBeUndefined();
-    expect(quietAfter(ev('owner', { type: 'item.update', item: 'x', patch: { box: [0, 0, 1, 1] } }))).toBeUndefined();
-    expect(quietAfter(ev('owner', { type: 'item.remove', item: 'x' }))).toBeUndefined();
-    expect(quietAfter(ev('owner', { type: 'chapter.open', chapter: CH, title: 't' }))).toBeUndefined();
+    expect(inputOf(add('picture', 'agent'), none)).toBeUndefined();
+    expect(inputOf(add('note', 'system'), none)).toBeUndefined();
+    expect(inputOf(ev('owner', { type: 'item.place', item: 'x', box: [0, 0, 1, 1] }), none)).toBeUndefined();
+    expect(inputOf(ev('owner', { type: 'chapter.open', chapter: CH, title: 't' }), none)).toBeUndefined();
   });
 });

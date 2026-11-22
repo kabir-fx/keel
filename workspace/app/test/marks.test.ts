@@ -14,10 +14,13 @@ import {
   lassoItem,
   markDrafts,
   movable,
+  onGrid,
   openAsk,
   openLasso,
   penWidth,
+  pictureSize,
   pinItem,
+  shownAsPicture,
   snapshotArea,
   solidifyDraft,
   voiceItem,
@@ -153,6 +156,12 @@ describe('each tool makes its mark', () => {
     expect(f).toEqual({ id: 'm9', kind: 'file', box: [380, 120, 340, 60], name: 'notes.md', asset: 'assets/notes.md', size: 812, mime: 'text/markdown', anchor: { item: 'a1', box: [360, 100, 400, 200] } });
   });
 
+  it('a picture file: the box it is given, anchored to what is at the point it landed on', () => {
+    const f = fileItem('m9', [560, 200], { name: 'shot.png', size: 4096, type: 'image/png' }, 'assets/shot.png', rects, boxOf, [460, 125, 200, 150]);
+    expect(f).toEqual({ id: 'm9', kind: 'file', box: [460, 125, 200, 150], name: 'shot.png', asset: 'assets/shot.png', size: 4096, mime: 'image/png', anchor: { item: 'a1', sub: 'q:1', box: [376, 190, 368, 24] } });
+    // Its corner is on the card, not on the question: the point it landed on is what it is anchored to.
+  });
+
   it('a spoken remark: its words, and what the pointer was over', () => {
     const v = voiceItem('m9', [400, 228], ' so the handler sleeps here? ', { item: 'a1', sub: 'q:2' }, boxOf);
     expect(v).toEqual({ id: 'm9', kind: 'voice', box: [416, 236, 320, 64], text: 'so the handler sleeps here?', on: { item: 'a1', sub: 'q:2' }, anchor: { item: 'a1', sub: 'q:2', box: [376, 216, 368, 24] } });
@@ -248,5 +257,53 @@ describe('the board, read for the tools', () => {
     b.must('agent', { type: 'item.add', chapter: CH, item: { id: 'f1', kind: 'picture', picture: { kind: 'focus', part: 'queue', title: 'The queue' }, answers: [b.events[b.events.length - 1]!.id] } });
     expect(focusFor(b.state, { part: 'queue' })).toBe('f1');
     expect(openAsk(b.state, { part: 'queue' })).toBeUndefined();
+  });
+});
+
+describe('a file shown as a picture', () => {
+  it('is one of the picture types Chrome decodes; an SVG too, which is only drawn by an <img>; every other file is a tile', () => {
+    for (const mime of ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp', 'image/svg+xml', 'IMAGE/PNG']) expect(shownAsPicture({ mime })).toBe(true);
+    for (const mime of ['application/pdf', 'text/plain', 'image/tiff', 'image/x-icon', 'image/heic', 'image/pngx', 'x-image/png', '']) expect(shownAsPicture({ mime })).toBe(false);
+    expect(shownAsPicture({})).toBe(false);
+  });
+
+  it('lands at its natural height, never taller than half the screen at this zoom, with its own shape, in whole units', () => {
+    // vh 800, zoom 1: minHeight = max(680, 160) = 680; maxHeight = min(680, 400 / 1) = 400.
+    expect(pictureSize([1600, 1200], 800, 1)).toEqual([533, 400]);
+    // A small picture is never scaled up.
+    expect(pictureSize([120, 80], 800, 1)).toEqual([120, 80]);
+    // Zoomed in 2x: maxHeight = min(680, 400 / 2) = 200, so it is half the screen high on the screen.
+    expect(pictureSize([1600, 1200], 800, 2)).toEqual([267, 200]);
+    // Zoomed out to 0.5: maxHeight = min(680, 400 / 0.5 = 800) = 680.
+    expect(pictureSize([1600, 1200], 800, 0.5)).toEqual([907, 680]);
+    // A very tall one: as high as is allowed, and as narrow as its shape makes it.
+    expect(pictureSize([300, 3000], 800, 1)).toEqual([40, 400]);
+    // A short screen: minHeight = max(80, 160) = 160; maxHeight = min(160, floor(100.5) / 1) = 100.
+    expect(pictureSize([1600, 1200], 201, 1)).toEqual([133, 100]);
+  });
+
+  it('several land on a grid round the point: rows of ceil(sqrt(n)), each row centred across, the rows centred down, each at the top of its row', () => {
+    // n = 1: centred on the point.
+    expect(onGrid([[200, 100]], [0, 0], 50)).toEqual([[-100, -50, 200, 100]]);
+    // n = 2: one row of two, 200 + 50 + 100 = 350 wide, as tall as the taller.
+    expect(onGrid([[200, 100], [100, 60]], [0, 0], 50)).toEqual([
+      [-175, -50, 200, 100],
+      [75, -50, 100, 60],
+    ]);
+    // n = 3: two columns; rows 100 and 60 high, 50 apart: 210 high from -105.
+    expect(onGrid([[200, 100], [100, 60], [340, 60]], [0, 0], 50)).toEqual([
+      [-175, -105, 200, 100],
+      [75, -105, 100, 60],
+      [-170, 45, 340, 60],
+    ]);
+    // n = 5 at zoom 2 (gap 50 / 2 = 25): three columns; rows of 3 and 2, 100 high, 225 together.
+    const sq: [number, number] = [100, 100];
+    expect(onGrid([sq, sq, sq, sq, sq], [1000, 500], 25)).toEqual([
+      [825, 388, 100, 100],
+      [950, 388, 100, 100],
+      [1075, 388, 100, 100],
+      [888, 513, 100, 100],
+      [1013, 513, 100, 100],
+    ]);
   });
 });

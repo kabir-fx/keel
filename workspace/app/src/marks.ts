@@ -293,7 +293,60 @@ export function solidifyDraft(state: BoardState, lasso: LassoItem & { chapter: I
 
 /* ------------------------------------------------------------ file, voice */
 
-/** A file the owner dropped in, as a tile at a point. */
+/** The size of a file's tile, in board units. */
+export const FILE_TILE: readonly [number, number] = [340, 60];
+
+/**
+ * Is a file shown on the board as the picture it is? Only for the picture types Chrome decodes.
+ * An SVG is one: it is only ever drawn by an `<img>`, where no script in it runs.
+ */
+export function shownAsPicture(file: { mime?: string | undefined }): boolean {
+  return /^image\/(png|jpeg|gif|webp|avif|bmp|svg\+xml)$/i.test(file.mime ?? '');
+}
+
+/**
+ * The size a picture lands at, in whole board units, from its natural size, the height of the
+ * board on the screen (`vh`, CSS pixels) and the zoom. Excalidraw's rule
+ * (`getImageNaturalDimensions` in packages/excalidraw/components/App.tsx, commit 9fbeaed): never
+ * taller than half the screen, and never scaled up.
+ */
+export function pictureSize(natural: readonly [number, number], vh: number, zoom: number): [number, number] {
+  const [nw, nh] = natural;
+  const minHeight = Math.max(vh - 120, 160);
+  const maxHeight = Math.min(minHeight, Math.floor(vh * 0.5) / zoom);
+  const height = Math.min(nh, maxHeight);
+  return [Math.round((height * nw) / nh), Math.round(height)];
+}
+
+/**
+ * Where things of these sizes go, laid out round a point: in rows of `ceil(sqrt(n))`, `gap` apart,
+ * each row centred across the point and the rows together centred down it, each thing at the top
+ * of its row. Whole board units. Excalidraw's rule (packages/element/src/positionElementsOnGrid.ts,
+ * commit 9fbeaed).
+ */
+export function onGrid(sizes: readonly (readonly [number, number])[], at: readonly [number, number], gap: number): Box[] {
+  const cols = Math.max(1, Math.ceil(Math.sqrt(sizes.length)));
+  const rows: (readonly [number, number])[][] = [];
+  for (let i = 0; i < sizes.length; i += cols) rows.push(sizes.slice(i, i + cols));
+  const tall = (row: readonly (readonly [number, number])[]) => Math.max(...row.map((s) => s[1]));
+  const height = rows.reduce((sum, row) => sum + tall(row), 0) + (rows.length - 1) * gap;
+  const out: Box[] = [];
+  let y = at[1] - height / 2;
+  for (const row of rows) {
+    let x = at[0] - (row.reduce((sum, s) => sum + s[0], 0) + (row.length - 1) * gap) / 2;
+    for (const [w, h] of row) {
+      out.push([Math.round(x), Math.round(y), w, h]);
+      x += w + gap;
+    }
+    y += tall(row) + gap;
+  }
+  return out;
+}
+
+/**
+ * A file the owner dropped in, anchored to what is at the point it landed on. It is a tile with
+ * its corner at that point, unless it is given a box of its own.
+ */
 export function fileItem(
   id: Id,
   at: readonly [number, number],
@@ -301,13 +354,14 @@ export function fileItem(
   asset: string,
   rects: readonly TargetRect[],
   boxOf: TargetBox,
+  box: Box = [Math.round(at[0]), Math.round(at[1]), ...FILE_TILE],
 ): FileItem {
   const on = targetOfId(rects, targetAtPoint(at[0], at[1], rects));
   const name = file.name.trim().slice(0, 200) || 'file';
   const item: FileItem = {
     id,
     kind: 'file',
-    box: [Math.round(at[0]), Math.round(at[1]), 340, 60],
+    box,
     name,
     asset,
     size: file.size,

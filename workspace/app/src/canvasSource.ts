@@ -41,6 +41,12 @@ export class CanvasSource implements BoardSource {
   get presence() {
     return this.inner.presence;
   }
+  get holding() {
+    return this.inner.holding;
+  }
+  get hold() {
+    return this.inner.hold;
+  }
   get role() {
     return this.inner.role;
   }

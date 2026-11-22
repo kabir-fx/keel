@@ -18,12 +18,13 @@ afterEach(() => {
 });
 
 /** A board where nothing calls for a word: the Select tool in hand, the agent listening, things on the board. */
-const QUIET: HintFacts = { penGo: false, field: undefined, agentWaits: false, questions: 0, lassoed: 0, toBuild: false, toTry: false, tool: 'select', empty: false, away: false };
+const QUIET: HintFacts = { penGo: false, field: undefined, askNow: false, agentWaits: false, questions: 0, lassoed: 0, toBuild: false, toTry: false, tool: 'select', empty: false, away: false };
 
 const facts = (over: Partial<HintFacts>): HintFacts => ({ ...QUIET, ...over });
 
 const ANSWER_ONE = 'Answer the question: press N, click beside it, and type. Or hold T and say it.';
 const PICK = 'Pick what to build: press L and draw a loop round the pictures you want.';
+const ASK = 'Press Answer now for the agent\'s read of your drawing, or write a note.';
 const solidifyLine = (n: number) => `Press Solidify (Shift+S) to make a blueprint from the ${n} you picked.`;
 
 describe('the hint line: one table, the first rule that matches wins', () => {
@@ -32,6 +33,7 @@ describe('the hint line: one table, the first rule that matches wins', () => {
       ['a go of the pen is open', { penGo: true }, 'Keep drawing. It becomes one mark when you rest the pen. Cmd+Z takes back the last stroke.'],
       ['a label is open', { field: 'label' }, 'Type a few words. Enter keeps them.'],
       ['a note is open', { field: 'note' }, 'Type the note. Enter keeps it, Shift+Enter starts a new line.'],
+      ['the agent holds, a mark waits, and the owner has been still', { askNow: true }, ASK],
       ['the agent waits on one question', { agentWaits: true, questions: 1 }, ANSWER_ONE],
       ['the agent waits on three questions', { agentWaits: true, questions: 3 }, 'Answer the 3 questions: press N, click beside one, and type. Or hold T and say it.'],
       ['the agent waits, nothing lassoed', { agentWaits: true }, PICK],
@@ -64,11 +66,12 @@ describe('the hint line: one table, the first rule that matches wins', () => {
   });
 
   it('the first match wins, in the order of the table', () => {
-    const all = facts({ penGo: true, field: 'label', agentWaits: true, questions: 2, lassoed: 2, toBuild: true, tool: 'pen', empty: true });
+    const all = facts({ penGo: true, field: 'label', askNow: true, agentWaits: true, questions: 2, lassoed: 2, toBuild: true, tool: 'pen', empty: true });
     const order: Array<[keyof HintFacts, HintFacts[keyof HintFacts]]> = [
       ['penGo', false],
       ['field', 'note'],
       ['field', undefined],
+      ['askNow', false],
       ['questions', 0],
       ['agentWaits', false],
       ['lassoed', 0],
@@ -86,6 +89,7 @@ describe('the hint line: one table, the first rule that matches wins', () => {
       'Keep drawing. It becomes one mark when you rest the pen. Cmd+Z takes back the last stroke.',
       'Type a few words. Enter keeps them.',
       'Type the note. Enter keeps it, Shift+Enter starts a new line.',
+      ASK,
       'Answer the 2 questions: press N, click beside one, and type. Or hold T and say it.',
       // No question waits now, and the lasso holds things: the agent waiting does not ask for a pick.
       solidifyLine(2),

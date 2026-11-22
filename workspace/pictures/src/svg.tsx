@@ -21,9 +21,14 @@ export function useSvgIds(): string {
   return `kp${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
 }
 
+/** An arrow head's length, in widths of its line: the marker scales with the stroke. */
+export const HEAD = 7;
+export const LINE_WIDTH = 1.8;
+export const DASHED_WIDTH = 2;
+
 export function Defs({ ids }: { ids: string }) {
   const head = (tone: ArrowTone) => (
-    <marker key={tone} id={`${ids}-ah-${tone}`} viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <marker key={tone} id={`${ids}-ah-${tone}`} viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth={HEAD} markerHeight={HEAD} orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill={STROKE[tone]} />
     </marker>
   );
@@ -52,7 +57,7 @@ export function ArrowPath({ ids, r, tone, dashed, width, order }: { ids: string;
       d={roundedPath(r.pts)}
       fill="none"
       stroke={STROKE[tone]}
-      strokeWidth={width ?? (dashed ? 2 : 1.8)}
+      strokeWidth={width ?? (dashed ? DASHED_WIDTH : LINE_WIDTH)}
       strokeDasharray={dashed ? '7 6' : undefined}
       markerEnd={`url(#${ids}-ah-${tone})`}
     />

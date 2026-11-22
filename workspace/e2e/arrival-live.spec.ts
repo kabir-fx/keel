@@ -216,6 +216,8 @@ test.describe('an answer in words', () => {
     await page.mouse.up();
     // With no label: the box is kept as it is.
     await page.keyboard.press('Enter');
+    // A box on bare board is the owner's own drawing: the agent holds until asked (record 0019).
+    await page.getByTestId('presence-answer').click();
 
     const chip = () => page.evaluate(() => (window as unknown as { __chip?: { playing: boolean; clipped: boolean; ended: boolean } }).__chip);
     await expect.poll(async () => (await chip()) !== undefined, { timeout: 20_000 }).toBe(true);
