@@ -102,6 +102,12 @@ describe('what the command says before the address', () => {
       'keel-board: git was not found, and a build needs it. Get it.',
     ]);
     expect(setupLines({ agent: { name: 'Claude Code', state: 'signed-out' }, git: ready })).toEqual(['keel-board: Claude Code is not signed in. The page that opens signs you in.']);
+    expect(setupLines({ agent: { name: 'Claude Code', state: 'outdated', found: '2.1.200', needs: '2.1.316' }, git: ready })).toEqual([
+      'keel-board: Claude Code 2.1.200 is too old for the board, which needs 2.1.316 or newer. The page that opens updates it.',
+    ]);
+    expect(setupLines({ agent: { name: 'Claude Code', state: 'outdated', needs: '2.1.316' }, git: ready })).toEqual([
+      'keel-board: Claude Code is too old for the board, which needs 2.1.316 or newer. The page that opens updates it.',
+    ]);
   });
 });
 

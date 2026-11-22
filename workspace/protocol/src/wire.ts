@@ -157,6 +157,8 @@ export const ROUTES = {
  */
 export type AgentSetup = { name: string } & (
   | { state: 'missing'; installing?: boolean; note?: string }
+  /** There, and older than the board can run. `found` is its version, when it said one, and `needs` the oldest that will do. */
+  | { state: 'outdated'; found?: string; needs: string; installing?: boolean; note?: string }
   /** `signIn` while a sign-in runs. Its `url` is the sign-in page, for a browser that did not open by itself. */
   | { state: 'signed-out'; signIn?: { url?: string }; note?: string }
   | { state: 'ready' }

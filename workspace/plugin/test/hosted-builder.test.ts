@@ -565,6 +565,15 @@ describe('a build, end to end against a fake claude', () => {
     expect(r).toEqual({ outcome: 'failed', note: 'Git is not installed here, and the builder works in a git copy of the folder. Install git.' });
   });
 
+  it('with a Claude Code too old for the builder\'s flags, says so and starts nothing', async () => {
+    board = await buildBoard({ check: CHECK });
+    const old = path.join(tmp, 'old-claude');
+    fs.writeFileSync(old, `#!/bin/sh\nFAKE_CLAUDE_VERSION=2.1.200 exec "${process.execPath}" "${FAKE}" "$@"\n`, { mode: 0o755 });
+    const r = await (await builder({ bin: old })).run(job());
+    expect(r).toEqual({ outcome: 'failed', note: "Claude Code 2.1.200 is too old for the board: the board needs 2.1.316 or newer. Open the board in a new tab to update it." });
+    expect(records()).toEqual([]);
+  });
+
   it('a finished build that commits a page and its script shows them: a copy, without secrets, dot files or links', async () => {
     board = await buildBoard({ check: CHECK, parts: ['sum'] });
     process.env.FAKE_FILES = JSON.stringify({

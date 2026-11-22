@@ -81,6 +81,24 @@ test('signed out: the setup page signs in, then the board opens by itself', asyn
   expect(errors).toEqual([]);
 });
 
+test('too old: the setup page offers the update before any sign-in, though that Claude Code says it is signed in', async ({ page }) => {
+  writeFileSync(auth, '');
+  writeFileSync(join(tmp, 'old-claude'), `#!/bin/sh\nFAKE_CLAUDE_VERSION=2.1.200 exec "${process.execPath}" "${FAKE}" "$@"\n`, { mode: 0o755 });
+  const b = await start(join(tmp, 'old-claude'));
+  expect(b.output()).toMatch(/keel-board: Claude Code 2\.1\.200 is too old for the board, which needs \d+\.\d+\.\d+ or newer\. The page that opens updates it\./);
+
+  await page.goto(b.url);
+  await expect(page.getByTestId('setup')).toBeVisible();
+  await expect(page.getByTestId('board')).toHaveCount(0);
+  await expect(page.getByTestId('setup-install')).toHaveAttribute('data-state', 'now');
+  await expect(page.getByTestId('setup-install')).toContainText('Version 2.1.200 is installed');
+  await expect(page.getByTestId('setup-install-go')).toHaveText('Update Claude Code');
+  await expect(page.getByTestId('setup-sign-in')).toHaveAttribute('data-state', 'later');
+  await expect(page.getByTestId('setup-sign-in-go')).toHaveCount(0);
+  await page.evaluate(() => document.fonts.ready);
+  await page.screenshot({ path: `${SHOTS}/setup-too-old.png` });
+});
+
 test('not installed: the setup page offers the install, and the board can be opened without it', async ({ page }) => {
   const b = await start(join(tmp, 'no-claude-here'));
   expect(b.output()).toContain('keel-board: Claude Code is not installed. The page that opens installs it and signs you in.');

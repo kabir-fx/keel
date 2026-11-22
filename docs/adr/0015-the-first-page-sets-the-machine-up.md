@@ -47,7 +47,7 @@ The server asks the agent's adapter, through `AgentLink.setup`: `look`, `install
 **What this does not cover**
 
 - The server runs an installer it fetched over the network, on the owner's press. It is Anthropic's, fetched over HTTPS from `claude.ai`. keel does not pin it or check a sum: it changes with every Claude Code release.
-- A Claude Code too old to have `claude auth status` is taken as signed in. Its first turn says so if it is not.
+- A Claude Code that is there and too old was not noticed. Record [0018](0018-the-board-runs-only-a-claude-code-new-enough.md) adds that check, and an update step to this page.
 - A sign-in that ends while the board is open is not noticed until the agent's next turn fails.
 - The sign-in is for a Claude subscription. The agent is started without `ANTHROPIC_API_KEY` (record 0003), so the page offers no key.
 - `get.sh` is served from the `main` branch. What it installs is the newest `keel-workspace` on npm, which can be older or newer than the script.

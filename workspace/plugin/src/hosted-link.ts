@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AgentLink, CreateLink, LinkContext, PresenceUpdate, Wake, WakeResult } from '@keel/protocol';
-import { ClaudeSetup, findClaude } from './claude-setup';
+import { ClaudeSetup, pickClaude, tooOld } from './claude-setup';
 import { THINKING_PRESENCE, bareToolName, toolPresence, writingPresence } from './presence';
 
 /**
@@ -391,13 +391,18 @@ export class HostedLink implements AgentLink {
 
   private async runWake(text: string): Promise<WakeResult> {
     if (this.closed) return { ok: false, note: 'the link is closed' };
-    let r = await this.turnOnce(text);
+    const found = await pickClaude(this.opts.bin, childEnv());
+    // The link may have closed during that wait, and a closed link starts nothing.
+    if (this.closed) return { ok: false, note: 'the link is closed' };
+    if (found && !found.ok) return { ok: false, note: tooOld(found) };
+    const bin = found?.bin ?? this.opts.bin;
+    let r = await this.turnOnce(text, bin);
     // The saved session was gone: one more try, in a new session.
-    if (r.again) r = await this.turnOnce(text);
+    if (r.again) r = await this.turnOnce(text, bin);
     return r.note === undefined ? { ok: r.ok } : { ok: r.ok, note: r.note };
   }
 
-  private turnOnce(text: string): Promise<WakeResult & { again?: boolean }> {
+  private turnOnce(text: string, bin: string): Promise<WakeResult & { again?: boolean }> {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.ctx.log(`a turn ran past ${this.opts.timeoutMs / 1000} s; stopping the agent`);
@@ -412,7 +417,7 @@ export class HostedLink implements AgentLink {
         },
       };
       try {
-        const proc = this.proc ?? this.start();
+        const proc = this.proc ?? this.start(bin);
         const line = { type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null };
         this.record({ keel: 'wake', text });
         proc.stdin.write(`${JSON.stringify(line)}\n`);
@@ -450,7 +455,7 @@ export class HostedLink implements AgentLink {
     return this.files;
   }
 
-  private start(): ChildProcessWithoutNullStreams {
+  private start(bin: string): ChildProcessWithoutNullStreams {
     const { mcpConfig, skillFile, settingsFile } = this.prepare();
     const saved = this.sessionId ?? readSessionId(this.stateDir);
     const resume = saved !== undefined;
@@ -467,8 +472,7 @@ export class HostedLink implements AgentLink {
     this.costKnown = before !== undefined;
 
     const args = agentArgs({ model: this.opts.model, effort: this.opts.effort, mcpConfig, skillFile, settingsFile, sessionId, resume });
-    const env = childEnv();
-    const proc = spawn(findClaude(this.opts.bin, env) ?? this.opts.bin, args, { cwd: this.ctx.repoDir, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn(bin, args, { cwd: this.ctx.repoDir, env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
     this.proc = proc;
     this.ctx.log(`${resume ? 'resumed' : 'started'} the agent: session ${sessionId}, pid ${proc.pid ?? '?'}`);
 
