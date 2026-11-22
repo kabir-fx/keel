@@ -125,7 +125,7 @@ inhdr || skip { next }
 /^ / { prev = substr($0, 2); line++; next }
 
 /^-/ {
-  if (testf && substr($0, 2) ~ /assert|expect\(|\.should|t\.(Error|Fatal)|require\.[A-Z]/) removed[file]++
+  if (testf && substr($0, 2) ~ /assert|expect(\.[A-Za-z]+)*\(|\.should|t\.(Error|Fatal)|require\.[A-Z]/) removed[file]++
   next
 }
 
@@ -134,7 +134,7 @@ inhdr || skip { next }
   low = tolower(text)
   where = file ":" line
 
-  if (testf && text ~ /assert|expect\(|\.should|t\.(Error|Fatal)|require\.[A-Z]/) added[file]++
+  if (testf && text ~ /assert|expect(\.[A-Za-z]+)*\(|\.should|t\.(Error|Fatal)|require\.[A-Z]/) added[file]++
 
   if (text ~ /eslint-disable|@ts-ignore|@ts-expect-error|@ts-nocheck|biome-ignore|istanbul ignore|c8 ignore|# *type: *ignore|# *noqa|pylint: *disable|pyright: *ignore|# *mypy: *ignore|# *nosec|pragma: *no cover|\/\/ *nolint|#!?\[allow\(|@SuppressWarnings|rubocop:disable|NOLINT|@phpstan-ignore/)
     report("SUPPRESSION", where, text)
