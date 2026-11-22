@@ -51,21 +51,32 @@ export type Presence = z.infer<typeof Presence>;
 export const PresenceUpdate = Presence.omit({ since: true });
 export type PresenceUpdate = z.infer<typeof PresenceUpdate>;
 
+/**
+ * Why the agent holds its answer: `drawing` while the owner draws their own diagram, `owner`
+ * when the owner pressed Hold. Live like presence, and never logged.
+ */
+export const Hold = z.enum(['drawing', 'owner']);
+export type Hold = z.infer<typeof Hold>;
+
 /** From the app to the server, over the websocket. */
 export const ClientMessage = z.discriminatedUnion('t', [
   /** Post one draft. `ref` comes back in the reply, so the app can match it. */
   z.strictObject({ t: z.literal('post'), ref: z.string().min(1).max(64), draft: z.unknown() }),
   z.strictObject({ t: z.literal('ping') }),
+  /** The owner only: hold the agent's answer (`on`), or have it answer now. */
+  z.strictObject({ t: z.literal('hold'), on: z.boolean() }),
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
 /** From the server to the app, over the websocket. */
 export type ServerMessage =
-  | { t: 'init'; name: string; role: z.infer<typeof Actor>; events: BoardEvent[]; presence: Presence; build?: BoardInfo['build']; works?: BoardInfo['works']; shows?: BoardInfo['shows']; home?: BoardInfo['home'] }
+  | { t: 'init'; name: string; role: z.infer<typeof Actor>; events: BoardEvent[]; presence: Presence; hold?: Hold; build?: BoardInfo['build']; works?: BoardInfo['works']; shows?: BoardInfo['shows']; home?: BoardInfo['home'] }
   | { t: 'event'; event: BoardEvent }
   | { t: 'ok'; ref: string; event: BoardEvent }
   | { t: 'refused'; ref: string; rule: RuleId; reason: string }
   | { t: 'presence'; presence: Presence }
+  /** The agent holds its answer, or no longer does (`null`). */
+  | { t: 'hold'; by: Hold | null }
   /** What the server's build driver does now, sent when it changes. `null` when no build is going. */
   | { t: 'build'; build: NonNullable<BoardInfo['build']> | null }
   /**

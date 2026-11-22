@@ -2,7 +2,7 @@ import type { BoardState, Box, Id } from '@keel/protocol';
 import { anchorMode, unplaceFromAnchor } from '../anchor';
 import type { Where } from '../layout';
 import { anchorBox, storedBox } from '../layout';
-import { followers, movable } from '../marks';
+import { followers, movable, shownAsPicture } from '../marks';
 import type { BoardCtx } from '../tools/types';
 import type { Handle } from './resize';
 import { handleAt, handleCursor, handlesOf, landed } from './resize';
@@ -103,10 +103,11 @@ export function movableOf(board: Pick<BoardCtx, 'isOwner' | 'state'>, ids: reado
 }
 
 /**
- * The one thing selected that the owner can resize: a box or a note (every mark is the owner's).
- * A plain label is as wide as its words.
+ * The one thing selected that the owner can resize: a box, a note or a file shown as a picture
+ * (every mark is the owner's). A plain label is as wide as its words. A picture keeps its shape
+ * unless Shift is held (`proportional`).
  */
-export function resizable(board: Pick<BoardCtx, 'isOwner' | 'state' | 'selection'>): { id: Id; widthOnly: boolean } | undefined {
+export function resizable(board: Pick<BoardCtx, 'isOwner' | 'state' | 'selection'>): { id: Id; widthOnly: boolean; proportional?: true } | undefined {
   const sel = board.selection();
   if (!board.isOwner || sel.length !== 1) return undefined;
   const id = sel[0]!;
@@ -114,6 +115,7 @@ export function resizable(board: Pick<BoardCtx, 'isOwner' | 'state' | 'selection
   if (!s || s.removed) return undefined;
   if (s.item.kind === 'box') return { id, widthOnly: false };
   if (s.item.kind === 'note' && !s.item.plain) return { id, widthOnly: true };
+  if (s.item.kind === 'file' && shownAsPicture(s.item)) return { id, widthOnly: false, proportional: true };
   return undefined;
 }
 
@@ -122,6 +124,8 @@ export interface HandleUnder {
   id: Id;
   handle: Handle;
   widthOnly: boolean;
+  /** Keeps its shape unless Shift is held. */
+  proportional?: true;
   cursor: string;
   /** Where the thing is drawn, in world units, as the line round it last found it. */
   box: Box;
@@ -135,5 +139,5 @@ export function handleUnder(board: Pick<BoardCtx, 'isOwner' | 'state' | 'selecti
   const cam = board.camera.get();
   const onScreen: Box = [box[0] * cam.z + cam.x, box[1] * cam.z + cam.y, box[2] * cam.z, box[3] * cam.z];
   const handle = handleAt(x, y, onScreen, handlesOf(r.widthOnly));
-  return handle && { id: r.id, handle, widthOnly: r.widthOnly, cursor: handleCursor(handle, r.widthOnly), box };
+  return handle && { id: r.id, handle, widthOnly: r.widthOnly, ...(r.proportional ? { proportional: r.proportional } : {}), cursor: handleCursor(handle, r.widthOnly), box };
 }

@@ -83,7 +83,8 @@ Run a link with `keel-board open --link ./my-link.mjs --link-opt key=value`. A p
 
 What the server does around a link:
 
-- It wakes the agent once per pause. The pause is 1.5 s after a stroke, a box, an arrow, a pin or a lasso. It is 0.3 s after a note, a spoken remark, a file or an act.
+- It wakes the agent once per pause. The pause is 1.5 s after a stroke, a pin, or a box or an arrow on one of the agent's pictures. It is 0.3 s after a note, a spoken remark, a file or an act.
+- It holds while the owner draws: a box or an arrow of the owner's own, the first one included, or a change to the label of one, wakes nobody until words come (a note, a spoken remark, an act) or the owner presses "Answer now". A file dropped in during a hold does not end it. The owner can also press Hold on the agent's pill. After 10 s with no movement during a hold, the owner's page points at "Answer now" on the hint line. A hold is live state, never logged; a server that restarts with only the owner's own boxes and arrows open begins held. See [0019](../docs/adr/0019-the-agent-holds-while-the-owner-draws.md).
 - It holds new marks while a turn runs, and sends one wake when the turn ends. Each digest is built from what is open on the board, so a link that dies loses nothing.
 - A wake that runs past 10 minutes counts as failed. A failed wake is tried again after 2, 8 and 30 seconds.
 

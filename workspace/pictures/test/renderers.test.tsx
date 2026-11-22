@@ -8,6 +8,7 @@ import { PLAY_MS } from '../src/Walk';
 import type { Rect } from '../src/grid';
 import { overlaps } from '../src/grid';
 import { pipeModel } from '../src/pipemodel';
+import { DASHED_WIDTH, HEAD, LINE_WIDTH } from '../src/svg';
 import { examplesBoard } from './examples';
 import { at, checkpoints, item, pictures } from './fixture';
 
@@ -235,6 +236,13 @@ describe('the blue rule', () => {
 
 /* ---------------------------------------------------------------- layout */
 
+/**
+ * An arrow in a lanes picture reads as an arrow: the line into its head is at least LAST heads
+ * long, and each leg of an elbow at least LEG heads, so no leg is a stub that is mostly head.
+ */
+const LAST = 3;
+const LEG = 2;
+
 function noOverlap(rects: Rect[], what: string) {
   for (let i = 0; i < rects.length; i++) {
     for (let j = i + 1; j < rects.length; j++) {
@@ -254,7 +262,7 @@ describe('layout', () => {
         if (p.kind === 'spread') p.approaches.forEach((a, i) => a.kind !== 'free' && out.push([`${it.id}/${i}`, a]));
       }
     }
-    const { state, items } = examplesBoard();
+    const { state, items } = examplesBoard(true);
     for (const id of items) {
       const p = item(state, id).picture;
       if (p.kind === 'lanes') out.push([id, p]);
@@ -288,6 +296,25 @@ describe('layout', () => {
         divider: { before: 's7', label: 'round two' },
       },
     ]);
+    // A loop back two columns, drawn under the boxes.
+    out.push([
+      'loop back',
+      {
+        lanes: [{ id: 'e', name: 'Engine thread' }, { id: 'g', name: 'GPU' }],
+        steps: [
+          { id: 't1', n: 1, lane: 'e', text: 'plans a step' },
+          { id: 't2', n: 2, lane: 'g', text: 'runs it' },
+          { id: 't3', n: 3, lane: 'e', text: 'reads the logits' },
+          { id: 't4', n: 4, lane: 'e', text: 'adds the token' },
+        ],
+        flows: [
+          { from: 't1', to: 't2' },
+          { from: 't2', to: 't3' },
+          { from: 't3', to: 't4' },
+          { from: 't4', to: 't1', label: 'repeat per token', wait: true },
+        ],
+      },
+    ]);
     return out;
   };
 
@@ -317,6 +344,29 @@ describe('layout', () => {
         if (!a.at) continue;
         const label = { x: a.at.x - a.at.w / 2, y: a.at.y - a.at.h / 2, w: a.at.w, h: a.at.h };
         for (const x of L.boxes) expect(overlaps(label, x.rect), `${name}: label "${a.flow.label}" on ${x.step.id}`).toBe(false);
+      }
+    }
+  });
+
+  it('draws every arrow long enough to read as one, and through no box', () => {
+    for (const [name, b] of bodies()) {
+      for (const compact of [false, true]) {
+        const L = layoutLanes(b, compact);
+        for (const a of L.arrows) {
+          const what = `${name}${compact ? ' compact' : ''}: ${a.flow.from} > ${a.flow.to}`;
+          const head = HEAD * (a.flow.wait ? DASHED_WIDTH : LINE_WIDTH);
+          const segs = a.r.pts.slice(1).map((p, i) => [a.r.pts[i]!, p] as const);
+          const len = segs.map(([p, q]) => Math.abs(q[0] - p[0]) + Math.abs(q[1] - p[1]));
+          expect(len.at(-1)!, `${what}: the line into the head`).toBeGreaterThanOrEqual(LAST * head);
+          if (len.length > 1) for (const l of len) expect(l, `${what}: a leg of the elbow`).toBeGreaterThanOrEqual(LEG * head);
+          for (const [p, q] of segs) {
+            const seg = { x: Math.min(p[0], q[0]), y: Math.min(p[1], q[1]), w: Math.abs(q[0] - p[0]), h: Math.abs(q[1] - p[1]) };
+            for (const x of L.boxes) {
+              const inner = { x: x.rect.x + 1, y: x.rect.y + 1, w: x.rect.w - 2, h: x.rect.h - 2 };
+              expect(overlaps({ ...seg, w: seg.w || 0.01, h: seg.h || 0.01 }, inner), `${what}: through ${x.step.id}`).toBe(false);
+            }
+          }
+        }
       }
     }
   });

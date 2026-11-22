@@ -6,6 +6,7 @@ import { memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ApproveBlock, Said } from './Approve';
 import { unionBox } from './camera/camera';
 import { ConfirmDialog } from './Confirm';
+import type { ReadAsset } from './assetUrl';
 import type { Draft } from './drafts';
 import { MarkView } from './items';
 import type { PostResult, Reply } from './source';
@@ -53,6 +54,8 @@ export interface StoryProps {
   onDelete?: (canvas: Id) => Promise<string | undefined>;
   push?: (() => Promise<Reply>) | undefined;
   sync?: (() => Promise<Reply>) | undefined;
+  /** Read a dropped file's bytes: a file that is a picture is drawn in a thumbnail as the picture. */
+  read?: ReadAsset | undefined;
 }
 
 const NO_WORKS: ReadonlyMap<string, CanvasWork> = new Map();
@@ -65,7 +68,7 @@ const WHOLE: PictureItem = {
   picture: { kind: 'pipeline', title: 'Every part, in its state', caption: 'Every idea changes it. Press a part to open it on the board.', view: 'flat' },
 };
 
-export function Story({ state, boxOf, markings, isOwner, onGo, onOpen, onPart, onNewCanvas, works = NO_WORKS, shows = NO_SHOWS, home, server, onTry, post, onDelete, push, sync }: StoryProps) {
+export function Story({ state, boxOf, markings, isOwner, onGo, onOpen, onPart, onNewCanvas, works = NO_WORKS, shows = NO_SHOWS, home, server, onTry, post, onDelete, push, sync, read }: StoryProps) {
   const chapters = useMemo(() => storyOf(state), [state]);
   const canvases = useMemo(() => [...state.canvasOrder].reverse(), [state]);
   const [asked, setAsked] = useState<Id>();
@@ -106,6 +109,7 @@ export function Story({ state, boxOf, markings, isOwner, onGo, onOpen, onPart, o
               onTry={onTry}
               post={post}
               push={push}
+              read={read}
               onAsk={setAsked}
             />
           ))}
@@ -297,11 +301,12 @@ interface CardProps {
   onTry: StoryProps['onTry'];
   post: StoryProps['post'];
   push: StoryProps['push'];
+  read: StoryProps['read'];
   onAsk: (canvas: Id) => void;
 }
 
 /** A canvas: its name, each idea on it in words, its branch, Approve, and its moments. */
-function CanvasCardView({ card, shows, chapters, work, home, isOwner, state, boxOf, markings, now, onGo, onOpen, onTry, post, push, onAsk }: CardProps) {
+function CanvasCardView({ card, shows, chapters, work, home, isOwner, state, boxOf, markings, now, onGo, onOpen, onTry, post, push, read, onAsk }: CardProps) {
   const held = heldWhy(state, card.id, work, home);
   const opened = state.canvases[card.id]?.openedAt;
   const moments = chapters.flatMap((c) => c.moments);
@@ -385,7 +390,7 @@ function CanvasCardView({ card, shows, chapters, work, home, isOwner, state, box
           {moments.map((m) => (
             <li key={m.id}>
               <button type="button" className="moment" data-moment={m.id} onClick={() => onGo(m.items)} data-tip={`Go to "${m.title}" on the board`}>
-                <Thumb ids={m.items} state={state} boxOf={boxOf} markings={markings} />
+                <Thumb ids={m.items} state={state} boxOf={boxOf} markings={markings} read={read} />
                 <span className="moment__title">
                   {m.n} · {m.title}
                 </span>
@@ -395,7 +400,7 @@ function CanvasCardView({ card, shows, chapters, work, home, isOwner, state, box
           {main.map((id) => (
             <li key={id}>
               <button type="button" className="moment moment--main" data-main={id} onClick={() => onGo([id])} data-tip="Go to it on the board">
-                <Thumb ids={[id]} state={state} boxOf={boxOf} markings={markings} />
+                <Thumb ids={[id]} state={state} boxOf={boxOf} markings={markings} read={read} />
                 <span className="moment__title">{itemWords(state, id)}</span>
               </button>
             </li>
@@ -413,7 +418,7 @@ const THUMB_H = 132;
  * A small live drawing of some items, as they sit on the board now: the same renderers, scaled
  * down. It cannot be pressed through: the whole thumbnail is one button.
  */
-export const Thumb = memo(function Thumb({ ids, state, boxOf, markings }: { ids: readonly Id[]; state: BoardState; boxOf: StoryProps['boxOf']; markings: StoryProps['markings'] }) {
+export const Thumb = memo(function Thumb({ ids, state, boxOf, markings, read }: { ids: readonly Id[]; state: BoardState; boxOf: StoryProps['boxOf']; markings: StoryProps['markings']; read?: StoryProps['read'] }) {
   const placed = ids
     .map((id) => ({ id, s: state.items[id], b: boxOf(id) }))
     .filter((x): x is { id: Id; s: NonNullable<typeof x.s>; b: Box } => !!x.s && !x.s.removed && !!x.b && x.s.item.kind !== 'lasso');
@@ -435,7 +440,7 @@ export const Thumb = memo(function Thumb({ ids, state, boxOf, markings }: { ids:
               </span>
             );
           }
-          return <MarkView key={id} item={it} shown={at} />;
+          return <MarkView key={id} item={it} shown={at} read={it.kind === 'file' ? read : undefined} />;
         })}
       </span>
     </span>

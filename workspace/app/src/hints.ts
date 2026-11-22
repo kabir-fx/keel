@@ -22,6 +22,8 @@ export interface HintFacts {
   readonly penGo: boolean;
   /** The field open for typing, if one is: the words of a mark just drawn, or a note. */
   readonly field: 'label' | 'note' | undefined;
+  /** The agent holds, a mark waits, and the owner has been still: `useAskNow`. */
+  readonly askNow: boolean;
   /** The agent waits for the owner's go. */
   readonly agentWaits: boolean;
   /** How many of the agent's questions no mark of the owner's answers yet. */
@@ -80,6 +82,11 @@ export const HINTS: readonly HintRule[] = [
     when: 'a note is open',
     applies: (f) => f.field === 'note',
     says: () => 'Type the note. Enter keeps it, Shift+Enter starts a new line.',
+  },
+  {
+    when: 'the agent holds, a mark waits, and the owner has been still',
+    applies: (f) => f.askNow,
+    says: () => "Press Answer now for the agent's read of your drawing, or write a note.",
   },
   {
     when: 'the agent waits, and a question of its is not answered',

@@ -132,6 +132,7 @@ const FUNCTIONS: Record<keyof BoardNow, true> = {
   undo: true,
   redo: true,
   together: true,
+  notComing: true,
   removeSelected: true,
   solidify: true,
   stepWalk: true,

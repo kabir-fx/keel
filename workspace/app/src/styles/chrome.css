@@ -54,6 +54,13 @@
 .pill--agent svg { flex: none; }
 .pill--away { background: #fff; border-color: var(--grey-2); color: var(--ink); }
 .pill--away svg path { fill: var(--grey); }
+/* Hold, or Answer now while the agent holds: the owner's only. */
+.pill__hold { flex: none; height: 28px; padding: 0 10px; border: 1.5px solid var(--agent); border-radius: 7px; background: #fff; color: var(--ink); font: 600 12.5px/16px var(--font-ui); cursor: pointer; white-space: nowrap; transition: background-color 200ms ease-out, color 200ms ease-out; }
+.pill__hold:hover { background: var(--light); }
+.pill__hold:focus-visible { outline: 2px solid var(--agent); outline-offset: 2px; }
+/* Answer now, while the page points the owner at it: filled, once, and still. */
+.pill__hold[data-ask] { background: var(--agent); color: #fff; }
+@media (prefers-reduced-motion: reduce) { .pill__hold { transition: none; } }
 
 .presence-sign { flex: none; display: flex; align-items: center; gap: 3px; margin-left: 2px; }
 .presence-sign i { width: 5px; height: 5px; border-radius: 999px; background: var(--agent); }

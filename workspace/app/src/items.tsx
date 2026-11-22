@@ -1,14 +1,17 @@
-import type { BoardState, Box, Item, Markings, MarkItem, PictureItem } from '@keel/protocol';
+import type { BoardState, Box, FileItem, Item, Markings, MarkItem, PictureItem } from '@keel/protocol';
 import type { PictureAct, PictureView } from '@keel/pictures';
 import { Picture } from '@keel/pictures';
 import type { ReactNode } from 'react';
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { headPath, labelPoint, linePath } from './arrowhead';
+import type { ReadAsset } from './assetUrl';
+import { useAssetUrl } from './assetUrl';
 import type { XY } from './geometry';
 import { bboxOf, lineBox, padBox, wholeBoxAround } from './geometry';
 import { InkMark } from './ink/ink';
 import { pointOn } from './layout';
 import { PIN_SIZE } from './markSizes';
+import { shownAsPicture } from './marks';
 import type { Loop } from './outline';
 import { loopPath, loopsBox } from './outline';
 import { sameReads, stateReads, viewReads } from './pictureReads';
@@ -76,10 +79,67 @@ export interface MarkViewProps {
   raised?: boolean;
   /** For a file: open it. The page reads it with its token, so there is no link to copy. */
   onOpen?: ((asset: string, name: string) => void) | undefined;
+  /** For a file shown as a picture: read its bytes. Without it, the picture's place is held by a panel. */
+  read?: ReadAsset | undefined;
+}
+
+/** The button that opens a file in a new tab. */
+function OpenFile({ item, onOpen }: { item: FileItem; onOpen: (asset: string, name: string) => void }) {
+  return (
+    <button
+      type="button"
+      className="file-tile__open"
+      aria-label={`Open ${item.name}`}
+      data-tip={`Open ${item.name}`}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen(item.asset, item.name);
+      }}
+    >
+      Open
+    </button>
+  );
+}
+
+/** A picture in a panel the size of its place, for a picture still read, or one that could not be (crossed). */
+function PicturePlaceholder({ shown, failed }: { shown: Box; failed: boolean }) {
+  // Excalidraw's size for the icon (`drawImagePlaceholder` in packages/element/src/renderElement.ts, commit 9fbeaed).
+  const size = Math.min(Math.min(shown[2], shown[3]) * 0.4, 100);
+  return (
+    <div className="file-picture__wait" data-failed={failed || undefined}>
+      <svg width={size} height={size} viewBox="0 0 20 20" role="img" aria-label={failed ? 'The picture could not be shown' : 'The picture is on its way'}>
+        <rect x="2.5" y="4" width="15" height="12" rx="1.5" />
+        <circle cx="7" cy="8.2" r="1.3" />
+        <path d="M2.5 14 L7.5 10 L11 12.8 L13.5 11 L17.5 14" />
+        {failed && <path d="M2 2 L18 18" />}
+      </svg>
+    </div>
+  );
+}
+
+/**
+ * A file that is a picture, drawn as the picture, filling its box: the whole of it, also in a box
+ * of another shape. It sits straight unless the owner turned it. The Open button shows when it is
+ * selected or the pointer is on it.
+ */
+function FilePicture({ item, shown, read, onOpen }: { item: FileItem; shown: Box; read: ReadAsset | undefined; onOpen: MarkViewProps['onOpen'] }) {
+  const url = useAssetUrl(item.asset, read);
+  const [loaded, setLoaded] = useState<string>();
+  const [broken, setBroken] = useState<string>();
+  const failed = url === null || (!!url && url === broken);
+  return (
+    <div className="file-picture" style={item.rot ? { transform: `rotate(${item.rot}deg)` } : undefined}>
+      {/* Left out of an ink mark's snapshot (`snapshotRegion`): the snapshot would fetch the blob: URL, which the server's Content Security Policy (connect-src) refuses, and the whole snapshot would fail. */}
+      {url && !failed && <img src={url} alt={item.name} draggable={false} data-no-export onLoad={() => setLoaded(url)} onError={() => setBroken(url)} />}
+      {(!url || failed || loaded !== url) && <PicturePlaceholder shown={shown} failed={failed} />}
+      {onOpen && <OpenFile item={item} onOpen={onOpen} />}
+    </div>
+  );
 }
 
 /** One of the owner's marks on the board. It draws again only when one of its own props has changed. */
-export const MarkView = memo(function MarkView({ item, shown, selected = false, outline, picked, ends, raised = false, onOpen }: MarkViewProps) {
+export const MarkView = memo(function MarkView({ item, shown, selected = false, outline, picked, ends, raised = false, onOpen, read }: MarkViewProps) {
   const sel = [selected ? 'item--selected' : '', raised ? 'item--raised' : ''].filter(Boolean).join(' ');
   switch (item.kind) {
     case 'note':
@@ -95,6 +155,13 @@ export const MarkView = memo(function MarkView({ item, shown, selected = false, 
         </div>
       );
     case 'file':
+      if (shownAsPicture(item)) {
+        return (
+          <Frame item={item} shown={shown} kind="file" className={sel}>
+            <FilePicture item={item} shown={shown} read={read} onOpen={onOpen} />
+          </Frame>
+        );
+      }
       return (
         <Frame item={item} shown={shown} kind="file" className={sel}>
           <div className="file-tile" style={{ transform: `rotate(${item.rot ?? tiltOf(item.id) / 2}deg)` }}>
@@ -103,21 +170,7 @@ export const MarkView = memo(function MarkView({ item, shown, selected = false, 
               <b>{item.name}</b>
               <span>{['dropped in by you', sizeWords(item.size)].filter(Boolean).join(' · ')}</span>
             </span>
-            {onOpen && (
-              <button
-                type="button"
-                className="file-tile__open"
-                aria-label={`Open ${item.name}`}
-                data-tip={`Open ${item.name}`}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpen(item.asset, item.name);
-                }}
-              >
-                Open
-              </button>
-            )}
+            {onOpen && <OpenFile item={item} onOpen={onOpen} />}
           </div>
         </Frame>
       );

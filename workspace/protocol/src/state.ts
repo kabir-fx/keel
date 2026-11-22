@@ -415,6 +415,27 @@ export function ownersPictures(state: BoardState): Set<Id> {
   return out;
 }
 
+/**
+ * The pictures that answer what a mark says, in board order: each one that names the mark in
+ * `answers`, and each one whose `from` names the mark or a picture taken here, all the way down.
+ * The owner's pictures (`ownersPictures`) are not taken, and the walk stops at them. When the
+ * owner changes the mark's words, these answer words that are gone. See docs/adr/0020.
+ */
+export function answersTo(state: BoardState, mark: Id): Id[] {
+  const kept = ownersPictures(state);
+  const taken = new Set<Id>();
+  const reaches = (it: PictureItem) => (it.answers ?? []).includes(mark) || (it.from ?? []).some((id) => id === mark || taken.has(id));
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const s of pictureItems(state)) {
+      if (taken.has(s.item.id) || kept.has(s.item.id) || !reaches(s.item)) continue;
+      taken.add(s.item.id);
+      grew = true;
+    }
+  }
+  return state.itemOrder.filter((id) => taken.has(id));
+}
+
 /** The owner's lassos that no solidify has used yet: what the owner is holding together now. */
 export function heldLassos(state: BoardState): Array<{ id: Id; chapter: Id; items: Id[] }> {
   const out: Array<{ id: Id; chapter: Id; items: Id[] }> = [];

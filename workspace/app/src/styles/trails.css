@@ -34,6 +34,7 @@
 /* What the loop being drawn holds lights up in the owner's orange, as a selection does in blue (styles/canvas.css). */
 .item[data-lassoed] > .note,
 .item[data-lassoed] > .file-tile,
+.item[data-lassoed] > .file-picture,
 .item[data-lassoed] > .drawn-box { outline: 2px solid var(--owner-soft); outline-offset: 5px; }
 .item--picture[data-lassoed] > * { outline: 2px solid var(--owner-soft); outline-offset: 6px; }
 /* Each is matched on the element it lights, by its class, so the board's many paths are never asked. */

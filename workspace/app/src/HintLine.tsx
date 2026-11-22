@@ -3,6 +3,8 @@ import { openQuestions } from '@keel/protocol';
 import type { RefObject } from 'react';
 import { useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { usePresence } from './board/presence';
+import type { Stillness } from './board/stillness';
+import { useAskNow } from './board/stillness';
 import type { CameraStore } from './camera/camera';
 import type { ToolId } from './chrome';
 import { oncePerFrame } from './frame';
@@ -29,6 +31,7 @@ export interface HintLineProps {
   chapter: Id | undefined;
   /** Nothing is on the board, and the board is connected: it is truly empty. */
   empty: boolean;
+  still: Stillness;
 }
 
 /** The note or the label the owner types in: the paper round its words. */
@@ -76,13 +79,14 @@ function useGiveWayToField(line: RefObject<HTMLElement | null>, camera: CameraSt
  * the note or the label the owner types in reaches it. Its box is a panel only while it says
  * something: then it truly covers the board there, and a fit keeps clear of it.
  */
-export function HintLine({ source, camera, state, hand, pen, field, tool, lassoed, chapter, empty }: HintLineProps) {
+export function HintLine({ source, camera, state, hand, pen, field, tool, lassoed, chapter, empty, still }: HintLineProps) {
   const presence = usePresence(source);
+  const askNow = useAskNow(source, still);
   const penGo = useSyncExternalStore(hand.subscribe, pen.open);
   const questions = useMemo(() => openQuestions(state).length, [state]);
   const toBuild = useMemo(() => blueprintWaits(state, chapter), [state, chapter]);
   const toTry = buildWaits(state, chapter);
-  const line = hintFor({ penGo, field, agentWaits: presence.state === 'waiting', questions, lassoed, toBuild, toTry, tool, empty, away: presence.state === 'away' });
+  const line = hintFor({ penGo, field, askNow, agentWaits: presence.state === 'waiting', questions, lassoed, toBuild, toTry, tool, empty, away: presence.state === 'away' });
   const ref = useRef<HTMLDivElement>(null);
   useGiveWayToField(ref, camera, field, line);
   return (

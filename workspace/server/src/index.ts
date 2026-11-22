@@ -8,8 +8,8 @@ export { startServer, defaultAppDir, shellPolicy, ASSET_POLICY, LIMITS, SHOW_OPE
 export { checkShow, startShowServer, showTypeOf } from './show';
 export type { CheckedShow, ShowServer } from './show';
 export type { BoardInfoReply, RunningServer, ServerOptions, Tokens } from './server';
-export { WakeScheduler, hasAgentPicture, quietAfter, systemClock, QUIET_LONG, QUIET_SHORT, RETRY_DELAYS } from './wake';
-export type { Clock, WakeSchedulerOptions } from './wake';
+export { WakeScheduler, hasAgentPicture, inputOf, systemClock, QUIET_LONG, QUIET_SHORT, RETRY_DELAYS } from './wake';
+export type { Clock, Input, WakeSchedulerOptions } from './wake';
 export { PresenceHub } from './presence';
 export { loadBuilder, loadLink, parseLinkOptions } from './link';
 export { BuildRunner, NO_BUILDER, jobTrack, makeJob, reopened } from './build';

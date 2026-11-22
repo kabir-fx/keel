@@ -60,7 +60,7 @@ export const QUIET_LONG = 1500;
 /** Mirrors `WAKE_PRESENCE` in server/src/wake.ts: what the pill says as a wake starts. */
 export const WAKE_NOTE = 'reading your marks';
 
-/** Mirrors `quietAfter` in server/src/wake.ts: the quiet time an event asks for, or undefined when it wakes nobody. */
+/** The quiet time an event asks for in server/src/wake.ts when the agent does not hold, or undefined when it wakes nobody. A hold is never logged, so a replay knows of none. */
 export function quietAfter(ev: BoardEvent): number | undefined {
   if (ev.by !== 'owner') return undefined;
   if (ev.type === 'item.add') {

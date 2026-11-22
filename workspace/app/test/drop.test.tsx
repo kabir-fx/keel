@@ -1,6 +1,6 @@
 import type { BoardEvent } from '@keel/protocol';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import { dragDepth } from '../src/board/drop';
 import { NOTE_FULL } from '../src/board/notes';
@@ -19,6 +19,7 @@ import { Keyboard, Pointer, resetInput } from './pointer';
 afterEach(() => {
   cleanup();
   resetInput();
+  vi.restoreAllMocks();
   window.dispatchEvent(new Event('pointerdown'));
 });
 
@@ -67,6 +68,14 @@ function drag(type: DragType, el: Element, carried: Carried = FILE, at: readonly
     el.dispatchEvent(e);
   });
   return { defaultPrevented: e.defaultPrevented, dropEffect: data.dropEffect };
+}
+
+/** The world point under a page point, and the zoom, by the camera on the page. */
+function worldAt(container: HTMLElement, [px, py]: readonly [number, number]): { x: number; y: number; z: number } {
+  const t = container.querySelector<HTMLElement>('.world')!.style.transform;
+  const m = /translate\(([-\d.e]+)px, ([-\d.e]+)px\) scale\(([-\d.e]+)\)/.exec(t)!;
+  const z = Number(m[3]);
+  return { x: (px - Number(m[1])) / z, y: (py - Number(m[2])) / z, z };
 }
 
 const overlay = () => screen.queryByTestId('drop-hint');
@@ -216,6 +225,34 @@ describe('the "drop here" overlay', () => {
     Keyboard.press('z', 'KeyZ', { meta: true, shift: true });
     await settle();
     expect(posted().slice(4).map((e) => [e.type, 'item' in e ? e.item : undefined])).toEqual([['item.restore', ids[0]], ['item.restore', ids[1]]]);
+  });
+
+  it('a dropped picture lands as itself, centred where it was dropped; with a file that is not a picture, the two sit side by side on a grid round the point, 50 screen pixels apart, the file as its tile', async () => {
+    const { container, board, posted } = open();
+    // A test page decodes no picture: this is the size Chrome would read.
+    vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(300);
+    vi.spyOn(HTMLImageElement.prototype, 'naturalHeight', 'get').mockReturnValue(200);
+    const png = () => new File(['png'], 'sketch.png', { type: 'image/png' });
+    drag('drop', board, { types: ['Files'], files: [png()] }, [700, 400]);
+    await settle();
+    const { x, y, z } = worldAt(container, [700, 400]);
+    expect(adds(posted())).toMatchObject([{ kind: 'file', name: 'sketch.png', box: [Math.round(x - 150), Math.round(y - 100), 300, 200] }]);
+    drag('drop', board, { types: ['Files'], files: [png(), new File(['a'], 'notes.txt', { type: 'text/plain' })] }, [700, 400]);
+    await settle();
+    const gap = 50 / z;
+    const left = x - (300 + gap + 340) / 2;
+    expect(adds(posted()).slice(1).map((f) => f.box)).toEqual([
+      [Math.round(left), Math.round(y - 100), 300, 200],
+      [Math.round(left + 300 + gap), Math.round(y - 100), 340, 60],
+    ]);
+  });
+
+  it('a picture the page cannot decode lands as a tile with its corner where it was dropped', async () => {
+    const { container, board, posted } = open();
+    drag('drop', board, { types: ['Files'], files: [new File(['not a png'], 'broken.png', { type: 'image/png' })] }, [700, 400]);
+    await settle();
+    const { x, y } = worldAt(container, [700, 400]);
+    expect(adds(posted())).toMatchObject([{ kind: 'file', name: 'broken.png', box: [Math.round(x), Math.round(y), 340, 60] }]);
   });
 
   it('Undo while a dropped file is still going up takes back the step before at once: it never waits for an upload', async () => {

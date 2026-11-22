@@ -104,7 +104,7 @@ export const ItemRestore = z.strictObject({
 export const Answer = z.strictObject({
   ...common,
   type: z.literal('answer'),
-  answers: z.array(Id).min(1).max(24),
+  answers: z.array(Id).min(1).max(40),
   read: z
     .string()
     .min(1)

@@ -259,7 +259,8 @@ export function selectTool(): SelectTool {
 
   const resizeTo = (press: Press, board: BoardCtx, g: Extract<Gesture, { kind: 'resize' }>): Box => {
     const [wx, wy] = pointerNow(press, board);
-    const rules = { keepRatio: press.mods.shift, fromCentre: press.mods.alt, widthOnly: g.at.widthOnly, min: [g.at.widthOnly ? MIN_NOTE_WIDTH : MIN_RESIZE_BOX, MIN_RESIZE_BOX] as const };
+    // A picture keeps its shape and Shift frees it: Excalidraw's `proportionalByDefault ? !shift : shift` (App.selectionTool.ts, commit 9fbeaed).
+    const rules = { keepRatio: g.at.proportional ? !press.mods.shift : press.mods.shift, fromCentre: press.mods.alt, widthOnly: g.at.widthOnly, min: [g.at.widthOnly ? MIN_NOTE_WIDTH : MIN_RESIZE_BOX, MIN_RESIZE_BOX] as const };
     let dx = wx - press.down.wx;
     let dy = wy - press.down.wy;
     let box = resized(g.start, g.at.handle, dx, dy, rules);

@@ -892,7 +892,8 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     ws.on('close', () => clients.delete(ws));
     ws.on('error', () => clients.delete(ws));
     const build = builds?.status();
-    send(ws, { t: 'init', name: board.state.name, role: actor, events: [...board.events], presence: presence.get(), ...(build ? { build } : {}), ...ownerWorks(actor) });
+    const hold = scheduler?.holding;
+    send(ws, { t: 'init', name: board.state.name, role: actor, events: [...board.events], presence: presence.get(), ...(hold ? { hold } : {}), ...(build ? { build } : {}), ...ownerWorks(actor) });
 
     ws.on('message', (data, isBinary) => {
       if (isBinary) return send(ws, { t: 'refused', ref: '', rule: 'shape', reason: 'Send JSON text.' });
@@ -909,10 +910,16 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
           t: 'refused',
           ref: typeof ref === 'string' ? ref.slice(0, 64) : '',
           rule: 'shape',
-          reason: 'A message is {"t":"post","ref":"...","draft":{...}} or {"t":"ping"}.',
+          reason: 'A message is {"t":"post","ref":"...","draft":{...}}, {"t":"hold","on":true} or {"t":"ping"}.',
         });
       }
       if (m.data.t === 'ping') return send(ws, { t: 'pong' });
+      if (m.data.t === 'hold') {
+        if (actor !== 'owner') return send(ws, { t: 'refused', ref: '', rule: 'R6', reason: 'Only the owner holds the agent, or asks it to answer now.' });
+        if (m.data.on) scheduler?.hold();
+        else scheduler?.release();
+        return;
+      }
       const { ref, draft } = m.data;
       let r: ReturnType<Board['post']>;
       try {
@@ -1475,6 +1482,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       log: (m) => log(`wake: ${m}`),
       resting: () => runner.resting(),
       foreign: () => own.foreign,
+      onHold: (by) => broadcast({ t: 'hold', by: by ?? null }),
     });
     scheduler = s;
     board.subscribe((events) => s.notify(events));

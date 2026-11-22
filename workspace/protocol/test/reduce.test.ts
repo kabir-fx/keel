@@ -265,6 +265,17 @@ describe('the digest', () => {
     expect(text).toContain('and 15 older open marks');
   });
 
+  it('lets one picture, or one answer, close every mark a digest lists', () => {
+    const b = openBoard();
+    for (let i = 1; i <= MAX_OPEN + 1; i++) b.must('owner', note(`n${i}`, `box ${i}`));
+    const ids = digest(b.state).open.map((o) => o.id);
+    expect(ids).toHaveLength(MAX_OPEN);
+    b.must('agent', picture('p1', { kind: 'text', title: 'How I read your drawing' }, { answers: ids.slice(0, -1) }));
+    b.must('agent', { type: 'answer', answers: ids.slice(-1), read: 'The last box ends the flow.' });
+    expect(digest(b.state).open.map((o) => o.id)).toEqual(['n1']);
+    expect(admit(b.state, picture('p2', { kind: 'text', title: 'Too many' }, { answers: [...ids, 'n1'] }), 'agent', '2026-11-22T12:00:00Z')).toMatchObject({ ok: false, rule: 'shape' });
+  });
+
   it('orders open things by when they reached the log, not by the text of their time', () => {
     const b = openBoard();
     let state = b.state;

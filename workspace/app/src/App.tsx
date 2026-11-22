@@ -8,6 +8,7 @@ import { landFirst } from './arrival/land';
 import { useArrivals } from './arrival/useArrivals';
 import { usePictureActs } from './board/acts';
 import { useAhead } from './board/ahead';
+import { wordsOnDoubleClick } from './board/changeWords';
 import { useChapterInView, useFollowChapter } from './board/chapterInView';
 import { useBoard } from './board/context';
 import { useDrop } from './board/drop';
@@ -26,6 +27,7 @@ import { useBoardRect, useViewport } from './board/page';
 import { usePaste } from './board/paste';
 import { usePlacement } from './board/placement';
 import { AgentPill } from './board/presence';
+import { useStillness } from './board/stillness';
 import { useShown } from './board/shown';
 import { snapshotInk } from './board/snapshot';
 import { useStoryNav } from './board/storyNav';
@@ -195,6 +197,7 @@ export function App({ source: board0, show, view: firstView = {}, focus: firstFo
   const frames = useMemo(() => (clock ? new FrameLoop(clock, () => clock.now()) : new FrameLoop()), [clock]);
   const camera = useMemo(() => new CameraStore({ x: 0, y: 0, z: 1 }, { loop: frames }), [frames]);
   const hand = useMemo(() => new LiveStore(), []);
+  const still = useStillness();
   /** Where the agent's cursor is: it goes where presence says, or where an arrival leads it. */
   const agentCursor = useMemo(() => new AgentCursorStore(frames, camera), [frames, camera]);
   const moving = useMemo(() => new MovingStore(), []);
@@ -478,6 +481,7 @@ export function App({ source: board0, show, view: firstView = {}, focus: firstFo
       undoer.redo();
     },
     together: log.together,
+    notComing: undoer.steps.notComing,
     removeSelected: () => {
       nudger.flush();
       undoer.removeSelected();
@@ -517,7 +521,7 @@ export function App({ source: board0, show, view: firstView = {}, focus: firstFo
     [live, boxes, arrivals.held],
   );
 
-  const editing = notes.editor?.mode === 'edit' ? notes.editor.id : undefined;
+  const editing = notes.editor?.mode === 'edit' ? notes.editor.id : (labels.editing ?? undefined);
   const panMode = spaceHeld || tool === 'pan';
   const selectedPicture = selected && state.items[selected]?.item.kind === 'picture' ? selected : undefined;
   const chapterTitles = useMemo(() => state.chapterOrder.map((id) => state.chapters[id]?.title ?? ''), [state]);
@@ -544,7 +548,7 @@ export function App({ source: board0, show, view: firstView = {}, focus: firstFo
         onPointerUp={pointers.up}
         onPointerCancel={pointers.cancel}
         onLostPointerCapture={pointers.lost}
-        onDoubleClick={notes.onDoubleClick}
+        onDoubleClick={wordsOnDoubleClick(board, notes, labels)}
         onDragEnter={drop.onDragEnter}
         onDragOver={drop.onDragOver}
         onDragLeave={drop.onDragLeave}
@@ -588,6 +592,7 @@ export function App({ source: board0, show, view: firstView = {}, focus: firstFo
                   picked={o?.picked}
                   raised={up}
                   onOpen={s.item.kind === 'file' ? drop.openFile : undefined}
+                  read={s.item.kind === 'file' ? source.readAsset : undefined}
                   {...(e ? { ends: e } : {})}
                 />
               );
@@ -641,6 +646,7 @@ export function App({ source: board0, show, view: firstView = {}, focus: firstFo
           lassoed={picked}
           chapter={chapters.chapter}
           empty={empty}
+          still={still}
         />
       )}
       {mode === 'story' && (
@@ -663,6 +669,7 @@ export function App({ source: board0, show, view: firstView = {}, focus: firstFo
             focus.open({ part });
           }}
           onNewCanvas={newCanvas}
+          read={source.readAsset}
           works={works}
           shows={shows}
           home={home}
@@ -685,7 +692,7 @@ export function App({ source: board0, show, view: firstView = {}, focus: firstFo
           setMode(m);
         }}
       />
-      <AgentPill source={source} cursor={agentCursor} boxOf={boxOf} titles={chapterTitles} />
+      <AgentPill source={source} cursor={agentCursor} boxOf={boxOf} titles={chapterTitles} still={still} />
       {mode === 'board' && focusView && crumb && <FocusCrumb crumb={crumb} onBack={focus.close} />}
       {mode === 'board' && opening && !focusView && <OpeningNotice name={opening.name} onStop={focus.stopOpening} />}
       {watchChapter && (

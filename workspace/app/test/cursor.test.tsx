@@ -4,6 +4,7 @@ import { Profiler } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import { AgentPill } from '../src/board/presence';
+import { Stillness } from '../src/board/stillness';
 import { CameraStore } from '../src/camera/camera';
 import { PILL_NOTE_MAX } from '../src/chrome';
 import type { FrameScheduler } from '../src/frame';
@@ -940,7 +941,7 @@ describe('the agent’s cursor on the board', () => {
     render(
       <>
         <AgentCursor source={src} cursor={store} state={src.state} boxOf={() => undefined} titles={[]} camera={cam} rect={() => ({ left: 0, top: 0, width: 1000, height: 800 })} waiting={false} />
-        <AgentPill source={src} cursor={store} boxOf={() => undefined} titles={[]} />
+        <AgentPill source={src} cursor={store} boxOf={() => undefined} titles={[]} still={new Stillness()} />
       </>,
     );
     const pill = () => screen.getByTestId('presence').querySelector('.pill__said')!.textContent;

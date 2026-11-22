@@ -1,8 +1,6 @@
 import type { Anchor, Box, Id, Target } from '@keel/protocol';
-import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import type { ToolId } from '../chrome';
-import { targetAt } from '../dom';
 import { noteDrafts } from '../drafts';
 import { NOTE_MAX } from '../fieldText';
 import { NOTE_HEIGHT_SLACK } from '../input/constants';
@@ -13,6 +11,7 @@ import type { NoteDraft } from '../noteDraft';
 import { readNoteDraft } from '../noteDraft';
 import { NOTE_WHERE } from '../tools/note';
 import type { NoteTarget } from '../tools/types';
+import { changeWords } from './changeWords';
 import type { Board } from './context';
 import type { Opening } from './oneField';
 import { HAD_IT, asUndoLeftIt, useOneField } from './oneField';
@@ -90,8 +89,8 @@ export interface Notes {
   ghost: Ghost | null;
   /** Open the editor for a new note at a world point, on what it was clicked on. */
   open(at: [number, number], target: NoteTarget): void;
-  /** A double click with Select on one of the owner's notes opens it for a change. */
-  onDoubleClick(e: ReactMouseEvent<HTMLDivElement>): void;
+  /** Open one of the owner's notes for a change. False when the id is not a note on the board. */
+  edit(id: Id): boolean;
   /** True while a note's field is open, also before React has drawn it: a label on its way back waits for it. */
   isOpen(): boolean;
 }
@@ -279,7 +278,7 @@ export function useNotes(board: Board, tool: ToolId, remember = false): Notes {
     // No words, or nothing changed: the note stays as it was, and nothing is posted.
     const changed = patch.text !== undefined || patch.box !== undefined;
     if (changed) one.flush();
-    const refused = changed && !(await board.send({ type: 'item.update', item: e.id, patch })).ok;
+    const refused = changed && !(await changeWords(board, e.id, patch)).ok;
     // A refused change comes back to the owner with what they typed, so nothing is lost.
     if (refused) one.bringBack(e, raw);
     else one.forget(o);
@@ -335,13 +334,12 @@ export function useNotes(board: Board, tool: ToolId, remember = false): Notes {
     field: open ? fieldOf(open) : null,
     ghost,
     open: (at, { on, anchor }) => one.show(newNote(at, on, anchor, undefined), ''),
-    onDoubleClick: (e) => {
-      if (board.tool() !== 'select' || one.isOpen() || !board.isOwner) return;
-      const id = targetAt(e.clientX, e.clientY)?.item;
-      const note = id ? noteOf(id) : undefined;
-      const shown = id ? board.boxes().get(id) : undefined;
-      if (!id || !note || !shown) return;
+    edit: (id) => {
+      const note = noteOf(id);
+      const shown = board.boxes().get(id);
+      if (!note || !shown) return false;
       one.show({ mode: 'edit', id, shown, rot: note.rot ?? tiltOf(id) }, note.text);
+      return true;
     },
     isOpen: one.isOpen,
   };

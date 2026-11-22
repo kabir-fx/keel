@@ -101,6 +101,19 @@ describe('paste', () => {
     expect(src.assets.has('assets/depth.csv')).toBe(true);
   });
 
+  it('a screenshot is pasted as the picture, at its own size, centred on the pointer', async () => {
+    const { container, board, posted } = open();
+    under(board);
+    // A test page decodes no picture: this is the size Chrome would read.
+    vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(300);
+    vi.spyOn(HTMLImageElement.prototype, 'naturalHeight', 'get').mockReturnValue(200);
+    new Pointer().move([500, 300]);
+    expect(paste({ files: [new File(['png'], 'image.png', { type: 'image/png' })] })).toBe(false);
+    await settle();
+    const [x, y] = worldAt(container, [500, 300]);
+    expect(adds(posted())).toMatchObject([{ kind: 'file', name: 'image.png', mime: 'image/png', box: [x - 150, y - 100, 300, 200] }]);
+  });
+
   it('the place is where the pointer is now, not where it last was over the board', async () => {
     const { board, posted } = open();
     const toolbar = screen.getByRole('toolbar', { name: 'Tools' });
