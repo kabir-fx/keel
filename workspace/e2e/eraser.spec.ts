@@ -95,6 +95,17 @@ test('one sweep of the eraser over two strokes: both fade, both go when it lifts
   }
 });
 
+/** What the trail test keeps in the page: when the pointer reached its end, and each width the trail was drawn at, with its time. */
+interface TrailSeen {
+  reached: number;
+  drawn: Array<[number, number]>;
+}
+declare global {
+  interface Window {
+    __trail?: TrailSeen;
+  }
+}
+
 test('with motion, the eraser’s trail fades behind the pointer to a dot under it, and is gone soon after the lift', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await open(page);
@@ -104,14 +115,14 @@ test('with motion, the eraser’s trail fades behind the pointer to a dot under 
   // at once here, where Playwright's steps would each wait for the page. The trail is read in the
   // page as it is drawn, not after a round trip from here.
   await page.evaluate(() => {
-    const w = window as unknown as { __trail: { reached: number; drawn: Array<[number, number]> } };
-    w.__trail = { reached: Infinity, drawn: [] };
+    const seen: TrailSeen = { reached: Infinity, drawn: [] };
+    window.__trail = seen;
     window.addEventListener('pointermove', (e) => {
-      if (e.clientX >= 1120) w.__trail.reached = Math.min(w.__trail.reached, performance.now());
+      if (e.clientX >= 1120) seen.reached = Math.min(seen.reached, performance.now());
     }, true);
     new MutationObserver(() => {
       const path = document.querySelector('[data-testid="trails"] path.trail--eraser');
-      if (path) w.__trail.drawn.push([performance.now(), path.getBoundingClientRect().width]);
+      if (path) seen.drawn.push([performance.now(), path.getBoundingClientRect().width]);
     }).observe(document.querySelector('[data-testid="trails"]')!, { subtree: true, childList: true, attributes: true });
   });
   await page.mouse.move(820, 640);
@@ -122,7 +133,7 @@ test('with motion, the eraser’s trail fades behind the pointer to a dot under 
   await page.mouse.move(1120, 640);
   await nextFrame(page);
   const arrived = await page.evaluate(() => {
-    const { reached, drawn } = (window as unknown as { __trail: { reached: number; drawn: Array<[number, number]> } }).__trail;
+    const { reached, drawn } = window.__trail ?? { reached: Infinity, drawn: [] };
     return Math.max(0, ...drawn.filter(([t]) => t >= reached).map(([, width]) => width));
   });
   expect(arrived).toBeGreaterThan(40);

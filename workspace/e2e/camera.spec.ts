@@ -166,11 +166,14 @@ test('a Ctrl wheel over a panel zooms neither the board nor the page; a plain on
   expect(await readCamera(page)).toEqual(c0);
 });
 
-/** Every camera the page shows, one a frame, until it has stood still for a few frames. */
-async function filmCamera(page: Page): Promise<Camera[]> {
+/**
+ * Every camera the page shows, one a frame, until it has stood still for a few frames.
+ * `stalls` counts the frames it stood still between two moves.
+ */
+async function filmCamera(page: Page): Promise<{ film: Camera[]; stalls: number }> {
   return page.evaluate(
     () =>
-      new Promise<Camera[]>((done) => {
+      new Promise<{ film: Camera[]; stalls: number }>((done) => {
         const world = document.querySelector<HTMLElement>('.world')!;
         const read = () => {
           const m = /translate\(([-\d.e]+)px, ([-\d.e]+)px\) scale\(([-\d.e]+)\)/.exec(world.style.transform)!;
@@ -178,15 +181,17 @@ async function filmCamera(page: Page): Promise<Camera[]> {
         };
         const seen = [read()];
         let still = 0;
+        let stalls = 0;
         const tick = () => {
           const c = read();
           const last = seen[seen.length - 1]!;
           if (c.x === last.x && c.y === last.y && c.z === last.z) still += 1;
           else {
+            if (seen.length > 1) stalls += still;
             still = 0;
             seen.push(c);
           }
-          if (still >= 10 || seen.length > 200) done(seen);
+          if (still >= 10 || seen.length > 200) done({ film: seen, stalls });
           else requestAnimationFrame(tick);
         };
         requestAnimationFrame(tick);
@@ -211,8 +216,11 @@ test('a fit glides: over frames, every point one way along a line, landing exact
   await wheel(page, { at, dx: -900, dy: -400 });
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   const start = await readCamera(page);
-  const [, film] = await Promise.all([page.keyboard.press('1'), filmCamera(page)]);
-  expect(film.length).toBeGreaterThan(10);
+  const [, { film, stalls }] = await Promise.all([page.keyboard.press('1'), filmCamera(page)]);
+  // A glide, at whatever rate this machine draws: cameras between the start and the landing, and
+  // a move on every frame from the first to the last. How many frames that is depends on the machine.
+  expect(film.length, 'cameras filmed: the start, the landing, and some between').toBeGreaterThan(3);
+  expect(stalls, 'frames the camera stood still in the middle of the glide').toBe(0);
   expect(film[film.length - 1]).toEqual(target);
   const point = (c: Camera, w: XY) => [w[0] * c.z + c.x, w[1] * c.z + c.y] as const;
   for (const w of [
