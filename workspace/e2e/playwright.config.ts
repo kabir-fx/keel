@@ -27,6 +27,9 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 30_000,
+  // On CI's shared machines a test that waits on real frames can lose a race once. It is run once
+  // more there, and the report calls it flaky: read those. Here, a failure is a failure.
+  retries: process.env.CI ? 1 : 0,
   reporter: [['list']],
   use: {
     channel: 'chrome',

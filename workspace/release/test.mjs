@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Prove the package works once installed: pack it, install the tarball into a temp prefix,
 // and run the installed keel-board. Build first (npm run build): this packs with --no-build.
+// node release/test.mjs [tarball]
+// With a tarball, it proves that file and stages nothing: the release proves the file it uploads.
 // Everything it makes is in one temp folder, removed at the end. It never publishes.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -83,19 +85,22 @@ function expectedFiles() {
 }
 
 async function main() {
-  // 1. Stage, then pack into the temp folder.
-  const packed = spawnSync(process.execPath, [path.join(HERE, 'pack.mjs'), '--no-build'], { encoding: 'utf8' });
-  must(packed.status === 0, 'stage the package (release/pack.mjs --no-build)', packed.status === 0 ? '' : tail(packed));
+  // 1. Stage, then pack into the temp folder. A tarball that was handed in is read as it is.
+  const given = process.argv[2] ? path.resolve(process.argv[2]) : '';
+  if (!given) {
+    const packed = spawnSync(process.execPath, [path.join(HERE, 'pack.mjs'), '--no-build'], { encoding: 'utf8' });
+    must(packed.status === 0, 'stage the package (release/pack.mjs --no-build)', packed.status === 0 ? '' : tail(packed));
+  }
 
-  const out = npm(['pack', '--json', '--pack-destination', TMP], { cwd: STAGED });
+  const out = given ? npm(['pack', given, '--json', '--dry-run'], { cwd: TMP }) : npm(['pack', '--json', '--pack-destination', TMP], { cwd: STAGED });
   let info;
   try {
     info = JSON.parse(out.stdout)[0];
   } catch {
     // Said below.
   }
-  const tarball = info ? path.join(TMP, info.filename) : '';
-  must(out.status === 0 && info && fs.existsSync(tarball), 'npm pack', out.status === 0 ? '' : tail(out));
+  const tarball = given || (info ? path.join(TMP, info.filename) : '');
+  must(out.status === 0 && info && fs.existsSync(tarball), given ? `read ${given}` : 'npm pack', out.status === 0 ? '' : tail(out));
   line(true, `tarball ${info.filename}`, `${info.size} bytes packed, ${info.unpackedSize} bytes unpacked, ${info.entryCount} files`);
 
   // 2. Exactly the expected files: no source, no node_modules, no test, nothing private.

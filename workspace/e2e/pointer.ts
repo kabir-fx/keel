@@ -152,6 +152,42 @@ export async function worldToPage(page: Page, [wx, wy]: XY): Promise<XY> {
   return [r.x + wx * cam.z + cam.x, r.y + wy * cam.z + cam.y];
 }
 
+/**
+ * A screenshot of the board after Chrome has drawn it again whole. Without a GPU, Chrome draws
+ * again only the part that changed, and the edge pixels of what lies across that part's border
+ * come out a shade apart from the board drawn whole. So, drawn whole, the screenshot shows what
+ * is on the board, and not also which frames came before it.
+ */
+export async function screenshotWhole(page: Page, clip: { x: number; y: number; width: number; height: number }): Promise<Buffer> {
+  const board = page.getByTestId('board');
+  await board.evaluate((el) => void ((el as HTMLElement).style.willChange = 'transform'));
+  await nextFrame(page);
+  await board.evaluate((el) => void ((el as HTMLElement).style.willChange = ''));
+  await nextFrame(page);
+  return page.screenshot({ clip });
+}
+
+/**
+ * Does this Chrome rasterise on a GPU? Chrome's own answer, as chrome://gpu shows it: the
+ * `rasterization` entry of its GPU feature status is "enabled" on a GPU and "disabled_software"
+ * on the CPU. Screenshots of the same ink are byte-equal only on a GPU. On the CPU, an edge
+ * pixel of a path comes out a shade apart with what was drawn before it, with the path's
+ * bounds, and with how the offsets of its SVG add up.
+ */
+export async function rastersOnGpu(page: Page): Promise<boolean> {
+  const browser = page.context().browser();
+  if (!browser) throw new Error('the page has no browser to ask');
+  const cdp = await browser.newBrowserCDPSession();
+  try {
+    const { gpu } = await cdp.send('SystemInfo.getInfo');
+    const status: unknown = gpu.featureStatus?.['rasterization'];
+    if (typeof status !== 'string') throw new Error('Chrome did not say how it rasterises');
+    return status.startsWith('enabled');
+  } finally {
+    await cdp.detach();
+  }
+}
+
 /** How many pixels two screenshots of one size differ in, counted by the page's own image decoder. */
 export function pixelsApart(page: Page, a: Buffer, b: Buffer): Promise<number> {
   return page.evaluate(

@@ -28,7 +28,7 @@ function server(first: SetupInfo, after: (ask: SetupAsk) => SetupInfo | Promise<
     fetch: (async (url: RequestInfo | URL, init?: RequestInit) => {
       if (s.down) throw new Error('down');
       expect(String(url)).toBe(`http://board${ROUTES.setup}`);
-      expect((init?.headers as Record<string, string>).authorization).toBe('Bearer owner-token');
+      expect((init?.headers as Record<string, string> | undefined)?.authorization).toBe('Bearer owner-token');
       if (init?.method === 'POST') {
         const ask = JSON.parse(String(init.body)) as SetupAsk;
         s.asks.push(ask);

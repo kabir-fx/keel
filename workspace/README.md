@@ -33,8 +33,13 @@ Run these in `workspace/`.
 | `npm run fixture` | Rebuild the golden fixture (see below) |
 | `npm run live-check -w @keel/board-plugin` | One real agent turn: a note goes in, and it prints the seconds until the agent's card lands |
 | `npx vite --config pictures/gallery/vite.config.ts` | The picture gallery: every kind, and the fixture's pictures |
+| `npm run lint` | oxlint, with the rules in `.oxlintrc.json` |
+| `npm run release:pack` | Build, and stage the npm package in `release/keel-workspace/` |
+| `npm run release:test` | Install the staged package into a throwaway prefix and start the board from it |
 
-From the keel folder, `scripts/check.sh board` runs the typecheck and the unit tests, and checks the plugin's skill and JSON files. `KEEL_E2E=1 scripts/check.sh board` adds the browser tests.
+From the keel folder, `scripts/check.sh board` runs the lint, the typecheck and the unit tests, and checks the plugin's skill and JSON files. `KEEL_E2E=1 scripts/check.sh board` adds the browser tests. `scripts/check.sh package` runs the two release commands.
+
+The package is published by `.github/workflows/release.yml` on every merge to `main` that changes what it holds ([record 0017](../docs/adr/0017-a-merge-to-main-is-a-release.md)). `release/next.mjs` decides whether, and which version. `version` in `package.json` stays `0.0.0`: it is not a release.
 
 To run a board while you work on it:
 

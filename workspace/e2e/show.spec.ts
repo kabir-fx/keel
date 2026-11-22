@@ -70,11 +70,17 @@ test('a finished build shows its page: "Try it" frames it, its link opens it in 
     const building = page.locator('[data-testid="track"] > li[data-state="building"]');
     await expect(building, 'a part is building').toHaveCount(1, { timeout: 10_000 });
     await expect(tryIt, 'no "Try it" while the chapter is still building').toHaveCount(0);
-    // Every look until the chapter is built finds no link.
+    // Every look until the chapter is built finds no link. One look reads the state and the link
+    // together: read one after the other, the chapter can become built between the two.
+    const look = () =>
+      page.evaluate(() => ({
+        state: document.querySelector('[data-testid="chapter-state"]')?.textContent,
+        links: document.querySelectorAll('[data-testid="watch-try"]').length,
+      }));
     const deadline = Date.now() + 40_000;
     let looks = 0;
-    while (Date.now() < deadline && (await page.getByTestId('chapter-state').textContent()) !== 'built') {
-      expect(await tryIt.count(), 'no "Try it" before the chapter is built').toBe(0);
+    for (let seen = await look(); Date.now() < deadline && seen.state !== 'built'; seen = await look()) {
+      expect(seen.links, 'no "Try it" before the chapter is built').toBe(0);
       looks++;
       await page.waitForTimeout(50);
     }

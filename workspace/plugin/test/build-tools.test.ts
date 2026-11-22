@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BuildEnv } from '../src/build-tools';
 import { CHECKS_DIR, buildEnvFrom, createBuilderMcp, gitPin, runCheck, stopAllChecks, stopLeftoverChecks, tailOf } from '../src/build-tools';
 import { ENV_ALLOWED, bwrapArgs, defaultDenyRead, sandboxKind, seatbeltProfile } from '../src/sandbox';
+import { aliveInBox, endedInBox } from './box';
 import { BoardClient } from '../src/client';
 import { readStarts } from '../src/starts';
 import { BCH, buildBoard, makeRepo, sh } from './build-board';
@@ -311,17 +312,10 @@ describe('the tools\' own process', () => {
     const pidFile = path.join(repo, 'bg.pid');
     for (let i = 0; i < 200 && !fs.existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 50));
     const bg = Number(fs.readFileSync(pidFile, 'utf8'));
-    expect(() => process.kill(bg, 0)).not.toThrow();
+    expect(aliveInBox(bg)).toBe(true);
     await c.close();
-    for (let i = 0; i < 100; i++) {
-      try {
-        process.kill(bg, 0);
-      } catch {
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    expect(() => process.kill(bg, 0)).toThrow();
+    for (let i = 0; i < 100 && aliveInBox(bg); i++) await new Promise((r) => setTimeout(r, 50));
+    expect(aliveInBox(bg)).toBe(false);
   }, 30_000);
 });
 
@@ -383,7 +377,7 @@ describe('the check itself', () => {
     stopLeftoverChecks(own);
     const r = await run;
     expect(r.code).not.toBe(0);
-    expect(() => process.kill(bg, 0)).toThrow();
+    expect(await endedInBox(bg)).toBe(true);
     expect(fs.readdirSync(path.join(own, CHECKS_DIR))).toHaveLength(0);
     const again = runCheck('sleep 60', repo, 60_000);
     await new Promise((r) => setTimeout(r, 200));

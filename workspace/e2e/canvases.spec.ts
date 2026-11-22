@@ -205,7 +205,8 @@ test('two ideas on one canvas: one branch; Approve waits while the second builds
   await page.getByTestId('confirm-approve-press').click();
   await expect(c.getByTestId('idea-state')).toHaveText(['merged into main', 'merged into main'], { timeout: 20_000 });
   expect(git(board.repo, 'rev-list', '--count', `${main}..main`)).toBe('10');
-  expect(branches(board.repo)).toEqual(['main']);
+  // The board says merged, then takes the branch away: the branch goes a moment after the words.
+  await expect.poll(() => branches(board.repo), { timeout: 15_000 }).toEqual(['main']);
   expect(events(board.repo).filter((e) => e.type === 'canvas.merged')).toHaveLength(1);
 
   // Everything here is merged: the board says a note here goes on this canvas, and offers a new one.

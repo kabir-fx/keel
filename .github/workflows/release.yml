@@ -1,0 +1,235 @@
+# A merge to main is a release: docs/adr/0017.
+# check -> package -> publish as `next` -> install it from npm the way a user would -> move `latest` -> record.
+#
+# It holds no secret. It works only while these settings, outside this file, stay as they are:
+#   npmjs.com, keel-workspace, Settings, Trusted publisher: this repository, the workflow file
+#     `release.yml`, the environment `npm`, with "npm publish" and "npm dist-tag" both allowed.
+#   GitHub, Settings, Environments, `npm`: deployment branches limited to `main`, no required reviewers.
+# Renaming this file or that environment stops every release until npm is told the new name.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+# One release at a time. A push that arrives meanwhile waits, and a newer one takes its place.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PACKAGE: keel-workspace
+  # The short document npm serves to `npm install`. The checks below read what an install will read.
+  REGISTRY_DOC: https://registry.npmjs.org/keel-workspace
+  ACCEPT: 'Accept: application/vnd.npm.install-v1+json'
+  # jq: the highest plain version in that document. The same rule as newest() in release/next.mjs.
+  NEWEST: '[.versions | keys[] | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))] | sort_by(split(".") | map(tonumber)) | last'
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  # Decides: publish a new version, promote one that never became `latest`, or nothing.
+  package:
+    name: package
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      action: ${{ steps.next.outputs.action }}
+      version: ${{ steps.next.outputs.version }}
+      previous: ${{ steps.next.outputs.previous }}
+      commit: ${{ steps.next.outputs.commit }}
+      tarball: ${{ steps.pack.outputs.tarball }}
+      integrity: ${{ steps.pack.outputs.integrity }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: workspace
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci --no-audit --no-fund
+      - name: build and stage
+        run: npm run release:pack
+      - name: publish, promote, or nothing
+        id: next
+        run: |
+          node release/next.mjs | tee "$RUNNER_TEMP/next.json"
+          jq -r '"action=\(.action)", "version=\(.version // "")", "previous=\(.previous)", "commit=\(.commit // "")"' "$RUNNER_TEMP/next.json" >>"$GITHUB_OUTPUT"
+          jq -r '"**\(.action)**\(if .version then " \(.version)" else "" end). \(.reason)"' "$RUNNER_TEMP/next.json" >>"$GITHUB_STEP_SUMMARY"
+      - name: pack the release
+        id: pack
+        if: steps.next.outputs.action == 'publish'
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          node release/pack.mjs --no-build --version "$VERSION"
+          mkdir "$RUNNER_TEMP/tarball"
+          (cd "release/$PACKAGE" && npm pack --json --pack-destination "$RUNNER_TEMP/tarball") >"$RUNNER_TEMP/pack.json"
+          jq -r '.[0] | "tarball=\(.filename)", "integrity=\(.integrity)"' "$RUNNER_TEMP/pack.json" >>"$GITHUB_OUTPUT"
+      - name: install the tarball and run it
+        if: steps.next.outputs.action == 'publish'
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: node release/test.mjs "$RUNNER_TEMP/tarball/$TARBALL"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.next.outputs.action == 'publish'
+        with:
+          name: package
+          path: ${{ runner.temp }}/tarball/${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+
+  # The only job that can publish. It checks nothing out and installs nothing from the repository:
+  # it uploads the file the package job proved.
+  publish:
+    name: publish as next
+    needs: package
+    if: needs.package.outputs.action == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm
+    permissions:
+      id-token: write
+    steps:
+      # A job run again long after its run began must not publish under what npm holds by now.
+      - name: npm has not moved since the package job looked
+        env:
+          PREVIOUS: ${{ needs.package.outputs.previous }}
+        run: |
+          newest="$(curl -fsS -H "$ACCEPT" "$REGISTRY_DOC" | jq -r "$NEWEST")"
+          if [ "$newest" != "$PREVIOUS" ]; then
+            echo "::error::npm's newest version is $newest, and this run was decided against $PREVIOUS. Nothing is published."
+            exit 1
+          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: npm publish --tag next
+        env:
+          TARBALL: ${{ needs.package.outputs.tarball }}
+        run: npm publish "./$TARBALL" --tag next --access public
+
+  # Runs after a publish, and also with no publish when the package job said promote.
+  verify:
+    name: install from npm (${{ matrix.os }})
+    needs: [package, publish]
+    if: ${{ !cancelled() && needs.package.result == 'success' && needs.package.outputs.version != '' && needs.publish.result != 'failure' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      VERSION: ${{ needs.package.outputs.version }}
+      INTEGRITY: ${{ needs.package.outputs.integrity }}
+    steps:
+      - name: wait until an install can see the version
+        run: |
+          for _ in $(seq 60); do
+            if curl -fsS -H "$ACCEPT" "$REGISTRY_DOC" | jq -e --arg v "$VERSION" '.versions[$v]' >/dev/null; then exit 0; fi
+            sleep 10
+          done
+          echo "::error::npm did not list $PACKAGE@$VERSION within 10 minutes"
+          exit 1
+      - name: npm holds the file that was proved
+        if: env.INTEGRITY != ''
+        run: |
+          got="$(curl -fsS -H "$ACCEPT" "$REGISTRY_DOC" | jq -r --arg v "$VERSION" '.versions[$v].dist.integrity')"
+          if [ "$got" != "$INTEGRITY" ]; then
+            echo "::error::npm holds $got, and the package job proved $INTEGRITY"
+            exit 1
+          fi
+      - name: curl get.sh | bash
+        env:
+          KEEL_PACKAGE: ${{ env.PACKAGE }}@${{ needs.package.outputs.version }}
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/get.sh" |
+            KEEL_INSTALL_DIR="$RUNNER_TEMP/keel" KEEL_BIN_DIR="$RUNNER_TEMP/keel-bin" bash
+      - name: the installed board is this version, and it runs
+        run: |
+          got="$(jq -r .version "$RUNNER_TEMP/keel/pkg/lib/node_modules/$PACKAGE/package.json")"
+          if [ "$got" != "$VERSION" ]; then
+            echo "::error::get.sh installed $PACKAGE $got, wanted $VERSION"
+            exit 1
+          fi
+          "$RUNNER_TEMP/keel-bin/keel-board" --help
+
+  # `latest` is what get.sh and `npx keel-workspace` install. It moves only after verify passed.
+  promote:
+    name: move latest
+    needs: [package, verify]
+    if: ${{ !cancelled() && needs.verify.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm
+    permissions:
+      id-token: write
+    env:
+      VERSION: ${{ needs.package.outputs.version }}
+    steps:
+      # A job run again long after its run began must not move `latest` back to an older version.
+      - name: this is still npm's newest version
+        run: |
+          newest="$(curl -fsS -H "$ACCEPT" "$REGISTRY_DOC" | jq -r "$NEWEST")"
+          if [ "$newest" != "$VERSION" ]; then
+            echo "::error::npm's newest version is $newest, not $VERSION. latest is left where it is."
+            exit 1
+          fi
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      # Moving a tag without a token needs npm 11.21.0, and no Node release bundles one yet.
+      - run: npm install --global npm@11.21.3
+      - run: npm dist-tag add "$PACKAGE@$VERSION" latest
+      - name: wait until an install gets the version
+        run: |
+          for _ in $(seq 60); do
+            if [ "$(curl -fsS -H "$ACCEPT" "$REGISTRY_DOC" | jq -r '."dist-tags".latest')" = "$VERSION" ]; then exit 0; fi
+            sleep 10
+          done
+          echo "::error::$PACKAGE@latest is not $VERSION after 10 minutes"
+          exit 1
+
+  record:
+    name: tag and release notes
+    needs: [package, promote]
+    if: ${{ !cancelled() && needs.promote.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - run: gh release view "v$VERSION" >/dev/null 2>&1 || gh release create "v$VERSION" --target "$COMMIT" --title "$PACKAGE $VERSION" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.package.outputs.version }}
+          COMMIT: ${{ needs.package.outputs.commit }}

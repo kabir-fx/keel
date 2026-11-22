@@ -307,7 +307,7 @@ function originOf(f: { port: number }): string {
 async function call<T>(f: { port: number }, token: string, route: string, init: RequestInit = {}): Promise<{ status: number; body: T }> {
   const res = await fetch(`${originOf(f)}${route}`, {
     ...init,
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...(init.headers ?? {}) },
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...init.headers },
   });
   return { status: res.status, body: (await res.json()) as T };
 }

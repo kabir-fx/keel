@@ -78,7 +78,8 @@ test('Approve with main level: the busy words, then merged; the Story says so; m
   expect(git(board.repo, 'rev-list', '--merges', '--count', `${before}..main`), 'no merge commit on main').toBe('0');
   expect(git(board.repo, 'show', 'main:parts.txt').trim().split('\n')).toHaveLength(4);
   expect(git(board.repo, 'status', '--porcelain', '--', 'parts.txt'), 'the owner folder is on main and has the files').toBe('');
-  expect(branches(board.repo)).toEqual(['main']);
+  // The board says merged, then takes the branch away: the branch goes a moment after the words.
+  await expect.poll(() => branches(board.repo), { timeout: 15_000 }).toEqual(['main']);
   const ev = readLog(board.repo).find((e) => e.type === 'canvas.merged') as unknown as { by: string; commit: string; into: string };
   expect(ev).toMatchObject({ by: 'system', into: 'main' });
   expect(tip.startsWith(ev.commit) || ev.commit.startsWith(tip.slice(0, 7))).toBe(true);
@@ -112,7 +113,8 @@ test('Approve after main moved on the remote with no conflict: joined in, checke
   expect(holds(board.repo, main, theirs), 'main has the remote commit').toBe(true);
   expect(holds(board.repo, main, tip), 'and the build').toBe(true);
   expect(git(board.repo, 'show', 'main:NOTES.md')).toBe('from someone else');
-  expect(branches(board.repo)).toEqual(['main']);
+  // The board says merged, then takes the branch away: the branch goes a moment after the words.
+  await expect.poll(() => branches(board.repo), { timeout: 15_000 }).toEqual(['main']);
   expect(errors).toEqual([]);
 });
 

@@ -1,0 +1,10 @@
+# Settings for zizmor, which audits .github/workflows in the CI job "workflows and scripts".
+rules:
+  # actionlint 1.7.12 refuses the `$/` form this audit asks for, and both must pass.
+  self-repository:
+    disable: true
+  # The promote job installs one exact npm, from the registry it then talks to.
+  # release.yml says why at that line. The line number is here on purpose: a new ad-hoc install fails.
+  adhoc-packages:
+    ignore:
+      - release.yml:210

@@ -450,7 +450,7 @@ test('a paste is made plain and cut to what a note holds, and the field’s own 
   expect(await paste(page, '\r\none\ttwo\rthree\r\n')).toBe(false);
   await expect(note(page)).toHaveValue('list:\none    two\nthree\n');
   // The paste went in as typing does, so the field's own Undo knows it.
-  await page.keyboard.press('Meta+z');
+  await page.keyboard.press('ControlOrMeta+z');
   await expect(note(page)).toHaveValue('list:');
   await expect(note(page)).toBeFocused();
 

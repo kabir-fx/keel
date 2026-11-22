@@ -10,6 +10,7 @@ import { canvasTitle, renderBrief } from '@keel/protocol';
 import { runCheck } from '../src/build-tools';
 import { buildPlaces, createBuilder, readPlace } from '../src/hosted-builder';
 import { sandboxKind } from '../src/sandbox';
+import { aliveInBox, endedInBox } from './box';
 import { NO_PTY_LINE } from '../src/session';
 import { BCH, buildBoard, makeRepo, sh } from './build-board';
 import type { FakeBoard } from './fake-board';
@@ -99,18 +100,16 @@ const pidFiles = () => {
     return [];
   }
 };
-const alive = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
 const until = async (what: () => boolean, ms = 10_000) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 50))) if (what()) return;
   throw new Error('timed out');
 };
+/**
+ * The builder has taken up a part: building, or built with the turn not yet over. A part is
+ * "building" for about 20 ms where the check has no box, so a wait for that state alone can
+ * sleep through it. FAKE_SLOW_MS holds the turn open after the part is built.
+ */
+const taken = (part: string) => ['building', 'built'].includes(board.state.model.parts[part]?.state ?? '');
 const get = (url: string) =>
   new Promise<string>((resolve, reject) => {
     http.get(url, (res) => {
@@ -221,7 +220,7 @@ describe('a build (5.2)', () => {
       process.env.FAKE_SLOW_MS = '400';
       const b = await builder();
       const first = b.run(job({ setup }));
-      await until(() => board.state.model.parts.sum?.state === 'building');
+      await until(() => taken('sum'));
       await b.pause();
       expect((await first).outcome).toBe('paused');
       delete process.env.FAKE_SLOW_MS;
@@ -420,10 +419,10 @@ describe('try it (5.3, the builder\'s rows)', () => {
     expect(await get(url)).toBe('hello from the app');
     await until(() => seen.out.includes('listening on'));
     const grand = Number(/grand=(\d+)/.exec(seen.out)![1]);
-    expect(alive(grand)).toBe(true);
+    expect(aliveInBox(grand)).toBe(true);
     expect(pidFiles()).toHaveLength(1);
     await s.stop();
-    expect(alive(grand)).toBe(false);
+    expect(await endedInBox(grand)).toBe(true);
     expect(sh(tmp, 'sh', '-c', 'ps -A -o command= | grep -c "[s]leep 30[01]" || true')).toBe('0');
     expect(seen.exits).toHaveLength(1);
     expect(pidFiles()).toEqual([]);
@@ -507,11 +506,12 @@ describe('try it (5.3, the builder\'s rows)', () => {
 
   it('a terminal with no script command runs on pipes, and says so in its first line', async () => {
     const b = await built();
-    // Git stays on the PATH; `script` does not.
+    // Git and what /bin holds stay on the PATH; `script` does not. On Linux /bin is /usr/bin, and holds `script`.
     const bin = path.join(tmp, 'no-script');
     fs.mkdirSync(bin);
-    fs.symlinkSync(sh(tmp, 'sh', '-c', 'command -v git'), path.join(bin, 'git'));
-    process.env.PATH = `${bin}:/bin`;
+    for (const name of fs.readdirSync('/bin')) if (name !== 'script') fs.symlinkSync(path.join('/bin', name), path.join(bin, name));
+    if (!fs.existsSync(path.join(bin, 'git'))) fs.symlinkSync(sh(tmp, 'sh', '-c', 'command -v git'), path.join(bin, 'git'));
+    process.env.PATH = bin;
     const { req, seen } = watch({ kind: 'terminal', run: 'echo piped-$((3+4))' });
     const s = await b.show!(req);
     expect(seen.out.startsWith(`${NO_PTY_LINE}\r\n`)).toBe(true);
@@ -546,7 +546,7 @@ describe('try it (5.3, the builder\'s rows)', () => {
     const pid = Number(/pid=(\d+)/.exec(seen.out)![1]);
     expect(pidFiles()).toHaveLength(1);
     await builder();
-    expect(alive(pid)).toBe(false);
+    expect(await endedInBox(pid)).toBe(true);
     expect(pidFiles()).toEqual([]);
     expect(logs.some((l) => l.includes('ended 1 show on canvas adder left from before'))).toBe(true);
   }, 60_000);
@@ -768,7 +768,7 @@ describe('canvases: the branch and the copy are the canvas\'s', () => {
     process.env.FAKE_SLOW_MS = '400';
     const b = await builder();
     const first = b.run(job());
-    await until(() => board.state.model.parts.sum?.state === 'building');
+    await until(() => taken('sum'));
     await b.pause();
     expect((await first).outcome).toBe('paused');
     delete process.env.FAKE_SLOW_MS;

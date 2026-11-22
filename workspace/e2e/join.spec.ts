@@ -20,6 +20,12 @@ const APP_JS = [
   "require('http').createServer((q, s) => s.end('hello from the built app')).listen(+process.env.PORT, '127.0.0.1', () => console.log('listening pid=' + process.pid + ' child=' + child.pid));",
   '',
 ].join('\n');
+/**
+ * The builder has taken up a part: building, or built with the turn not yet over. A part is
+ * "building" for a few milliseconds on a fast machine, so a wait for that state alone can sleep
+ * through it. FAKE_SLOW_MS holds the turn open after the part is built.
+ */
+const taken = (state: { model: { parts: Record<string, { state?: string } | undefined> } }, part: string) => ['building', 'built'].includes(state.model.parts[part]?.state ?? '');
 /** A command line tool that asks a name and greets it. */
 const GREET_JS = "process.stdout.write('your name? ');\nprocess.stdin.once('data', (d) => { console.log('hello, ' + String(d).trim() + '!'); process.exit(0); });\n";
 const FILES = { 'app.js': APP_JS, 'greet.js': GREET_JS };
@@ -247,7 +253,7 @@ test('a press that names a command that is not the idea\'s is refused, and nothi
   const { pid } = await startApp(b, 'adder');
   expect((await b.info()).shows?.adder).toMatchObject({ kind: 'app', state: 'on', boxed: false });
   await b.call('/api/show', { action: 'stop', chapter: 'adder' });
-  await until('the app to end', () => !alive(pid));
+  await until('the app to end', () => !alive(pid, 'none'));
 });
 
 test('approve with main level: merged at the branch\'s tip, the owner\'s folder has the files, the branch and the copy are gone, the show is stopped', async () => {
@@ -266,6 +272,7 @@ test('approve with main level: merged at the branch\'s tip, the owner\'s folder 
   expect(fs.existsSync(copyOf(w, 'adder'))).toBe(false);
   expect(info.works?.adder?.branch).toBeUndefined();
   expect(info.shows?.adder).toBeUndefined();
+  await until('the app and its child to end', () => !alive(pid) && !alive(child));
   expect(alive(pid) || alive(child)).toBe(false);
   expect((await b.state()).chapters.adder?.merged).toMatchObject({ commit: at, into: 'main' });
 });
@@ -336,7 +343,7 @@ test('two ideas on one canvas, one after the other: one branch with both, approv
   const b = await builtAdder({ FAKE_SLOW_MS: '700' });
   const first = tip('board/an-adder');
   await buildIdea(b, { chapter: 'minus', title: 'A subtractor', canvas: 'adder', parts: ['diff', 'neg'] });
-  await until('the second idea to build', async () => (await b.state()).model.parts.diff?.state === 'building');
+  await until('the second idea to build', async () => taken(await b.state(), 'diff'));
   const refused = await b.post('owner', { type: 'canvas.approve', canvas: 'adder' });
   expect(refused.ok).toBe(false);
   expect(refused.status).toBe(422);
@@ -393,7 +400,7 @@ test('delete a canvas while its idea builds, then one that is built and not merg
   const b = await builtAdder({ FAKE_SLOW_MS: '1500' });
   const adderTip = tip('board/an-adder');
   await buildIdea(b, { chapter: 'greet', title: 'A greeter', canvas: 'tools', newCanvas: true, parts: ['one', 'two', 'three'], show: TERMINAL });
-  await until('the greeter to build', async () => (await b.state()).model.parts.one?.state === 'building');
+  await until('the greeter to build', async () => taken(await b.state(), 'one'));
   expect(branches().sort()).toEqual(['board/a-greeter', 'board/an-adder']);
 
   await b.must('owner', { type: 'canvas.remove', canvas: 'tools' });
@@ -457,7 +464,7 @@ test('an app that never answers: the idea is never built, nothing is tried or ap
   const home = tip('main');
   await buildIdea(b, { chapter: 'adder', title: 'An adder', parts: ['sum', 'cli'], setup: SETUP, show: APP });
   const stopped = await until('the build to stop', () => feedOf(b, 'adder').find((e) => e.kind === 'problem' && e.by === 'system' && e.text?.startsWith('The build of')), 60_000);
-  expect(stopped.text).toMatch(/^The build of "An adder" stopped: The app does not start: `".+" ap…`\. The app did not answer on port \d+ within 2 s\. The builder's turn made no fix\. It printed: "the app waits for… 2 of 2 parts are built\. Press Try again to go on\.$/);
+  expect(stopped.text).toMatch(/^The build of "An adder" stopped: The app does not start: `"[^`]+`\. The app did not answer on port \d+ within 2 s\. The builder's turn made no fix\. It printed: "the app waits for(?: its database"\.|.*…) 2 of 2 parts are built\. Press Try again to go on\.$/);
   const turns = () => fs.readFileSync(w.claudeLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as { turn?: string });
   expect(turns().filter((t) => t.turn?.startsWith('THE APP DOES NOT START'))).toHaveLength(1);
 

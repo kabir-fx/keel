@@ -147,7 +147,19 @@ export function bwrapArgs(p: SandboxPlaces, cmd: string): string[] {
 export function sandboxPlan(cmd: string, p: SandboxPlaces, kind = sandboxKind()): SandboxPlan {
   const env = sandboxEnv(p.tmp);
   if (kind.kind === 'seatbelt') return { kind: 'seatbelt', bin: kind.bin, args: ['-p', seatbeltProfile(p), '/bin/sh', '-c', cmd], env };
-  if (kind.kind === 'bwrap') return { kind: 'bwrap', bin: kind.bin, args: bwrapArgs(p, cmd), env };
+  if (kind.kind === 'bwrap') {
+    // bwrap can bind only a folder that is there, and the rest of the home folder is read-only in the box.
+    // A package cache no tool has made yet is made here, or the first `npm ci` on a machine could not write its own.
+    for (const d of p.write ?? []) {
+      if (fs.existsSync(d) || !fs.existsSync(path.dirname(d))) continue;
+      try {
+        fs.mkdirSync(d);
+      } catch {
+        // It stays out of the box.
+      }
+    }
+    return { kind: 'bwrap', bin: kind.bin, args: bwrapArgs(p, cmd), env };
+  }
   return { kind: 'none', bin: '/bin/sh', args: ['-c', cmd], env };
 }
 

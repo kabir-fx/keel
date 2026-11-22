@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Stage the npm package keel-workspace in release/keel-workspace/.
-// node release/pack.mjs [--no-build]
+// node release/pack.mjs [--no-build] [--version <x.y.z>]
 // The package keeps the workspace's relative layout, so the bundles find their files as they do here.
-// This never publishes: the owner does that by hand.
+// --version stamps a release: that version, and the commit it is built from. Without it the package
+// takes the workspace's version, which is no release.
+// This never publishes: .github/workflows/release.yml does (docs/adr/0017).
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -65,11 +67,18 @@ function size(bytes) {
   return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
+const USAGE = 'Usage: node release/pack.mjs [--no-build] [--version <x.y.z>]';
 const args = process.argv.slice(2);
-for (const a of args) if (a !== '--no-build') fail(`unknown option "${a}". Usage: node release/pack.mjs [--no-build]`);
+let build = true;
+let release;
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--no-build') build = false;
+  else if (args[i] === '--version' && /^\d+\.\d+\.\d+$/.test(args[i + 1] ?? '')) release = args[++i];
+  else fail(`unknown option "${args[i]}". ${USAGE}`);
+}
 
 // 1. Build.
-if (!args.includes('--no-build')) {
+if (build) {
   process.stdout.write('Building: npm run build\n');
   const b = spawnSync('npm', ['run', 'build'], { cwd: WS, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (b.status !== 0) {
@@ -106,7 +115,7 @@ for (const [rel, from] of sources) {
 }
 
 // 4. The package's own package.json: no dependencies, no scripts.
-const version = JSON.parse(fs.readFileSync(path.join(WS, 'package.json'), 'utf8')).version;
+const version = release ?? JSON.parse(fs.readFileSync(path.join(WS, 'package.json'), 'utf8')).version;
 if (typeof version !== 'string' || !version) fail(`no version in ${path.join(WS, 'package.json')}.`);
 const pkg = {
   name: NAME,
@@ -123,6 +132,11 @@ const pkg = {
   keywords: ['claude-code', 'agent', 'canvas', 'whiteboard', 'mcp'],
   files: ['server/bin', 'server/dist', 'plugin/dist', 'plugin/skills', 'app/dist', 'THIRD_PARTY_NOTICES.md'],
 };
+if (release) {
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' });
+  if (head.status !== 0) fail(`--version needs the commit this is built from, and git rev-parse HEAD failed: ${(head.stderr ?? '').trim()}`);
+  pkg.gitHead = head.stdout.trim();
+}
 fs.writeFileSync(path.join(OUT, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
 fs.chmodSync(path.join(OUT, 'package.json'), 0o644);
 
@@ -149,12 +163,11 @@ for (const rel of staged) {
 for (const rel of expected) if (!staged.includes(rel)) problems.push(`${rel} was not staged`);
 if (problems.length) fail(`the staged package is not safe to publish:\n  ${problems.join('\n  ')}`);
 
-// 6. Say what was made, and what the owner runs next.
+// 6. Say what was made.
 const total = staged.reduce((n, rel) => n + fs.statSync(path.join(OUT, rel)).size, 0);
 const lines = [
   `Staged ${NAME}@${version} in ${OUT}`,
   `${staged.length} files, ${size(total)}`,
 ];
 if (maps.length) lines.push(`Source maps in the page (${maps.length}):`, ...maps.map((m) => `  ${m}`));
-lines.push('', 'Next, to publish:', `  cd release/${NAME} && npm publish --dry-run`, '  npm publish');
 process.stdout.write(`${lines.join('\n')}\n`);
