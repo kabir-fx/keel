@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import type { BoardState, BuildJob, BuildResult, Builder, BuilderContext, CreateBuilder, RefreshRequest, RefreshResult, RunShow, ShowRequest, ShowSession } from '@keel/protocol';
 import { STATE_DIR_ENV, admit, awaitsProof, oneLine, remarksOnPart, renderBrief } from '@keel/protocol';
 import { checkPlaces, keepDependencyFiles, runCheck, stopLeftoverChecks, tailOf } from './build-tools';
-import { findClaude } from './claude-setup';
+import { pickClaude, tooOld } from './claude-setup';
 import { BoardClient, BoardError } from './client';
 import { readStarts, recordStart } from './starts';
 import { BUILDER_IDENTITY, GitError, OwnerFilesError, branchExists, branchFor, branchNames, dirtyFiles, ensureWorktree, folderFiles, git, gitInstalled, gitOk, hasIdentity, headOf, isAncestor, pinEnv, removeWorktree, repoTop, samePath, shortOf } from './git';
@@ -703,6 +703,8 @@ export class HostedBuilder implements Builder {
    */
   private async joinTurn(cv: string, copy: Copy, req: RefreshRequest, branch: string, conflicted: string[]): Promise<string | undefined> {
     if (this.opts.off) return 'The builder is off, so nobody joined them.';
+    const claude = await pickClaude(this.opts.bin, childEnv());
+    if (claude && !claude.ok) return tooOld(claude);
     const own = buildPlaces(stateDirOf(this.ctx), cv).own;
     const check = req.checks[0]!;
     let files: ReturnType<HostedBuilder['prepare']>;
@@ -714,7 +716,7 @@ export class HostedBuilder implements Builder {
     }
     const before = await headOf(copy.workdir, copy.pin);
     try {
-      this.side = this.start(files, copy.workdir, copy.identity);
+      this.side = this.start(claude?.bin ?? this.opts.bin, files, copy.workdir, copy.identity);
       const msg = [
         `JOIN ${req.home.branch} INTO ${branch}. Every part of this idea is built. ${req.home.branch} moved since, to ${req.home.commit.slice(0, 7)}, and git stopped the merge: both changed the same lines in ${conflicted.map((f) => oneLine(f, 200)).join(', ')}.`,
         `Join them in those files: keep what each side meant, and take out every conflict marker. Try ${req.checks.length === 1 ? 'the check' : 'the first check'} \`${oneLine(check, 300)}\` with board_try. Then git add those files and git commit --no-edit. Do not call board_part or board_check. Then end with: done.`,
@@ -802,6 +804,9 @@ export class HostedBuilder implements Builder {
     if (!job.check) return this.fail(ch, 'The blueprint gave no check, so no part can be shown to work. Solidify again with a check.');
 
     if (!(await gitInstalled())) return this.fail(ch, 'Git is not installed here, and the builder works in a git copy of the folder. Install git.');
+    const claude = await pickClaude(this.opts.bin, childEnv());
+    if (claude && !claude.ok) return this.fail(ch, tooOld(claude));
+    const bin = claude?.bin ?? this.opts.bin;
     let top = await repoTop(this.ctx.repoDir);
     let madeRepo = false;
     if (!top) {
@@ -929,7 +934,7 @@ export class HostedBuilder implements Builder {
         const n = chapter!.track.indexOf(id) + 1;
         const total = chapter!.track.length;
         this.ctx.presence({ state: 'building', note: clip(`building part ${n} of ${total}: ${part.name}`, 120) });
-        this.proc ??= this.start(files, workdir, identity);
+        this.proc ??= this.start(bin, files, workdir, identity);
 
         const msg = this.partMessage(state, job, id, n, total, check, branch, first, told);
         first = false;
@@ -954,7 +959,7 @@ export class HostedBuilder implements Builder {
       }
       state = await this.agent.state();
       if (app && awaitsProof(state, ch)) {
-        const why = await this.smokeRun(cv, ch, app, copy, check, files, spend);
+        const why = await this.smokeRun(cv, ch, app, copy, check, files, spend, bin);
         if (why) return this.fail(ch, why);
       }
     } finally {
@@ -1086,13 +1091,13 @@ export class HostedBuilder implements Builder {
    * agreed check. Returns why the build stops, or undefined when the app answered. The board
    * says that it answered, from `build.proved`.
    */
-  private async smokeRun(cv: string, ch: string, plan: Extract<RunShow, { kind: 'app' }>, copy: Copy, check: string, files: { mcpConfig: string; promptFile: string; settingsFile: string }, spend: { usd: number }): Promise<string | undefined> {
+  private async smokeRun(cv: string, ch: string, plan: Extract<RunShow, { kind: 'app' }>, copy: Copy, check: string, files: { mcpConfig: string; promptFile: string; settingsFile: string }, spend: { usd: number }, bin: string): Promise<string | undefined> {
     this.ctx.presence({ state: 'building', note: 'starting the app once, as you will try it' });
     const first = await this.tryApp(plan, cv, copy);
     if (first.ok) return undefined;
     await this.feed(ch, `The app did not start as you will try it (\`${oneLine(plan.run, 120)}\`): ${first.why} The builder gets one turn to put it right.`, 'problem');
     const before = await headOf(copy.workdir, copy.pin);
-    this.proc ??= this.start(files, copy.workdir, copy.identity);
+    this.proc ??= this.start(bin, files, copy.workdir, copy.identity);
     const turn = await this.proc.send(this.startMessage(plan, first.why, first.output), this.opts.partTimeoutMs);
     spend.usd += turn.costUsd ?? 0;
     const after = await headOf(copy.workdir, copy.pin);
@@ -1271,10 +1276,10 @@ export class HostedBuilder implements Builder {
     return [...new Set([...defaultDenyRead({ stateRoot: root, ownerRepo: this.ctx.repoDir }), home, path.dirname(stateDirOf(this.ctx)), stateDirOf(this.ctx)])];
   }
 
-  private start(files: { mcpConfig: string; promptFile: string; settingsFile: string }, workdir: string, identity: NodeJS.ProcessEnv): BuildProcess {
+  private start(bin: string, files: { mcpConfig: string; promptFile: string; settingsFile: string }, workdir: string, identity: NodeJS.ProcessEnv): BuildProcess {
     const args = builderArgs({ model: this.opts.model, effort: this.opts.effort, ...files });
     const env = { ...childEnv(), ...identity, MCP_TOOL_TIMEOUT: String(this.opts.checkTimeoutMs + 120_000) };
-    const p = new BuildProcess(findClaude(this.opts.bin, env) ?? this.opts.bin, args, workdir, env, (l) => this.record(l), (m) => this.ctx.log(`builder: ${m}`));
+    const p = new BuildProcess(bin, args, workdir, env, (l) => this.record(l), (m) => this.ctx.log(`builder: ${m}`));
     this.ctx.log(`builder: started claude in ${workdir}, pid ${p.pid ?? '?'}`);
     return p;
   }

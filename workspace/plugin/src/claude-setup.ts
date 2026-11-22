@@ -6,15 +6,21 @@ import path from 'node:path';
 import type { AgentSetup, LinkSetup } from '@keel/protocol';
 
 /**
- * What the hosted agent needs on this machine: Claude Code, installed and signed in. The
- * owner's first page asks here, and each step is Claude Code's own: Anthropic's installer,
- * `claude auth status`, `claude auth login`.
+ * What the hosted agent needs on this machine: Claude Code, installed, new enough and signed
+ * in. The owner's first page asks here, and each step is Claude Code's own: Anthropic's
+ * installer, `claude --version`, `claude auth status`, `claude auth login`.
  */
 
 export const CLAUDE_NAME = 'Claude Code';
 export const CLAUDE_INSTALLER = 'https://claude.ai/install.sh';
+/**
+ * The oldest Claude Code the board runs (ADR 0018). The agent and the builder are started with
+ * `--restricted`, which came in 2.1.248, and this is the last release that closed a hole in it.
+ */
+export const CLAUDE_MIN = '2.1.316';
 
 const STATUS_MS = 10_000;
+const VERSION_MS = 5_000;
 const INSTALL_MS = 15 * 60_000;
 const SIGN_IN_MS = 10 * 60_000;
 /** How long a new sign-in is given to print its page's address before the answer goes back without one. */
@@ -33,16 +39,77 @@ function executable(file: string): boolean {
 }
 
 /**
- * Where the program is: a path as it is given, else the first on PATH, else `~/.local/bin`,
- * where Anthropic's installer puts it. That folder is on no PATH until the owner's next
- * terminal, so a Claude Code installed a minute ago is found there.
+ * Every `claude` there is, in the order they are tried: a path as it is given, else each on
+ * PATH, then `~/.local/bin`, where Anthropic's installer puts it. That folder is on no PATH
+ * until the owner's next terminal, so a Claude Code installed a minute ago is found there.
  */
-export function findClaude(bin: string, env: NodeJS.ProcessEnv = process.env, home: string = os.homedir()): string | undefined {
-  if (bin.includes('/') || bin.includes(path.sep)) return executable(bin) ? bin : undefined;
-  for (const dir of [...(env.PATH ?? '').split(path.delimiter), path.join(home, '.local', 'bin')]) {
-    if (dir && executable(path.join(dir, bin))) return path.join(dir, bin);
+export function claudesFound(bin: string, env: NodeJS.ProcessEnv = process.env, home: string = os.homedir()): string[] {
+  if (bin.includes('/') || bin.includes(path.sep)) return executable(bin) ? [bin] : [];
+  const dirs = [...(env.PATH ?? '').split(path.delimiter), path.join(home, '.local', 'bin')];
+  return [...new Set(dirs.filter(Boolean).map((dir) => path.join(dir, bin)))].filter(executable);
+}
+
+/** The three numbers a version begins with, or undefined when it does not begin with three. */
+function numbers(version: string): [number, number, number] | undefined {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : undefined;
+}
+
+/** True when `version` is `min` or newer. One that is not three numbers is not. */
+export function newEnough(version: string | undefined, min: string = CLAUDE_MIN): boolean {
+  const v = version === undefined ? undefined : numbers(version);
+  const m = numbers(min);
+  if (!v || !m) return false;
+  for (let i = 0; i < 3; i++) if (v[i] !== m[i]) return v[i]! > m[i]!;
+  return true;
+}
+
+/**
+ * What `--version` says, cut to the version. Undefined when the program did not say one within
+ * the limit. The limit ends the wait by itself: a child the program left behind can hold its
+ * output open after it is killed, and every wake waits here.
+ */
+function versionOf(bin: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const proc = spawn(bin, ['--version'], { env, stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = '';
+    const done = () => {
+      clearTimeout(timer);
+      resolve(/^\s*(\d+\.\d+\.\d+[^\s]*)/.exec(out)?.[1]);
+    };
+    const timer = setTimeout(() => {
+      proc.kill('SIGKILL');
+      proc.stdout.destroy();
+      done();
+    }, VERSION_MS);
+    proc.stdout.setEncoding('utf8').on('data', (c: string) => (out = (out + c).slice(-2000)));
+    proc.on('error', () => {});
+    proc.on('close', done);
+  });
+}
+
+/** A Claude Code that was found. `ok` only when it said a version the board runs. */
+export type ClaudeFound = { ok: true; bin: string; version: string } | { ok: false; bin: string; version: string | undefined };
+
+/**
+ * The Claude Code the board runs: the first one found that is new enough. A machine can hold
+ * two, an old one on the PATH and the installer's own, so an old one first does not end the
+ * search. When none is new enough, the first found, not ok. Undefined when none is there.
+ */
+export async function pickClaude(bin: string, env: NodeJS.ProcessEnv = process.env, home: string = os.homedir()): Promise<ClaudeFound | undefined> {
+  let first: ClaudeFound | undefined;
+  for (const file of claudesFound(bin, env, home)) {
+    const version = await versionOf(file, env);
+    if (version !== undefined && newEnough(version)) return { ok: true, bin: file, version };
+    first ??= { ok: false, bin: file, version };
   }
-  return undefined;
+  return first;
+}
+
+/** Why a Claude Code that is not ok cannot run the board, in a sentence for the owner. */
+export function tooOld(found: { bin: string; version: string | undefined }): string {
+  const what = found.version === undefined ? `The ${CLAUDE_NAME} at ${found.bin} did not say its version` : `${CLAUDE_NAME} ${found.version} is too old for the board`;
+  return `${what}: the board needs ${CLAUDE_MIN} or newer. Open the board in a new tab to update it.`;
 }
 
 const ESC = String.fromCharCode(27);
@@ -104,8 +171,8 @@ export class ClaudeSetup implements LinkSetup {
 
   constructor(private readonly opts: ClaudeSetupOptions) {}
 
-  private find(): string | undefined {
-    return findClaude(this.opts.bin, this.opts.env(), this.opts.home);
+  private pick(): Promise<ClaudeFound | undefined> {
+    return pickClaude(this.opts.bin, this.opts.env(), this.opts.home);
   }
 
   /** Run to the end, with a limit. It never rejects: a program that cannot start ends with its error as `err`. */
@@ -127,21 +194,23 @@ export class ClaudeSetup implements LinkSetup {
     });
   }
 
-  /** False only when Claude Code says it is signed out. One too old to say is taken as signed in: its first turn will tell. */
+  /** True only when Claude Code says it is signed in. Every version the board runs can say. */
   private async signedIn(bin: string): Promise<boolean> {
     const r = await this.run(bin, ['auth', 'status', '--json'], STATUS_MS);
     try {
-      return (JSON.parse(r.out) as { loggedIn?: unknown }).loggedIn !== false;
+      return (JSON.parse(r.out) as { loggedIn?: unknown }).loggedIn === true;
     } catch {
-      return true;
+      return false;
     }
   }
 
   async look(): Promise<AgentSetup> {
     const name = CLAUDE_NAME;
-    const bin = this.find();
-    if (!bin) return { name, state: 'missing', ...(this.installing ? { installing: true } : {}), ...(this.note ? { note: this.note } : {}) };
-    if (await this.signedIn(bin)) {
+    const found = await this.pick();
+    const said = { ...(this.installing ? { installing: true } : {}), ...(this.note ? { note: this.note } : {}) };
+    if (!found) return { name, state: 'missing', ...said };
+    if (!found.ok) return { name, state: 'outdated', ...(found.version === undefined ? {} : { found: found.version }), needs: CLAUDE_MIN, ...said };
+    if (await this.signedIn(found.bin)) {
       this.note = undefined;
       return { name, state: 'ready' };
     }
@@ -149,8 +218,9 @@ export class ClaudeSetup implements LinkSetup {
     return { name, state: 'signed-out', ...(s ? { signIn: s.url ? { url: s.url } : {} } : {}), ...(this.note ? { note: this.note } : {}) };
   }
 
+  /** Run Anthropic's installer, which installs the newest Claude Code or brings an old one up to it. */
   async install(): Promise<AgentSetup> {
-    if (!this.find()) {
+    if (!(await this.pick())?.ok) {
       this.installing ??= this.runInstaller().finally(() => {
         this.installing = undefined;
       });
@@ -170,18 +240,21 @@ export class ClaudeSetup implements LinkSetup {
     }
     this.opts.log(`installing ${CLAUDE_NAME} with Anthropic's installer`);
     const r = await this.run('bash', ['-s'], INSTALL_MS, script);
-    if (this.find()) return;
+    const found = await this.pick();
+    if (found?.ok) return;
     const said = sentence(r.err || r.out).slice(-200);
-    this.note = sentence(`The installer ended (exit ${r.code ?? 'killed'}) and ${CLAUDE_NAME} is still not there${said ? `: ${said}` : '.'}`);
+    const still = !found ? 'not there' : found.version === undefined ? 'one that does not say its version' : found.version;
+    this.note = sentence(`The installer ended (exit ${r.code ?? 'killed'}) and ${CLAUDE_NAME} is still ${still}${said ? `: ${said}` : '.'}`);
     this.opts.log(this.note);
   }
 
   async signIn(): Promise<AgentSetup> {
+    const found = await this.pick();
+    // After the wait, not before it: of two presses close together, the second still ends the first one's sign-in.
     this.stopSignIn();
-    const bin = this.find();
-    if (!bin) return this.look();
+    if (!found?.ok) return this.look();
     this.note = undefined;
-    const proc = spawn(bin, ['auth', 'login'], { env: this.opts.env(), stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn(found.bin, ['auth', 'login'], { env: this.opts.env(), stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
     let gotUrl: () => void = () => {};

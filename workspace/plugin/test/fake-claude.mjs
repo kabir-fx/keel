@@ -13,6 +13,11 @@ import fs from 'node:fs';
 import readline from 'node:readline';
 
 const args = process.argv.slice(2);
+// `claude --version`, in the real one's words. $FAKE_CLAUDE_VERSION stands in for an older one.
+if (args[0] === '--version') {
+  process.stdout.write(`${process.env.FAKE_CLAUDE_VERSION ?? '2.1.330'} (Claude Code)\n`);
+  process.exit(0);
+}
 const log = (rec) => fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, `${JSON.stringify(rec)}\n`);
 const flag = (name) => {
   const i = args.indexOf(name);

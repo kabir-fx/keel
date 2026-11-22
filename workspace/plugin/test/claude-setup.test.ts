@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BOARD_DIR } from '@keel/protocol';
 import type { LinkContext } from '@keel/protocol';
-import { ClaudeSetup, findClaude } from '../src/claude-setup';
+import { CLAUDE_MIN, ClaudeSetup, claudesFound, newEnough, pickClaude, tooOld } from '../src/claude-setup';
 import { createLink } from '../src/hosted-link';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -70,30 +70,88 @@ afterEach(async () => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+/** A stand-in `claude` in `dir` that says it is `version`. */
+function claudeAt(dir: string, version: string): string {
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'claude');
+  fs.writeFileSync(file, `#!/bin/sh\nFAKE_CLAUDE_VERSION="${version}" exec "${process.execPath}" "${FAKE}" "$@"\n`, { mode: 0o755 });
+  return file;
+}
+
 describe('finding Claude Code', () => {
-  it('takes a path as it is given, else the first on PATH, else where the installer puts it', () => {
+  it('lists a path as it is given, else each on PATH in order, then where the installer puts it', () => {
     const dir = path.join(tmp, 'bin');
     fs.mkdirSync(dir);
     fs.writeFileSync(path.join(dir, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
     fs.writeFileSync(path.join(dir, 'plain'), 'not executable', { mode: 0o644 });
     const local = path.join(home, '.local', 'bin');
-
-    expect(findClaude(bin, {}, home)).toBe(bin);
-    expect(findClaude(path.join(tmp, 'none'), { PATH: dir }, home)).toBeUndefined();
-    expect(findClaude('claude', { PATH: `${path.join(tmp, 'none')}${path.delimiter}${dir}` }, home)).toBe(path.join(dir, 'claude'));
-    expect(findClaude('plain', { PATH: dir }, home)).toBeUndefined();
-    expect(findClaude('claude', { PATH: '' }, home)).toBeUndefined();
+    expect(claudesFound(bin, {}, home)).toEqual([bin]);
+    expect(claudesFound(path.join(tmp, 'none'), { PATH: dir }, home)).toEqual([]);
+    expect(claudesFound('claude', { PATH: `${path.join(tmp, 'none')}${path.delimiter}${dir}` }, home)).toEqual([path.join(dir, 'claude')]);
+    expect(claudesFound('plain', { PATH: dir }, home)).toEqual([]);
+    expect(claudesFound('claude', { PATH: '' }, home)).toEqual([]);
 
     fs.mkdirSync(local, { recursive: true });
     fs.writeFileSync(path.join(local, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
-    expect(findClaude('claude', { PATH: '' }, home)).toBe(path.join(local, 'claude'));
-    expect(findClaude('claude', { PATH: dir }, home)).toBe(path.join(dir, 'claude'));
+    expect(claudesFound('claude', { PATH: '' }, home)).toEqual([path.join(local, 'claude')]);
+    expect(claudesFound('claude', { PATH: dir }, home)).toEqual([path.join(dir, 'claude'), path.join(local, 'claude')]);
+    // The installer's folder on the PATH too is still one program.
+    expect(claudesFound('claude', { PATH: `${local}${path.delimiter}${dir}` }, home)).toEqual([path.join(local, 'claude'), path.join(dir, 'claude')]);
+  });
+
+  it('knows a version that is new enough from one that is not', () => {
+    expect(newEnough(CLAUDE_MIN)).toBe(true);
+    expect(newEnough('2.1.200', '2.1.316')).toBe(false);
+    expect(newEnough('2.1.315', '2.1.316')).toBe(false);
+    expect(newEnough('2.1.1000', '2.1.316')).toBe(true);
+    expect(newEnough('2.2.0', '2.1.316')).toBe(true);
+    expect(newEnough('3.0.0', '2.1.316')).toBe(true);
+    expect(newEnough('1.9.999', '2.1.316')).toBe(false);
+    expect(newEnough(undefined)).toBe(false);
+    expect(newEnough('latest')).toBe(false);
+  });
+
+  it('picks the first that is new enough, past an old one before it on the PATH', async () => {
+    const old = claudeAt(path.join(tmp, 'old'), '2.1.200');
+    const fresh = claudeAt(path.join(home, '.local', 'bin'), CLAUDE_MIN);
+    const PATH = `${path.dirname(old)}${path.delimiter}/usr/bin:/bin`;
+    expect(await pickClaude('claude', { ...env(), PATH }, home)).toEqual({ ok: true, bin: fresh, version: CLAUDE_MIN });
+
+    // With no newer one, the old one is what was found, and it is not ok.
+    fs.rmSync(fresh);
+    expect(await pickClaude('claude', { ...env(), PATH }, home)).toEqual({ ok: false, bin: old, version: '2.1.200' });
+    expect(await pickClaude('claude', { ...env(), PATH: '/usr/bin:/bin' }, home)).toBeUndefined();
+  });
+
+  it('gives up on one whose `--version` never ends, though a child it left holds its output open', async () => {
+    const stuck = path.join(tmp, 'stuck');
+    fs.writeFileSync(stuck, '#!/bin/sh\nsleep 30 &\nwait\n', { mode: 0o755 });
+    const t0 = Date.now();
+    expect(await pickClaude(stuck, env(), home)).toEqual({ ok: false, bin: stuck, version: undefined });
+    expect(Date.now() - t0).toBeLessThan(8000);
+  }, 15_000);
+
+  it('takes one that does not say its version as not ok', async () => {
+    const mute = path.join(tmp, 'mute');
+    fs.writeFileSync(mute, '#!/bin/sh\necho "error: unknown option" >&2\nexit 1\n', { mode: 0o755 });
+    expect(await pickClaude(mute, env(), home)).toEqual({ ok: false, bin: mute, version: undefined });
+    expect(tooOld({ bin: mute, version: undefined })).toBe(`The Claude Code at ${mute} did not say its version: the board needs ${CLAUDE_MIN} or newer. Open the board in a new tab to update it.`);
+    expect(tooOld({ bin: mute, version: '2.1.200' })).toBe(`Claude Code 2.1.200 is too old for the board: the board needs ${CLAUDE_MIN} or newer. Open the board in a new tab to update it.`);
   });
 });
 
 describe('how Claude Code stands', () => {
   it('is missing when the command is not there', async () => {
     expect(await setup({ bin: path.join(tmp, 'none') }).look()).toEqual({ name: 'Claude Code', state: 'missing' });
+  });
+
+  it('is outdated when the only one there is older than the board runs, whatever its sign-in', async () => {
+    fs.writeFileSync(auth, '');
+    const s = setup({ bin: claudeAt(path.join(tmp, 'old'), '2.1.200') });
+    expect(await s.look()).toEqual({ name: 'Claude Code', state: 'outdated', found: '2.1.200', needs: CLAUDE_MIN });
+    // No sign-in is started with it.
+    expect(await s.signIn()).toEqual({ name: 'Claude Code', state: 'outdated', found: '2.1.200', needs: CLAUDE_MIN });
+    expect(logins()).toEqual([]);
   });
 
   it('is signed out or ready by what `claude auth status` says', async () => {
@@ -104,9 +162,10 @@ describe('how Claude Code stands', () => {
     expect(started().map((c) => c.args.join(' '))).toEqual(['auth status --json', 'auth status --json']);
   });
 
-  it('takes a Claude Code too old to say as ready', async () => {
-    const s = setup({ env: () => ({ ...env(), FAKE_CLAUDE_STATUS: 'old' }) });
-    expect(await s.look()).toEqual({ name: 'Claude Code', state: 'ready' });
+  it('is signed out when `claude auth status` does not say', async () => {
+    fs.writeFileSync(auth, '');
+    const s = setup({ env: () => ({ ...env(), FAKE_CLAUDE_STATUS: 'junk' }) });
+    expect(await s.look()).toEqual({ name: 'Claude Code', state: 'signed-out' });
   });
 });
 
@@ -130,6 +189,17 @@ describe('signing in', () => {
     // The next sign-in starts clean, and a good code ends it.
     expect(await s.signIn()).toEqual({ name: 'Claude Code', state: 'signed-out', signIn: { url: ADDRESS } });
     expect(await s.code('good')).toEqual({ name: 'Claude Code', state: 'ready' });
+  });
+
+  it('two presses at once leave one sign-in running, and closing ends it', async () => {
+    const s = setup();
+    await Promise.all([s.signIn(), s.signIn()]);
+    // The one that was replaced may end before it has said it started: give both the time to say so.
+    await new Promise((r) => setTimeout(r, 400));
+    const running = () => logins().filter((c) => alive(c.pid));
+    expect(running()).toHaveLength(1);
+    await s.close();
+    await until(() => running().length === 0);
   });
 
   it('says so when a code comes with no sign-in running', async () => {
@@ -177,6 +247,27 @@ describe('installing', () => {
       },
     });
     expect(await s.install()).toEqual({ name: 'Claude Code', state: 'missing', note: 'The installer could not be fetched: offline' });
+  });
+
+  it('updates one that is too old: the installer runs, and the new one is used though the old one is first on the PATH', async () => {
+    const old = claudeAt(path.join(tmp, 'old'), '2.1.200');
+    const paths = () => ({ ...env(), PATH: `${path.dirname(old)}${path.delimiter}/usr/bin:/bin` });
+    const s = setup({ bin: 'claude', env: paths, installer: async () => installer() });
+    expect(await s.look()).toEqual({ name: 'Claude Code', state: 'outdated', found: '2.1.200', needs: CLAUDE_MIN });
+    expect(await s.install()).toEqual({ name: 'Claude Code', state: 'signed-out' });
+    expect(await pickClaude('claude', paths(), home)).toMatchObject({ ok: true, bin: path.join(home, '.local', 'bin', 'claude') });
+  });
+
+  it('says so when the installer ran and Claude Code is still too old', async () => {
+    const old = claudeAt(path.join(tmp, 'old'), '2.1.200');
+    const s = setup({ bin: old, installer: async () => 'echo "no network" >&2\nexit 7\n' });
+    expect(await s.install()).toEqual({
+      name: 'Claude Code',
+      state: 'outdated',
+      found: '2.1.200',
+      needs: CLAUDE_MIN,
+      note: 'The installer ended (exit 7) and Claude Code is still 2.1.200: no network',
+    });
   });
 
   it('says it is installing while the installer runs, and two presses start one installer', async () => {

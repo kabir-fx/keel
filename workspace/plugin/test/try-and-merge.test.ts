@@ -614,6 +614,18 @@ describe('refresh (5.4, step 5)', () => {
     expect(sh(repo, 'git', 'merge-base', '--is-ancestor', home, branch())).toBe('');
   }, 60_000);
 
+  it('failed: with a Claude Code too old for the builder, a conflict is not joined and no turn starts', async () => {
+    const b = await built();
+    const tip = sh(repo, 'git', 'rev-parse', branch());
+    onMain('parts/sum.txt', 'the sum part, as main has it\n');
+    fs.writeFileSync(bin, `#!/bin/sh\nFAKE_CLAUDE_VERSION=2.1.200 exec "${process.execPath}" "${FAKE}" "$@"\n`, { mode: 0o755 });
+    const r = await refresh(b);
+    expect(r.outcome).toBe('failed');
+    expect(r.note).toContain('Claude Code 2.1.200 is too old for the board');
+    expect(records().some((x) => x.turn?.startsWith('JOIN main INTO'))).toBe(false);
+    expect(sh(repo, 'git', 'rev-parse', branch())).toBe(tip);
+  }, 60_000);
+
   it('failed: a conflict the builder\'s turn does not join leaves the branch as it was, with no merge half done', async () => {
     const b = await built();
     const tip = sh(repo, 'git', 'rev-parse', branch());

@@ -5,18 +5,23 @@
 //   `auth login` prints the sign-in page's address, then waits. The browser's approval is the
 //   file "$FAKE_CLAUDE_AUTH.approve" coming to be. A code on its input signs in when it is
 //   "good", and is refused in the real one's words when it is anything else.
-//   $FAKE_CLAUDE_STATUS=old: an older claude, which has no `auth status`.
+//   $FAKE_CLAUDE_STATUS=junk: `auth status` prints words that are not its JSON.
 import fs from 'node:fs';
 import readline from 'node:readline';
 
 const args = process.argv.slice(2);
+// `claude --version`, in the real one's words. $FAKE_CLAUDE_VERSION stands in for an older one.
+if (args[0] === '--version') {
+  process.stdout.write(`${process.env.FAKE_CLAUDE_VERSION ?? '2.1.330'} (Claude Code)\n`);
+  process.exit(0);
+}
 const file = process.env.FAKE_CLAUDE_AUTH;
 if (process.env.FAKE_CLAUDE_LOG) fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, `${JSON.stringify({ args, pid: process.pid, env: Object.keys(process.env) })}\n`);
 const signedIn = () => fs.existsSync(file);
 
 if (args[0] === 'auth' && args[1] === 'status') {
-  if (process.env.FAKE_CLAUDE_STATUS === 'old') {
-    process.stderr.write("error: unknown command 'auth'\n");
+  if (process.env.FAKE_CLAUDE_STATUS === 'junk') {
+    process.stdout.write('Something went wrong.\n');
     process.exit(1);
   }
   process.stdout.write(`${JSON.stringify(signedIn() ? { loggedIn: true, authMethod: 'claude.ai' } : { loggedIn: false, authMethod: 'none' }, null, 2)}\n`);

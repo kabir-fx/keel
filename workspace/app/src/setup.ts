@@ -2,8 +2,8 @@ import type { SetupAsk, SetupInfo } from '@keel/protocol';
 import { ROUTES } from '@keel/protocol';
 
 /**
- * What the page asks the server about this machine: is Claude Code installed and signed in,
- * is there a git. The page that shows it is `SetupPage.tsx`.
+ * What the page asks the server about this machine: is Claude Code installed, new enough and
+ * signed in, is there a git. The page that shows it is `SetupPage.tsx`.
  */
 
 export interface SetupHttp {
@@ -50,8 +50,9 @@ export function stepsOf(s: SetupInfo): Step[] {
   const steps: Step[] = [];
   if (s.agent) {
     const a = s.agent.state;
-    steps.push({ id: 'install', title: s.agent.name, state: a === 'missing' ? 'now' : 'done' });
-    steps.push({ id: 'sign-in', title: 'Claude sign-in', state: a === 'ready' ? 'done' : a === 'missing' ? 'later' : 'now' });
+    const install = a === 'missing' || a === 'outdated';
+    steps.push({ id: 'install', title: s.agent.name, state: install ? 'now' : 'done' });
+    steps.push({ id: 'sign-in', title: 'Claude sign-in', state: a === 'ready' ? 'done' : install ? 'later' : 'now' });
   }
   steps.push({ id: 'git', title: 'git', state: s.git.state === 'ready' ? 'done' : 'todo' });
   return steps;

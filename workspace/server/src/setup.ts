@@ -50,6 +50,7 @@ export function gitSetup(deps: GitDeps = {}): SetupInfo['git'] {
 export function setupLines(s: SetupInfo): string[] {
   const lines: string[] = [];
   if (s.agent?.state === 'missing') lines.push(`keel-board: ${s.agent.name} is not installed. The page that opens installs it and signs you in.`);
+  if (s.agent?.state === 'outdated') lines.push(`keel-board: ${s.agent.name}${s.agent.found ? ` ${s.agent.found}` : ''} is too old for the board, which needs ${s.agent.needs} or newer. The page that opens updates it.`);
   if (s.agent?.state === 'signed-out') lines.push(`keel-board: ${s.agent.name} is not signed in. The page that opens signs you in.`);
   if (s.git.state === 'missing') lines.push(`keel-board: git was not found, and a build needs it. ${s.git.how}`);
   return lines;

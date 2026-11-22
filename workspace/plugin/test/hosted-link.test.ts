@@ -241,6 +241,26 @@ describe('the hosted link', () => {
     expect(r.note).toMatch(/ENOENT/);
   });
 
+  it('a claude too old for the agent\'s flags is never started, and the wake says what to do', async () => {
+    const old = path.join(tmp, 'old-claude');
+    fs.writeFileSync(old, `#!/bin/sh\nFAKE_CLAUDE_VERSION=2.1.200 exec "${process.execPath}" "${FAKE}" "$@"\n`, { mode: 0o755 });
+    const l = await link({ bin: old });
+    const r = await l.wake(wake('hello'));
+    expect(r).toEqual({ ok: false, note: "Claude Code 2.1.200 is too old for the board: the board needs 2.1.316 or newer. Open the board in a new tab to update it." });
+    expect(starts()).toEqual([]);
+  });
+
+  it('a link closed while a wake asks the version starts no agent', async () => {
+    const slow = path.join(tmp, 'slow-claude');
+    fs.writeFileSync(slow, `#!/bin/sh\n[ "$1" = --version ] && sleep 0.5\nexec "${process.execPath}" "${FAKE}" "$@"\n`, { mode: 0o755 });
+    const l = await link({ bin: slow });
+    const waking = l.wake(wake('hello'));
+    await l.close();
+    expect(await waking).toEqual({ ok: false, note: 'the link is closed' });
+    expect(starts()).toEqual([]);
+    expect(fs.existsSync(path.join(stateDir, 'run'))).toBe(false);
+  });
+
   it('refuses to start without the board tools bundle', () => {
     expect(() => createLink(ctx({ mcp: path.join(tmp, 'missing.js') }))).toThrow(/npm run build/);
   });

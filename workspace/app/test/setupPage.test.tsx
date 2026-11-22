@@ -14,6 +14,7 @@ const READY = { state: 'ready' } as const;
 const NO_GIT = { state: 'missing', how: 'Run "xcode-select --install" in a terminal.' } as const;
 const claude = (rest: Record<string, unknown>) => ({ name: 'Claude Code', ...rest }) as AgentSetup;
 const MISSING: SetupInfo = { agent: claude({ state: 'missing' }), git: READY };
+const OUTDATED: SetupInfo = { agent: claude({ state: 'outdated', found: '2.1.200', needs: '2.1.316' }), git: READY };
 const SIGNED_OUT: SetupInfo = { agent: claude({ state: 'signed-out' }), git: READY };
 const SIGNING: SetupInfo = { agent: claude({ state: 'signed-out', signIn: { url: 'https://claude.ai/oauth/authorize?x=1' } }), git: READY };
 const DONE: SetupInfo = { agent: claude({ state: 'ready' }), git: READY };
@@ -67,6 +68,7 @@ afterEach(() => {
 describe('the steps', () => {
   it('lists install, sign-in and git, with one button: on the first step that is not done', () => {
     expect(stepsOf(MISSING).map((s) => [s.id, s.state])).toEqual([['install', 'now'], ['sign-in', 'later'], ['git', 'done']]);
+    expect(stepsOf(OUTDATED).map((s) => [s.id, s.state])).toEqual([['install', 'now'], ['sign-in', 'later'], ['git', 'done']]);
     expect(stepsOf(SIGNED_OUT).map((s) => [s.id, s.state])).toEqual([['install', 'done'], ['sign-in', 'now'], ['git', 'done']]);
     expect(stepsOf({ ...DONE, git: NO_GIT }).map((s) => [s.id, s.state])).toEqual([['install', 'done'], ['sign-in', 'done'], ['git', 'todo']]);
     expect(stepsOf({ git: NO_GIT }).map((s) => [s.id, s.state])).toEqual([['git', 'todo']]);
@@ -122,6 +124,29 @@ describe('the setup page', () => {
     expect(step('install').dataset.state).toBe('done');
     expect(step('sign-in').dataset.state).toBe('now');
     expect(screen.getByTestId('setup').textContent).toContain('One step is left.');
+    expect(screen.queryByTestId('board')).toBeNull();
+  });
+
+  it('updates a Claude Code that is too old on a press, before any sign-in', async () => {
+    let finish: (v: SetupInfo) => void = () => {};
+    const s = server(OUTDATED, () => new Promise<SetupInfo>((r) => (finish = r)));
+    show(s);
+    expect(step('install').dataset.state).toBe('now');
+    expect(step('install').textContent).toContain('Version 2.1.200 is installed, and the board needs 2.1.316 or newer.');
+    expect(step('sign-in').dataset.state).toBe('later');
+    expect(step('sign-in').textContent).toContain('After Claude Code is updated.');
+    expect(screen.queryByTestId('setup-sign-in-go')).toBeNull();
+    expect(screen.getByTestId('setup-install-go').textContent).toBe('Update Claude Code');
+
+    await press('setup-install-go');
+    expect(s.asks).toEqual([{ action: 'install' }]);
+    const go = screen.getByTestId('setup-install-go') as HTMLButtonElement;
+    expect(go.disabled).toBe(true);
+    expect(go.textContent).toBe('Updating…');
+
+    await act(async () => finish(SIGNED_OUT));
+    expect(step('install').dataset.state).toBe('done');
+    expect(step('sign-in').dataset.state).toBe('now');
     expect(screen.queryByTestId('board')).toBeNull();
   });
 

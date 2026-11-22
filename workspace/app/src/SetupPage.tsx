@@ -7,7 +7,7 @@ import { callSetup, signInUrl, skipSetup, stepsOf } from './setup';
 
 /**
  * The page before the board, shown while this machine is not ready: Claude Code installed,
- * signed in, and a git to build with. It asks the server how things stand every `LOOK_MS`,
+ * new enough, signed in, and a git to build with. It asks the server how things stand every `LOOK_MS`,
  * so a sign-in finished in another tab, or an install finished in a terminal, moves it on.
  * When nothing is left, the board takes its place.
  */
@@ -96,15 +96,19 @@ function StepBody({ step, info, pending, onAct }: { step: Step; info: SetupInfo;
   }
   const agent = info.agent!;
   if (step.id === 'install') {
-    if (agent.state !== 'missing') return <p>Installed.</p>;
+    if (agent.state !== 'missing' && agent.state !== 'outdated') return <p>Installed.</p>;
     const busy = agent.installing === true || pending === 'install';
+    const old = agent.state === 'outdated';
+    const why = !old
+      ? 'Not installed yet.'
+      : `${agent.found ? `Version ${agent.found} is installed` : 'The one installed did not say its version'}, and the board needs ${agent.needs} or newer.`;
     return (
       <>
-        <p>{busy ? 'Installing. This takes a minute or two.' : 'Not installed yet. This runs the installer from Anthropic, into your home folder.'}</p>
+        <p>{busy ? `${old ? 'Updating' : 'Installing'}. This takes a minute or two.` : `${why} This runs the installer from Anthropic, into your home folder.`}</p>
         <Note agent={agent} />
         <div className="setup__acts">
           <button type="button" className="watch__btn watch__btn--go" data-testid="setup-install-go" disabled={busy} onClick={() => onAct({ action: 'install' })}>
-            {busy ? 'Installing…' : `Install ${agent.name}`}
+            {busy ? (old ? 'Updating…' : 'Installing…') : `${old ? 'Update' : 'Install'} ${agent.name}`}
           </button>
         </div>
       </>
@@ -112,6 +116,7 @@ function StepBody({ step, info, pending, onAct }: { step: Step; info: SetupInfo;
   }
   if (agent.state === 'ready') return <p>Signed in.</p>;
   if (agent.state === 'missing') return <p>After {agent.name} is installed.</p>;
+  if (agent.state === 'outdated') return <p>After {agent.name} is updated.</p>;
   return <SignIn agent={agent} pending={pending} onAct={onAct} />;
 }
 
